@@ -18,11 +18,22 @@ from quantum_bench.cpu import run_complex128_reference, run_cpu_once
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
 from quantum_bench.model import make_simulation_job
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
-from quantum_bench.upmem.path_heuristic import path_id
+from quantum_bench.upmem.path_heuristic import (
+    FEATURE_NAMES,
+    GROUP_FEATURE_NAMES,
+    FeatureModelDecision,
+    RawFeatureVector,
+    WeightVector,
+    path_id,
+    score_features,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
 FLOAT32 = "split_complex_float32_v1"
+_PROFILE_SCHEMA = "physical_speedup_fit_v1"
+_SCORE_ID = "upmem_slr_cost_v1"
+_NORMALIZATION = "log((candidate+1)/(greedy+1))"
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -50,6 +61,123 @@ def _candidate_map(dataset: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
 
 def _circuit_map(dataset: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {circuit["circuit_id"]: circuit for circuit in dataset["circuits"]}
+
+
+def _profile_model(profile: dict[str, Any]) -> FeatureModelDecision:
+    raw_model = profile.get("feature_model")
+    if not isinstance(raw_model, dict):
+        raise ValueError("frozen profile has no feature model")
+    mode = raw_model.get("mode")
+    active = raw_model.get("active_features")
+    if not isinstance(active, list) or not all(
+        isinstance(feature, str) for feature in active
+    ):
+        raise ValueError("frozen profile feature model has invalid active features")
+    allowed = FEATURE_NAMES if mode == "six_term" else GROUP_FEATURE_NAMES
+    if mode not in {"six_term", "grouped"} or any(
+        feature not in allowed for feature in active
+    ):
+        raise ValueError("frozen profile feature model is invalid")
+    if len(set(active)) != len(active):
+        raise ValueError("frozen profile feature model repeats an active feature")
+    zero_range = raw_model.get("zero_range_features", [])
+    correlated_pairs = raw_model.get("correlated_pairs", [])
+    if not isinstance(zero_range, list) or not all(
+        isinstance(feature, str) for feature in zero_range
+    ):
+        raise ValueError("frozen profile feature model has invalid zero-range features")
+    if not isinstance(correlated_pairs, list) or any(
+        not isinstance(pair, list)
+        or len(pair) != 2
+        or not all(isinstance(feature, str) for feature in pair)
+        for pair in correlated_pairs
+    ):
+        raise ValueError("frozen profile feature model has invalid correlations")
+    matrix_rank = raw_model.get("matrix_rank", len(active))
+    rank_tolerance = raw_model.get("rank_tolerance", 0.0)
+    reason = raw_model.get("reason", "explicit frozen profile")
+    if isinstance(matrix_rank, bool) or not isinstance(matrix_rank, int):
+        raise ValueError("frozen profile feature model has invalid matrix rank")
+    if isinstance(rank_tolerance, bool) or not isinstance(
+        rank_tolerance, (int, float)
+    ):
+        raise ValueError("frozen profile feature model has invalid rank tolerance")
+    if not isinstance(reason, str):
+        raise ValueError("frozen profile feature model has invalid reason")
+    return FeatureModelDecision(
+        mode=mode,
+        active_features=tuple(active),
+        zero_range_features=tuple(zero_range),
+        correlated_pairs=tuple(tuple(pair) for pair in correlated_pairs),
+        matrix_rank=matrix_rank,
+        rank_tolerance=float(rank_tolerance),
+        reason=reason,
+    )
+
+
+def _load_frozen_profile(
+    profile_path: Path,
+    *,
+    dataset: dict[str, Any],
+    dataset_hash: str,
+) -> tuple[dict[str, Any], str, WeightVector, FeatureModelDecision]:
+    profile = _load(profile_path)
+    profile_hash = hashlib.sha256(_canonical_bytes(profile)).hexdigest()
+    if profile.get("schema_version") != _PROFILE_SCHEMA:
+        raise ValueError("frozen profile has an invalid schema")
+    if profile.get("candidate_set_sha256") != dataset_hash:
+        raise ValueError("frozen profile candidate-set identity does not match dataset")
+    source_sha = dataset.get("source_sha")
+    if profile.get("source_sha") != source_sha:
+        raise ValueError("frozen profile source identity does not match dataset")
+    candidate_source = profile.get("candidate_generation_source_sha")
+    if candidate_source is not None and candidate_source != source_sha:
+        raise ValueError(
+            "frozen profile candidate-generation source does not match dataset"
+        )
+    if profile.get("score_id") != _SCORE_ID:
+        raise ValueError("frozen profile score identity is not supported")
+    if profile.get("normalization") != _NORMALIZATION:
+        raise ValueError("frozen profile normalization is not supported")
+    for field in (
+        "preregistration_sha256",
+        "workload_id",
+        "workload_sha256",
+        "workload_manifest_sha256",
+    ):
+        if field in profile and field in dataset and profile[field] != dataset[field]:
+            raise ValueError(f"frozen profile {field} does not match dataset")
+    raw_weights = profile.get("weights")
+    if not isinstance(raw_weights, dict) or set(raw_weights) != set(FEATURE_NAMES):
+        raise ValueError("frozen profile weights must contain the six canonical features")
+    try:
+        weights = WeightVector.from_values(raw_weights)
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("frozen profile weights are invalid") from exc
+    model = _profile_model(profile)
+    return profile, profile_hash, weights, model
+
+
+def _profile_selected_candidate(
+    candidates: list[dict[str, Any]],
+    topology_id: str,
+    greedy: dict[str, Any],
+    *,
+    weights: WeightVector,
+    model: FeatureModelDecision,
+) -> tuple[str, float]:
+    greedy_features = RawFeatureVector.from_mapping(
+        _topology_record(greedy, topology_id).get("features", {})
+    )
+    scored = []
+    for candidate in candidates:
+        raw = RawFeatureVector.from_mapping(
+            _topology_record(candidate, topology_id).get("features", {})
+        )
+        score = score_features(raw, greedy_features, weights, model=model)
+        scored.append((score, candidate["candidate_path_id"]))
+    score, candidate_id = min(scored, key=lambda item: (item[0], item[1]))
+    return candidate_id, score
 
 
 def _planner_config(candidate: dict[str, Any]) -> dict[str, Any]:
@@ -188,6 +316,7 @@ def qualify_frozen_selection(
     output_path: Path,
     *,
     split: str,
+    profile_path: Path,
 ) -> dict[str, Any]:
     """CPU-qualify every unique candidate named by a frozen selection artifact."""
 
@@ -196,12 +325,13 @@ def qualify_frozen_selection(
     dataset_hash = _candidate_set_sha256(dataset)
     candidates = _candidate_map(dataset)
     circuits = _circuit_map(dataset)
-    selected, selection_roles = _evaluation_selection(
+    selected, selection_roles, _ = _evaluation_selection(
         dataset=dataset,
         dataset_hash=dataset_hash,
         candidate_map=candidates,
         circuit_map=circuits,
         selection_path=selection_path,
+        profile_path=profile_path,
         split=split,
     )
 
@@ -452,17 +582,46 @@ def _evaluation_selection(
     candidate_map: dict[tuple[str, str], dict[str, Any]],
     circuit_map: dict[str, dict[str, Any]],
     selection_path: Path,
+    profile_path: Path,
     split: str,
-) -> tuple[list[tuple[str, str, str]], dict[tuple[str, str, str], tuple[str, ...]]]:
+) -> tuple[
+    list[tuple[str, str, str]],
+    dict[tuple[str, str, str], tuple[str, ...]],
+    str,
+]:
     if split not in {"validation", "test"}:
         raise ValueError("evaluation split must be validation or test")
     selection = _load(selection_path)
+    profile, profile_hash, weights, model = _load_frozen_profile(
+        profile_path,
+        dataset=dataset,
+        dataset_hash=dataset_hash,
+    )
     if selection.get("schema_version") != "upmem_path_frozen_selection_v1":
         raise ValueError("evaluation selection has an invalid schema")
     if selection.get("candidate_set_sha256") != dataset_hash:
         raise ValueError("evaluation candidate-set identity does not match dataset")
     if selection.get("source_sha") != dataset.get("source_sha"):
         raise ValueError("evaluation source identity does not match dataset")
+    if selection.get("fitted_profile_sha256") != profile_hash:
+        raise ValueError("evaluation frozen-profile identity does not match profile")
+    if "score_id" in selection and selection["score_id"] != profile["score_id"]:
+        raise ValueError("evaluation selection score identity does not match profile")
+    if "weights" in selection and selection["weights"] != profile["weights"]:
+        raise ValueError("evaluation selection weights do not match profile")
+    if (
+        "feature_model" in selection
+        and selection["feature_model"] != profile["feature_model"]
+    ):
+        raise ValueError("evaluation selection feature model does not match profile")
+    for field in (
+        "preregistration_sha256",
+        "workload_id",
+        "workload_sha256",
+        "workload_manifest_sha256",
+    ):
+        if field in selection and field in dataset and selection[field] != dataset[field]:
+            raise ValueError(f"evaluation selection {field} does not match dataset")
     if selection.get("split") != split:
         raise ValueError("evaluation selection split does not match requested split")
     if selection.get("timing_used_for_selection") is not False:
@@ -553,13 +712,35 @@ def _evaluation_selection(
                     f"evaluation {field} is not deterministic for "
                     f"{circuit_id}/{topology_id}"
                 )
+        expected_upmem, _ = _profile_selected_candidate(
+            feasible,
+            topology_id,
+            greedy_candidates[0],
+            weights=weights,
+            model=model,
+        )
         upmem_selected = row.get("upmem_selected_path_id")
         if not isinstance(upmem_selected, str) or not upmem_selected:
             raise ValueError(
                 f"evaluation selection has no UPMEM-selected path for "
                 f"{circuit_id}/{topology_id}"
             )
-        role_values = (*expected_roles.items(), ("upmem_selected_path_id", upmem_selected))
+        claimed_candidate = candidate_map.get((circuit_id, upmem_selected))
+        if claimed_candidate is None:
+            raise ValueError(
+                f"evaluation selection references unknown candidate "
+                f"{circuit_id}/{upmem_selected}"
+            )
+        _require_evaluation_candidate(claimed_candidate, circuit_id, topology_id)
+        if upmem_selected != expected_upmem:
+            raise ValueError(
+                f"evaluation UPMEM-selected path is not selected by frozen profile "
+                f"for {circuit_id}/{topology_id}"
+            )
+        role_values = (
+            *expected_roles.items(),
+            ("upmem_selected_path_id", expected_upmem),
+        )
         for field, candidate_id in role_values:
             candidate = candidate_map.get((circuit_id, candidate_id))
             if candidate is None:
@@ -571,9 +752,11 @@ def _evaluation_selection(
             selected_key = (circuit_id, topology_id, candidate_id)
             selected.add(selected_key)
             roles.setdefault(selected_key, set()).add(field.removesuffix("_path_id"))
-    return sorted(selected), {
-        key: tuple(sorted(value)) for key, value in roles.items()
-    }
+    return (
+        sorted(selected),
+        {key: tuple(sorted(value)) for key, value in roles.items()},
+        profile_hash,
+    )
 
 
 def prepare_config(
@@ -584,6 +767,7 @@ def prepare_config(
     calibration_path: Path | None = None,
     rankings_path: Path | None = None,
     selection_path: Path | None = None,
+    profile_path: Path | None = None,
     split: str | None = None,
     execution_target: str = "physical",
     experiment_id: str | None = None,
@@ -597,6 +781,7 @@ def prepare_config(
     selected: list[tuple[str, str, str]] = []
     selection_roles: dict[tuple[str, str, str], tuple[str, ...]] = {}
     selection_provenance: list[tuple[str, str, str]] = []
+    profile_hash: str | None = None
     if mode == "calibration":
         if calibration_path is None:
             raise ValueError("calibration mode requires a calibration set")
@@ -625,15 +810,18 @@ def prepare_config(
     elif mode == "evaluation":
         if selection_path is None:
             raise ValueError("evaluation mode requires a frozen selection")
+        if profile_path is None:
+            raise ValueError("evaluation mode requires a frozen profile")
         if split is None:
             raise ValueError("evaluation mode requires validation or test split")
         topology_ids = _EVALUATION_TOPOLOGIES
-        selected, selection_roles = _evaluation_selection(
+        selected, selection_roles, profile_hash = _evaluation_selection(
             dataset=dataset,
             dataset_hash=dataset_hash,
             candidate_map=candidate_map,
             circuit_map=circuit_map,
             selection_path=selection_path,
+            profile_path=profile_path,
             split=split,
         )
         selection_provenance = list(selected)
@@ -734,6 +922,8 @@ def prepare_config(
                 "selection_split": split,
                 "execution_target": execution_target,
                 "selection_path": str(selection_path),
+                "profile_path": str(profile_path),
+                "fitted_profile_sha256": profile_hash,
                 "selection_roles": [
                     {
                         "circuit_id": circuit_id,
@@ -790,12 +980,16 @@ def main() -> None:
     frozen_cpu.add_argument(
         "--selection", "--selection-artifact", dest="selection", type=Path, required=True
     )
+    frozen_cpu.add_argument(
+        "--profile", "--frozen-profile", dest="profile", type=Path, required=True
+    )
     frozen_cpu.add_argument("--split", choices=("validation", "test"), required=True)
     frozen_cpu.add_argument("--output", type=Path, required=True)
     prepare = subparsers.add_parser("prepare")
     prepare.add_argument("--candidate-paths", type=Path, required=True)
     prepare.add_argument("--calibration-set", type=Path)
     prepare.add_argument("--selection", "--selection-artifact", dest="selection", type=Path)
+    prepare.add_argument("--profile", "--frozen-profile", dest="profile", type=Path)
     prepare.add_argument("--rankings", type=Path)
     prepare.add_argument(
         "--mode", choices=("sdk", "calibration", "evaluation"), required=True
@@ -827,6 +1021,7 @@ def main() -> None:
             args.selection,
             args.output,
             split=args.split,
+            profile_path=args.profile,
         )
         print(
             json.dumps(
@@ -847,6 +1042,7 @@ def main() -> None:
             calibration_path=args.calibration_set,
             rankings_path=args.rankings,
             selection_path=args.selection,
+            profile_path=args.profile,
             split=args.split,
             execution_target=args.execution_target,
             experiment_id=args.experiment_id,

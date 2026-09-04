@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -62,7 +63,7 @@ def _candidate(identifier: str, *, greedy: bool, seed: int | None, host: int) ->
 
 def _evaluation_fixture(
     tmp_path: Path, *, split: str = "validation"
-) -> tuple[Path, Path, str, str]:
+) -> tuple[Path, Path, Path, str, str]:
     greedy = "a" * 64
     candidate = "b" * 64
     dataset = {
@@ -86,10 +87,28 @@ def _evaluation_fixture(
     }
     selection = {
         "schema_version": "upmem_path_frozen_selection_v1",
+        "score_id": "upmem_slr_cost_v1",
         "source_sha": dataset["source_sha"],
         "candidate_set_sha256": qualify._candidate_set_sha256(dataset),
         "split": split,
         "timing_used_for_selection": False,
+        "weights": {
+            "B_host_dpu": 1.0,
+            "B_mram_wram": 0.0,
+            "I_dpu": 0.0,
+            "N_sync": 0.0,
+            "E_num": 0.0,
+            "P_wram": 0.0,
+        },
+        "feature_model": {
+            "mode": "six_term",
+            "active_features": ["B_host_dpu"],
+            "zero_range_features": [],
+            "correlated_pairs": [],
+            "matrix_rank": 1,
+            "rank_tolerance": 0.0,
+            "reason": "test profile",
+        },
         "selections": [
             {
                 "circuit_id": "held-out",
@@ -104,16 +123,32 @@ def _evaluation_fixture(
     }
     dataset_path = tmp_path / "dataset.json"
     selection_path = tmp_path / "selection.json"
+    profile = {
+        "schema_version": "physical_speedup_fit_v1",
+        "score_id": "upmem_slr_cost_v1",
+        "normalization": "log((candidate+1)/(greedy+1))",
+        "source_sha": dataset["source_sha"],
+        "candidate_generation_source_sha": dataset["source_sha"],
+        "candidate_set_sha256": qualify._candidate_set_sha256(dataset),
+        "weights": selection["weights"],
+        "feature_model": selection["feature_model"],
+    }
+    profile_path = tmp_path / "profile.json"
     dataset_path.write_bytes(qualify._canonical_bytes(dataset))
     selection_path.write_bytes(qualify._canonical_bytes(selection))
-    return dataset_path, selection_path, greedy, candidate
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
+    selection["fitted_profile_sha256"] = hashlib.sha256(
+        qualify._canonical_bytes(profile)
+    ).hexdigest()
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    return dataset_path, selection_path, profile_path, greedy, candidate
 
 
 @pytest.mark.parametrize("split", ("validation", "test"))
 def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, split: str
 ) -> None:
-    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(
+    dataset_path, selection_path, profile_path, greedy, candidate = _evaluation_fixture(
         tmp_path, split=split
     )
 
@@ -128,6 +163,7 @@ def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
         selection_path=selection_path,
         output_path=output,
         mode="evaluation",
+        profile_path=profile_path,
         split=split,
     )
 
@@ -154,6 +190,11 @@ def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
         output.with_suffix(".yml.provenance.json").read_text(encoding="utf-8")
     )
     assert provenance["selection_split"] == split
+    assert provenance["fitted_profile_sha256"] == hashlib.sha256(
+        qualify._canonical_bytes(
+            json.loads(profile_path.read_text(encoding="utf-8"))
+        )
+    ).hexdigest()
     assert len(provenance["selected"]) == 4
     assert provenance["candidate_set_sha256"] == qualify._candidate_set_sha256(
         json.loads(dataset_path.read_text(encoding="utf-8"))
@@ -163,7 +204,7 @@ def test_prepare_evaluation_config_uses_frozen_selection_once_per_path(
 def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, greedy, candidate = _evaluation_fixture(tmp_path)
     monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
     output = tmp_path / "sdk.yml"
     config = qualify.prepare_config(
@@ -171,6 +212,7 @@ def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
         selection_path=selection_path,
         output_path=output,
         mode="evaluation",
+        profile_path=profile_path,
         split="validation",
         execution_target="sdk",
     )
@@ -199,13 +241,14 @@ def test_prepare_evaluation_config_can_target_strict_sdk_simulator(
 def test_prepare_config_accepts_explicit_replacement_experiment_identity(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
     monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
     config = qualify.prepare_config(
         dataset_path=dataset_path,
         selection_path=selection_path,
         output_path=tmp_path / "replacement.yml",
         mode="evaluation",
+        profile_path=profile_path,
         split="validation",
         experiment_id="upmem-path-heuristic-generalization-validation-v1",
     )
@@ -219,15 +262,138 @@ def test_prepare_config_accepts_explicit_replacement_experiment_identity(
             selection_path=selection_path,
             output_path=tmp_path / "invalid.yml",
             mode="evaluation",
+            profile_path=profile_path,
             split="validation",
             experiment_id="",
+        )
+
+
+def test_prepare_evaluation_requires_explicit_frozen_profile(
+    tmp_path: Path,
+) -> None:
+    dataset_path, selection_path, _, _, _ = _evaluation_fixture(tmp_path)
+
+    with pytest.raises(ValueError, match="frozen profile"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "missing-profile.yml",
+            mode="evaluation",
+            split="validation",
+        )
+
+
+def test_prepare_evaluation_rejects_forged_upmem_selected_path(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, profile_path, greedy, _ = _evaluation_fixture(tmp_path)
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["selections"][0]["upmem_selected_path_id"] = greedy
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+
+    with pytest.raises(ValueError, match="not selected by frozen profile"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "forged.yml",
+            mode="evaluation",
+            profile_path=profile_path,
+            split="validation",
+        )
+
+
+@pytest.mark.parametrize(
+    ("mutate_profile", "message"),
+    [
+        (
+            lambda profile: profile.update({"candidate_set_sha256": "f" * 64}),
+            "frozen profile candidate-set identity",
+        ),
+        (
+            lambda profile: profile.update({"source_sha": "f" * 40}),
+            "frozen profile source identity",
+        ),
+    ],
+)
+def test_prepare_evaluation_rejects_profile_dataset_identity_mismatch(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    mutate_profile,
+    message: str,
+) -> None:
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    mutate_profile(profile)
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+
+    with pytest.raises(ValueError, match=message):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "mismatched-profile.yml",
+            mode="evaluation",
+            profile_path=profile_path,
+            split="validation",
+        )
+
+
+def test_prepare_evaluation_rejects_selection_profile_identity_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["fitted_profile_sha256"] = "f" * 64
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+
+    with pytest.raises(ValueError, match="frozen-profile identity"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "mismatched-selection.yml",
+            mode="evaluation",
+            profile_path=profile_path,
+            split="validation",
+        )
+
+
+def test_prepare_evaluation_rejects_optional_workload_identity_mismatch(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    dataset["workload_manifest_sha256"] = "2" * 64
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    profile["workload_manifest_sha256"] = dataset["workload_manifest_sha256"]
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    selection["fitted_profile_sha256"] = hashlib.sha256(
+        qualify._canonical_bytes(profile)
+    ).hexdigest()
+    selection["workload_manifest_sha256"] = "f" * 64
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+
+    with pytest.raises(ValueError, match="workload_manifest_sha256"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "mismatched-workload.yml",
+            mode="evaluation",
+            profile_path=profile_path,
+            split="validation",
         )
 
 
 def test_qualify_frozen_selection_replays_each_unique_candidate_deterministically(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset_path, selection_path, greedy, candidate = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, greedy, candidate = _evaluation_fixture(tmp_path)
     calls: list[str] = []
     reference = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex128)
     actual = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64)
@@ -273,6 +439,7 @@ def test_qualify_frozen_selection_replays_each_unique_candidate_deterministicall
         selection_path,
         first_output,
         split="validation",
+        profile_path=profile_path,
     )
     second_output = tmp_path / "second.json"
     second = qualify.qualify_frozen_selection(
@@ -280,6 +447,7 @@ def test_qualify_frozen_selection_replays_each_unique_candidate_deterministicall
         selection_path,
         second_output,
         split="validation",
+        profile_path=profile_path,
     )
 
     assert first == second
@@ -306,7 +474,7 @@ def test_qualify_frozen_selection_replays_each_unique_candidate_deterministicall
 def test_qualify_frozen_selection_records_cpu_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset_path, selection_path, _, candidate = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, _, candidate = _evaluation_fixture(tmp_path)
     reference = np.asarray([1.0 + 0.0j], dtype=np.complex128)
     monkeypatch.setattr(qualify, "builtin_circuit", lambda name, params: object())
     monkeypatch.setattr(qualify, "make_simulation_job", lambda spec: spec)
@@ -342,6 +510,7 @@ def test_qualify_frozen_selection_records_cpu_failure(
         selection_path,
         output,
         split="validation",
+        profile_path=profile_path,
     )
 
     assert result["all_passed"] is False
@@ -374,7 +543,7 @@ def test_prepare_evaluation_rejects_frozen_selection_contract_violations(
     change,
     message: str,
 ) -> None:
-    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     change(selection)
     selection_path.write_bytes(qualify._canonical_bytes(selection))
@@ -385,6 +554,7 @@ def test_prepare_evaluation_rejects_frozen_selection_contract_violations(
             selection_path=selection_path,
             output_path=tmp_path / "validation.yml",
             mode="evaluation",
+            profile_path=profile_path,
             split="validation",
         )
 
@@ -392,14 +562,20 @@ def test_prepare_evaluation_rejects_frozen_selection_contract_violations(
 def test_prepare_evaluation_rejects_candidate_without_resource_admission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    dataset_path, selection_path, _, _ = _evaluation_fixture(tmp_path)
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
     dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
     dataset["circuits"][0]["candidates"][1]["topologies"][1]["resource_admission"][
         "collection_resource_admission_passed"
     ] = False
     dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
     selection = json.loads(selection_path.read_text(encoding="utf-8"))
     selection["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    selection["fitted_profile_sha256"] = hashlib.sha256(
+        qualify._canonical_bytes(profile)
+    ).hexdigest()
     selection["selections"][1]["minimum_flops_path_id"] = "a" * 64
     selection_path.write_bytes(qualify._canonical_bytes(selection))
     monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
@@ -409,6 +585,7 @@ def test_prepare_evaluation_rejects_candidate_without_resource_admission(
             selection_path=selection_path,
             output_path=tmp_path / "validation.yml",
             mode="evaluation",
+            profile_path=profile_path,
             split="validation",
         )
 
