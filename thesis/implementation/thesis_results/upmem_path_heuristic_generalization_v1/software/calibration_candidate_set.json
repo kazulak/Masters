@@ -1,0 +1,574 @@
+{
+  "candidate_set_sha256": "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049",
+  "cells": [
+    {
+      "candidate_path_ids": [
+        "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+        "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+        "89c5213437eb648b20830267f2525f6c684cefd79652bbd5125e5b456144f1f9",
+        "166e365b19a0bbacfb874bbb888a0dfb911d2efaa717dfd4db2ba0a9185a7dab",
+        "205bbe269c6ba560b11e18ee58d718ca177ec3d78d7cb37c2929bf483d2d8a3e",
+        "128c6ab93bbd87030235d7d7a326f8446511b611812cfe209a3f31a79043eaa1"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "3792589f35002d6f126675076dd5913416ccf76a8166e51d23d505fcaed57c83",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "quantization_stress_16q_l2:1dpu_t8",
+      "circuit_id": "quantization_stress_16q_l2",
+      "feature_model": {
+        "active_features": [
+          "B_host_dpu",
+          "B_mram_wram",
+          "I_dpu",
+          "N_sync"
+        ],
+        "correlated_pairs": [],
+        "matrix_rank": 4,
+        "mode": "six_term",
+        "rank_tolerance": 1.2255835135847678e-14,
+        "reason": "active feature matrix is identifiable",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+        "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+        "632571b5b85b532f9fb69abe3de283b4b987a5d6fe05483967a6e822cd676425",
+        "58a6438db5d9b03f9aafc81c49efa5802c0b1dbbadd36fcc66ba268b1c283a33",
+        "0ddc92c23c999aa26d838441475d8a690f247e338923ab6e74bec2fe8c124b17",
+        "9309fbea4ed646f0745c955b89ae51b2d78328295363dc8b42aa4e80f0e3d401"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "08f7269cb0d72abc3ea1c49129cb2ed79fe6bce42c7ebbe992be73f9b3ad2f86",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "quantization_stress_16q_l2:4dpu_t8",
+      "circuit_id": "quantization_stress_16q_l2",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.812205068084118e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "31a9997e87f38005e081aad56952a30bd31277dafe425c44de78613365a45e02",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+        "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+        "05778765df5091efc8bc35cdeba7d73dea40dc3c3ca2b64aaa5ddff2428ba8d1",
+        "3e61e087b35621021bb1234b1e2db0ebbeea777626c0bffc726f340901f5c20c",
+        "4d7cace64c91c46e52ce78a82843d53617b5be818b465d31a11f01fb1583ff8e",
+        "5bcd2ee43a768cc550411db6d35b7aa681368316fa25b4145ca225287f799968"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "05778765df5091efc8bc35cdeba7d73dea40dc3c3ca2b64aaa5ddff2428ba8d1",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "hs_20q_d1:1dpu_t8",
+      "circuit_id": "hs_20q_d1",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.103029920574998e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+        "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+        "05778765df5091efc8bc35cdeba7d73dea40dc3c3ca2b64aaa5ddff2428ba8d1",
+        "3e61e087b35621021bb1234b1e2db0ebbeea777626c0bffc726f340901f5c20c",
+        "4d7cace64c91c46e52ce78a82843d53617b5be818b465d31a11f01fb1583ff8e",
+        "5bcd2ee43a768cc550411db6d35b7aa681368316fa25b4145ca225287f799968"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "01fce85004f811b2bf3286ba03073d81166c948e4cb75e280c8685079db5a7ed",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "05778765df5091efc8bc35cdeba7d73dea40dc3c3ca2b64aaa5ddff2428ba8d1",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "hs_20q_d1:4dpu_t8",
+      "circuit_id": "hs_20q_d1",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 2.144864058398477e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "be2aca7b90cf22bd437f2aafda4194cc5dba5afea7a4dc514fc29232a92e6658",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+        "c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c",
+        "286eba818823e21779bf064e893cac5790b4d98a28cdacc7f504e3337e987f65",
+        "ece71146c567f2cbe85cedede6f66ced3fea2c88396f91d6ad54d00dfe913902",
+        "73c765d4d55ccdf174542a40c7cc2a9a114a341127aa0b31c4c2860ef1a0b277",
+        "dd10879e8d92fd2f8069e56c7ee3b86ec2c57c9ddb1671626e41763c24ad3363"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "286eba818823e21779bf064e893cac5790b4d98a28cdacc7f504e3337e987f65",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "c9bd5f382e4c40d5fe851ed8719d6d9c92de44e58d4c7266f39eb5aad0008c4c",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "ece71146c567f2cbe85cedede6f66ced3fea2c88396f91d6ad54d00dfe913902",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "edc_14q:1dpu_t8",
+      "circuit_id": "edc_14q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_host_dpu",
+            "N_sync"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "N_sync"
+          ],
+          [
+            "I_dpu",
+            "N_sync"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 6.463989948622904e-14,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+        "9aec27bca7eb48d38806446a28e551053ae1d8a3658533685be8955be99c61d7",
+        "ece71146c567f2cbe85cedede6f66ced3fea2c88396f91d6ad54d00dfe913902",
+        "cd89b50a69aca765b37182f4144fe1203a37d6f257658cbcce233af3ea060e65",
+        "68676e404aa00aacdba6c4457737a64b3390c7e4a9302b0e854be48042b45553",
+        "867c1cbc5f7b243302962d7bf5553ac824c9531dbb0678459eddead020f16dfe"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "9aec27bca7eb48d38806446a28e551053ae1d8a3658533685be8955be99c61d7",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "9aec27bca7eb48d38806446a28e551053ae1d8a3658533685be8955be99c61d7",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "9aec27bca7eb48d38806446a28e551053ae1d8a3658533685be8955be99c61d7",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "9aec27bca7eb48d38806446a28e551053ae1d8a3658533685be8955be99c61d7",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "ece71146c567f2cbe85cedede6f66ced3fea2c88396f91d6ad54d00dfe913902",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "edc_14q:4dpu_t8",
+      "circuit_id": "edc_14q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 6.680031672698384e-15,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "73c23017ab47bc0e2ce8e66241c16e982f1de978b7b1b1cf0b3191bd414a19a3",
+      "topology_id": "4dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+        "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+        "9adda6c582ae73f93302491934ad04282e2e2c7a871235182394119e93b7fc30",
+        "5f04573f0fdcff35b6b2ec32fdde6d27ff6574d64a1266342109f163e5a981a4",
+        "b51c04ffee83915417bbace0c6f5a75202a13181d4f229609a3b88b34e1d952e",
+        "ee9b547f4d4eccd9f9d2060b33e17a3ce5df12b0c194781f8b8662eea510062e"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "5927f2fb30d2260742e7f2eda8e48fa1fc373b7da91309c4c73118d0b69b5e01",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "ghz_chain_16q:1dpu_t8",
+      "circuit_id": "ghz_chain_16q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 8.819441742315532e-14,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+      "topology_id": "1dpu_t8"
+    },
+    {
+      "candidate_path_ids": [
+        "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+        "0487dda463a3515227fc178df7a5c305d0e8cf917bb54715cdb3596982244f08",
+        "05f6affc0484efb3780bdd383bbd0a25d43464598571ca51024fcba46a9ba608",
+        "f6d7dbc9df7912aa985f9b2d886b8864c7b1d7c31cd7c45c00c935885f89d2bc",
+        "d66e42ace695a9a89605fc5875cf49621bacd055b2246e401e092ee847e52f0a",
+        "77e3707ea98ac011b0dbf16ab0d7142809db2ec7d27927da8b22475df6312d4d"
+      ],
+      "candidate_roles": [
+        {
+          "candidate_path_id": "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+          "role": "greedy"
+        },
+        {
+          "candidate_path_id": "0487dda463a3515227fc178df7a5c305d0e8cf917bb54715cdb3596982244f08",
+          "role": "minimum_flops"
+        },
+        {
+          "candidate_path_id": "0487dda463a3515227fc178df7a5c305d0e8cf917bb54715cdb3596982244f08",
+          "role": "minimum_peak_intermediate"
+        },
+        {
+          "candidate_path_id": "0487dda463a3515227fc178df7a5c305d0e8cf917bb54715cdb3596982244f08",
+          "role": "minimum_writes"
+        },
+        {
+          "candidate_path_id": "05f6affc0484efb3780bdd383bbd0a25d43464598571ca51024fcba46a9ba608",
+          "role": "frozen_v1_selected"
+        },
+        {
+          "candidate_path_id": "05f6affc0484efb3780bdd383bbd0a25d43464598571ca51024fcba46a9ba608",
+          "role": "feature_diverse"
+        }
+      ],
+      "cell_id": "ghz_chain_16q:4dpu_t8",
+      "circuit_id": "ghz_chain_16q",
+      "feature_model": {
+        "active_features": [
+          "movement",
+          "compute",
+          "coordination"
+        ],
+        "correlated_pairs": [
+          [
+            "B_host_dpu",
+            "B_mram_wram"
+          ],
+          [
+            "B_host_dpu",
+            "I_dpu"
+          ],
+          [
+            "B_mram_wram",
+            "I_dpu"
+          ]
+        ],
+        "matrix_rank": 4,
+        "mode": "grouped",
+        "rank_tolerance": 3.8046949727966264e-14,
+        "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+        "zero_range_features": [
+          "E_num",
+          "P_wram"
+        ]
+      },
+      "greedy_path_id": "7a2d5b8bb4078c0cb1ba73bb3125b03f5e40c0fee62db67519e97a85cab23a5e",
+      "topology_id": "4dpu_t8"
+    }
+  ],
+  "schema_version": "upmem_path_calibration_candidate_set_v1",
+  "selection_profile_model": {
+    "active_features": [
+      "movement",
+      "compute",
+      "coordination"
+    ],
+    "correlated_pairs": [
+      [
+        "B_host_dpu",
+        "B_mram_wram"
+      ]
+    ],
+    "matrix_rank": 4,
+    "mode": "grouped",
+    "rank_tolerance": 1.4520078502139952e-13,
+    "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+    "zero_range_features": [
+      "E_num",
+      "P_wram"
+    ]
+  },
+  "selection_profile_sha256": "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a",
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42",
+  "timing_used_for_selection": false
+}

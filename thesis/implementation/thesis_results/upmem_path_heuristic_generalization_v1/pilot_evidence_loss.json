@@ -1,0 +1,58 @@
+{
+  "incident_id": "upmem_path_heuristic_v1_raw_archive_loss",
+  "incident_kind": "evidence_retention",
+  "missing_archives": [
+    {
+      "expected_sha256": "04cf32620c9727fbdca8919c38d0b2e01ec59d4037df5b4f58091540cada7bd7",
+      "name": "upmem-path-calibration-d452106.tar.gz"
+    },
+    {
+      "expected_sha256": "01a92700665fdac49dd597d723fbd337b1005e1c3622d312fc41d72e5b811b94",
+      "name": "upmem-path-evaluation-16704f8.tar.gz"
+    }
+  ],
+  "no_raw_values_reconstructed": true,
+  "recovery_search": {
+    "completed_at_utc": "2026-09-03T14:15:00Z",
+    "locations": [
+      "GitHub Actions artifacts",
+      "browser download and synchronization directories",
+      "all registered Git worktrees and repository roots",
+      "known local and remote rsync or evidence destinations",
+      "accessible local backup and snapshot locations",
+      "/dev/shm and /run/user temporary mounts",
+      "safari-baguette1 home, worktree, runs, and /tmp locations",
+      "local Codex session history for prior archive paths"
+    ],
+    "result": "not_found",
+    "search_bounded": true
+  },
+  "schema_version": "upmem_path_heuristic_evidence_retention_incident_v1",
+  "scientific_disposition": {
+    "canonical_final_evidence": false,
+    "description": "The historical physical result is retained as exploratory pilot evidence. Its compact derivatives may guide workload design and test analysis code, but it is not used as canonical final held-out evidence and is not silently mixed into the replacement study's statistical fit.",
+    "physical_evidence_closure_tag_allowed": false,
+    "software_qualification_tag": "thesis-upmem-aware-path-heuristic-software-v1"
+  },
+  "source_lineage": {
+    "calibration_execution_source": "d452106e697890439cfc94fdabfb6a80fb0fccc2",
+    "final_reporting_source": "70ba5e3899368942b62d682f1526d031d4b04100",
+    "validation_test_execution_source": "16704f8221a4aec3fe694668b6bd1383b68fa4fc"
+  },
+  "surviving": [
+    "software implementation and exact Git history",
+    "deterministic candidate pools and candidate features",
+    "candidate-pool and profile hashes",
+    "compact calibration observations",
+    "frozen fitted profile",
+    "derived validation and test reports",
+    "recorded expected raw archive SHA-256 values",
+    "exact-head CI result 33765150376"
+  ],
+  "surviving_result_manifest_sha256": "18ec51e5aecabe5c7325f95c7a3b77fdef852348d81ac2d0e8410bb130996df7",
+  "unavailable": [
+    "original canonical calibration raw archive",
+    "original validation and test per-attempt raw archive",
+    "independent re-verification of the original raw archive contents"
+  ]
+}

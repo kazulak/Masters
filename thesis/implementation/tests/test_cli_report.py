@@ -35,7 +35,7 @@ from quantum_bench.report import (
     report_artifacts,
     verify_artifacts,
 )
-from quantum_bench.results import ExecutionSample, Measurement
+from quantum_bench.results import ExecutionFailed, ExecutionSample, Measurement
 from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemStage,
@@ -1016,6 +1016,27 @@ def test_collection_schedule_is_deterministic_and_records_block_order(
     ]
 
 
+def test_generalization_calibration_schedule_remains_frozen_192() -> None:
+    config = load_experiment_config(
+        ROOT / "configs" / "tn_benchmark_upmem_path_generalization_calibration_v1.yml"
+    )
+
+    selected = _selected_configurations(config)
+    schedule = cli._scheduled_attempts(config, selected)
+
+    assert len(selected) == 48
+    assert len(schedule) == 192
+    assert [
+        (attempt[0], attempt[2]) for *_, attempt in schedule
+    ] == [
+        ("warmup", 0)
+    ] * 48 + [
+        ("measurement", block_id)
+        for block_id in range(1, 4)
+        for _ in range(48)
+    ]
+
+
 def test_block_cooldown_occurs_once_after_each_nonfinal_block(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -1291,6 +1312,213 @@ def test_simulator_route_uses_simulator_session_dispatch(
     assert result["status"] == "completed"
     assert observed["session_protocol_id"] == "upmem_real_tile_abi_v4"
     assert observed["open_session"]() is not None
+
+
+def _stub_physical_cli_dependencies(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub_environment_id = environment_id({})
+    monkeypatch.setenv("UPMEM_ALLOW_PHYSICAL_HARDWARE", "1")
+    monkeypatch.setattr(cli, "_worktree_dirty", lambda: False)
+    monkeypatch.setattr(
+        cli,
+        "_machine_preflight",
+        lambda _config: {"machine_preflight_passed": True},
+    )
+    monkeypatch.setattr(
+        cli, "_environment", lambda _config, _preflight: (stub_environment_id, {})
+    )
+    monkeypatch.setattr(
+        cli,
+        "_plan_dag",
+        lambda *_args, **_kwargs: (
+            object(),
+            {"input": np.array([1.0])},
+            object(),
+            {},
+        ),
+    )
+    monkeypatch.setattr(
+        cli,
+        "_reference_dag",
+        lambda _job: (object(), {}, object()),
+    )
+    monkeypatch.setattr(
+        cli,
+        "run_complex128_reference",
+        lambda *_args, **_kwargs: np.array([1.0]),
+    )
+    monkeypatch.setattr(cli, "plan_upmem", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr(
+        cli,
+        "_identities",
+        lambda **_kwargs: {
+            "problem_id": "1" * 64,
+            "tensor_network_structure_id": "2" * 64,
+            "logical_plan_id": "3" * 64,
+            "physical_plan_id": "4" * 64,
+            "executable_id": "5" * 64,
+            "environment_id": stub_environment_id,
+            "validation_policy_id": cli.default_validation_policy_id(),
+        },
+    )
+    monkeypatch.setattr(
+        cli,
+        "replay_upmem_plan_once",
+        lambda *_args, **_kwargs: ExecutionSample(
+            output=np.array([1.0]),
+            measurement=Measurement(
+                scope_id="steady_execution_v1", total_wall_s=0.1
+            ),
+            backend_facts={},
+            numeric_facts={},
+        ),
+    )
+
+
+@pytest.mark.parametrize("command", [cli.run_command, cli.qualify_command])
+@pytest.mark.parametrize(
+    ("outcome", "expected_exception", "expected_status"),
+    [
+        (
+            ExecutionFailed("kernel", "execution failed", {"rank": 0}),
+            ExecutionFailed,
+            "failed",
+        ),
+        (
+            cli.UnsupportedExecution("preflight", "unsupported attempt", "device"),
+            cli.UnsupportedExecution,
+            "unsupported",
+        ),
+    ],
+    ids=["execution-failure", "unsupported-attempt"],
+)
+def test_physical_session_failure_stops_before_next_session_and_preserves_cleanup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    command,
+    outcome: Exception,
+    expected_exception: type[Exception],
+    expected_status: str,
+) -> None:
+    _stub_physical_cli_dependencies(monkeypatch)
+    config = tmp_path / "physical.yml"
+    _write_config(
+        config,
+        _physical_config().replace("measurement_blocks: 1", "measurement_blocks: 2"),
+    )
+    opened: list[object] = []
+
+    class FailingSession:
+        run_calls = 0
+        close_calls = 0
+
+        def run_once(self, _inputs: object) -> ExecutionSample:
+            self.run_calls += 1
+            raise outcome
+
+        def close(self) -> dict[str, object]:
+            self.close_calls += 1
+            return {
+                "hardware_release_attempted": True,
+                "hardware_release_succeeded": True,
+                "hardware_release_verified": True,
+            }
+
+    def open_session(*_args: object, **_kwargs: object) -> FailingSession:
+        session = FailingSession()
+        opened.append(session)
+        return session
+
+    monkeypatch.setattr(cli, "open_upmem", open_session)
+    run_dir = tmp_path / "run"
+
+    with pytest.raises(expected_exception):
+        command(str(config), str(run_dir), allow_physical=True)
+
+    assert len(opened) == 1
+    session = opened[0]
+    assert isinstance(session, FailingSession)
+    assert session.run_calls == 1
+    assert session.close_calls == 1
+    samples = [
+        json.loads(line)
+        for line in (run_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    sessions = [
+        json.loads(line)
+        for line in (run_dir / "sessions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(samples) == len({sample["sample_id"] for sample in samples}) == 1
+    assert samples[0]["status"] == expected_status
+    assert len(sessions) == 1
+    assert sessions[0]["status"] == "failed"
+    assert json.loads((run_dir / "manifest.json").read_text())["status"] == "failed"
+    load_artifacts(run_dir)
+
+
+@pytest.mark.parametrize("command", [cli.run_command, cli.qualify_command])
+def test_physical_session_close_failure_stops_before_next_session_and_preserves_rows(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, command
+) -> None:
+    _stub_physical_cli_dependencies(monkeypatch)
+    config = tmp_path / "physical.yml"
+    _write_config(
+        config,
+        _physical_config().replace("measurement_blocks: 1", "measurement_blocks: 2"),
+    )
+    opened: list[object] = []
+
+    class CloseFailingSession:
+        run_calls = 0
+        close_calls = 0
+
+        def run_once(self, _inputs: object) -> ExecutionSample:
+            self.run_calls += 1
+            return ExecutionSample(
+                output=np.array([1.0]),
+                measurement=Measurement(
+                    scope_id="steady_execution_v1", total_wall_s=0.1
+                ),
+                backend_facts={},
+                numeric_facts={},
+            )
+
+        def close(self) -> dict[str, object]:
+            self.close_calls += 1
+            raise ExecutionFailed("session_close", "close failed", {})
+
+    def open_session(*_args: object, **_kwargs: object) -> CloseFailingSession:
+        session = CloseFailingSession()
+        opened.append(session)
+        return session
+
+    monkeypatch.setattr(cli, "open_upmem", open_session)
+    run_dir = tmp_path / "run"
+
+    with pytest.raises(ExecutionFailed, match="close failed"):
+        command(str(config), str(run_dir), allow_physical=True)
+
+    assert len(opened) == 1
+    session = opened[0]
+    assert isinstance(session, CloseFailingSession)
+    assert session.run_calls == 1
+    assert session.close_calls == 1
+    samples = [
+        json.loads(line)
+        for line in (run_dir / "samples.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    sessions = [
+        json.loads(line)
+        for line in (run_dir / "sessions.jsonl").read_text(encoding="utf-8").splitlines()
+    ]
+    assert len(samples) == 1
+    assert samples[0]["status"] == "success"
+    assert len(sessions) == 1
+    assert sessions[0]["failure"] == {
+        "stage": "session_close",
+        "reason": "close failed",
+    }
+    assert json.loads((run_dir / "manifest.json").read_text())["status"] == "failed"
+    load_artifacts(run_dir)
 
 
 def test_unsupported_upmem_mapping_is_retained_as_sample(

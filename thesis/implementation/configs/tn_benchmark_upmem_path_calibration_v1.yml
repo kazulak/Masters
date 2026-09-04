@@ -1,0 +1,444 @@
+schema_version: tn_benchmark_v3
+experiment_id: upmem-path-heuristic-calibration-v1
+defaults:
+  timeout_s: 120.0
+collection:
+  claim_policy: diagnostic_v1
+  base_seed: 20260910
+  warmup_blocks: 1
+  measurement_blocks: 3
+  session_policy: fresh_session_per_attempt_v1
+  block_cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity:
+      mode: observed_v1
+    cpu_governor:
+      mode: observed_v1
+    affinity:
+      mode: exact_required_v1
+      expected_cpus:
+      - 0
+    numa_policy:
+      mode: observed_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: null
+cases:
+  edc_18q:
+    circuit:
+      kind: builtin
+      name: edc
+      parameters:
+        n_qubits: 18
+      path: null
+  ghz_chain_18q:
+    circuit:
+      kind: builtin
+      name: ghz_chain
+      parameters:
+        n_qubits: 18
+      path: null
+  hs_18q_d1:
+    circuit:
+      kind: builtin
+      name: hs
+      parameters:
+        depth: 1
+        n_qubits: 18
+      path: null
+  quantization_stress_18q_l2:
+    circuit:
+      kind: builtin
+      name: quantization_stress
+      parameters:
+        n_qubits: 18
+        repeat_layers: 2
+      path: null
+plans:
+  path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260945
+    slicing: null
+  path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260962
+    slicing: null
+  path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260927
+    slicing: null
+  path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260908
+    slicing: null
+  path_e82337947450ef2121b8b01092f1af3f7c1db1bc7e831a0116fa010050257ae9:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260924
+    slicing: null
+  path_eac9804cb5170ee98914be6544759ae4f7f6db14b31bb57fda7a9e7c5ef02951:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260947
+    slicing: null
+  path_0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260920
+    slicing: null
+  path_8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260965
+    slicing: null
+  path_9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260940
+    slicing: null
+  path_a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260917
+    slicing: null
+  path_b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260945
+    slicing: null
+  path_002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260941
+    slicing: null
+  path_0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260940
+    slicing: null
+  path_93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260908
+    slicing: null
+  path_bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260944
+    slicing: null
+  path_e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260938
+    slicing: null
+  path_2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260925
+    slicing: null
+  path_348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260914
+    slicing: null
+  path_9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260965
+    slicing: null
+  path_b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+  path_e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260957
+    slicing: null
+  path_e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260915
+    slicing: null
+routes:
+  1dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/path_heuristic_physical_1dpu_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths:
+      - /dev/dpu_rank1
+  4dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 4
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/path_heuristic_physical_4dpu_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths:
+      - /dev/dpu_rank1
+matrix:
+- case_id: edc_18q
+  plan_id: path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_e82337947450ef2121b8b01092f1af3f7c1db1bc7e831a0116fa010050257ae9
+  route_ids:
+  - 1dpu_t8
+- case_id: edc_18q
+  plan_id: path_09eba679eeaacde57b3d14e532a34cfb89b93de888eb607ea84d8a211c4d2e29
+  route_ids:
+  - 4dpu_t8
+- case_id: edc_18q
+  plan_id: path_35308513a5e2881780ad0f4c9f36ff58b8f7e9e1ac95b1c3b567dbad46fa26bd
+  route_ids:
+  - 4dpu_t8
+- case_id: edc_18q
+  plan_id: path_8e7637420b811e01ff5b5f6a53cc2a05e9c066f7de21cf7a9b24566ed936594c
+  route_ids:
+  - 4dpu_t8
+- case_id: edc_18q
+  plan_id: path_b0785992b23ca97113b8ab448921ffe2b5e832f50994281719e731d54a839f9a
+  route_ids:
+  - 4dpu_t8
+- case_id: edc_18q
+  plan_id: path_cf23b184355b080f3bead1d9d754a3c2c295746793109413aedfff30da27b94e
+  route_ids:
+  - 4dpu_t8
+- case_id: edc_18q
+  plan_id: path_eac9804cb5170ee98914be6544759ae4f7f6db14b31bb57fda7a9e7c5ef02951
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637
+  route_ids:
+  - 1dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_0f1afe2ce698cbfcd1496d867ba787cb5cdd487ef3b05e9bb140d58eee826743
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_70e093aa7774e13885fc1dd7ad3acb7d0a2b9bea8a067289a654fbe18566a8c5
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_8a53a83c45b1a831a0d3d09f8b5393cd82dbadedaf2a239bc0a4da1843a470a4
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_9f9e62a16e205e4bd5eb1d1b8f62cade3177ef00fa9bd4dc15c899a41b00d3d0
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_a0f7fec9778137270204333fdde142b735188034c201a7c229136e14b6f96692
+  route_ids:
+  - 4dpu_t8
+- case_id: ghz_chain_18q
+  plan_id: path_b7a92f1a28cbacfef1575a0b571b79cdc92dded09222a5581a765ab352fd9637
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa
+  route_ids:
+  - 1dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_002f633fd11c9c8ac95008a9452a63ccea24651ab38167fe6e6b762d00c2806d
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_0f172b4535a71fb59dd5d4f406df828c33333cda1113d1c71db08b5d0e989d1e
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_93535be1f45b148a1b3d81d74e0185ffb0339853e6877aa2080426e1339bf13c
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_bf83ea123bc85b30f3c7f1f8a0de47c8366352fc37c099890eab75c8cba62cb8
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_e03d5d65a6118ee597f1200afdcd941cdf4e83d0e1447b7b3a199207a7853314
+  route_ids:
+  - 4dpu_t8
+- case_id: hs_18q_d1
+  plan_id: path_e69f53f17fabdfaba58d664f1e370a4216829bde473cd84608353c345fb2b4fa
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65
+  route_ids:
+  - 1dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_2eb807e063945083b04ae8fe3a72afca4e2a2b97d37dc739805c462caa388747
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_348d3fb5c4d401742575f7e9ce41a5ff1fb8415c2010311fb6b13a9bb52d2de8
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_9d1e1ae9a325d84cef97b0fd9beffa9d4b3d783f00a4e38f6fce3a17114d3abb
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_b9ba7e7f9f7faa942ecf55bc10c6f9a9488b0e3dcf87233bed822bea2416c816
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_e56fd025e7fdf900c75302bb6e7212f78d89deef09b236732a001e9f5c5001c1
+  route_ids:
+  - 4dpu_t8
+- case_id: quantization_stress_18q_l2
+  plan_id: path_e7f2ad3aef247ff4d7f2b7374966596ab24e96aa1fabd13234cbaebecab85d65
+  route_ids:
+  - 4dpu_t8

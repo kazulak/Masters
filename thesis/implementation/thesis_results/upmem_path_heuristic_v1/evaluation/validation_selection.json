@@ -1,0 +1,146 @@
+{
+  "candidate_set_sha256": "5269bfea2a1777b041e10edf9618ba613d44021ce89b3ff0d95093a81c095b65",
+  "feature_model": {
+    "active_features": [
+      "movement",
+      "compute",
+      "coordination"
+    ],
+    "correlated_pairs": [
+      [
+        "B_host_dpu",
+        "B_mram_wram"
+      ]
+    ],
+    "matrix_rank": 4,
+    "mode": "grouped",
+    "rank_tolerance": 1.4520078502139952e-13,
+    "reason": "independent six-term fit rejected by rank deficiency or high correlation; using movement/compute/coordination projection",
+    "zero_range_features": [
+      "E_num",
+      "P_wram"
+    ]
+  },
+  "fitted_profile_sha256": "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a",
+  "schema_version": "upmem_path_frozen_selection_v1",
+  "score_id": "upmem_slr_cost_v1",
+  "selections": [
+    {
+      "circuit_id": "edc_16q",
+      "explanation": [
+        {
+          "contribution": -0.21924213882728086,
+          "feature": "B_host_dpu",
+          "normalized": -0.8097971974285247,
+          "raw": 1099456.0,
+          "weight": 0.27073709259981954
+        },
+        {
+          "contribution": -0.21568822281893396,
+          "feature": "B_mram_wram",
+          "normalized": -0.7966703813937527,
+          "raw": 1156960.0,
+          "weight": 0.27073709259981954
+        },
+        {
+          "contribution": -0.2220833996852575,
+          "feature": "I_dpu",
+          "normalized": -0.4909834576495012,
+          "raw": 535888.0,
+          "weight": 0.45232358896253566
+        },
+        {
+          "contribution": -0.013026464912350962,
+          "feature": "N_sync",
+          "normalized": -2.1002887113376447,
+          "raw": 984.0,
+          "weight": 0.006202225837825213
+        },
+        {
+          "contribution": 0.0,
+          "feature": "E_num",
+          "normalized": 0.0,
+          "raw": 0.0,
+          "weight": 0.0
+        },
+        {
+          "contribution": 0.0,
+          "feature": "P_wram",
+          "normalized": 0.0,
+          "raw": 13568.0,
+          "weight": 0.0
+        }
+      ],
+      "greedy_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "minimum_flops_path_id": "741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29",
+      "split": "validation",
+      "topology_id": "1dpu_t8",
+      "upmem_score": -0.6700402262438233,
+      "upmem_selected_path_id": "741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29"
+    },
+    {
+      "circuit_id": "edc_16q",
+      "explanation": [
+        {
+          "contribution": -0.20836857981343943,
+          "feature": "B_host_dpu",
+          "normalized": -0.7696343999727886,
+          "raw": 1144512.0,
+          "weight": 0.27073709259981954
+        },
+        {
+          "contribution": -0.21097447275096,
+          "feature": "B_mram_wram",
+          "normalized": -0.7792595788224869,
+          "raw": 1177280.0,
+          "weight": 0.27073709259981954
+        },
+        {
+          "contribution": -0.21394600137373584,
+          "feature": "I_dpu",
+          "normalized": -0.47299324332045,
+          "raw": 545616.0,
+          "weight": 0.45232358896253566
+        },
+        {
+          "contribution": -0.0124836604891377,
+          "feature": "N_sync",
+          "normalized": -2.0127710302008364,
+          "raw": 1032.0,
+          "weight": 0.006202225837825213
+        },
+        {
+          "contribution": 0.0,
+          "feature": "E_num",
+          "normalized": 0.0,
+          "raw": 0.0,
+          "weight": 0.0
+        },
+        {
+          "contribution": 0.0,
+          "feature": "P_wram",
+          "normalized": 0.0,
+          "raw": 13568.0,
+          "weight": 0.0
+        }
+      ],
+      "greedy_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "minimum_flops_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
+      "split": "validation",
+      "topology_id": "4dpu_t8",
+      "upmem_score": -0.645772714427273,
+      "upmem_selected_path_id": "e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb"
+    }
+  ],
+  "source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0",
+  "split": "validation",
+  "timing_used_for_selection": false,
+  "weights": {
+    "B_host_dpu": 0.27073709259981954,
+    "B_mram_wram": 0.27073709259981954,
+    "E_num": 0.0,
+    "I_dpu": 0.45232358896253566,
+    "N_sync": 0.006202225837825213,
+    "P_wram": 0.0
+  }
+}

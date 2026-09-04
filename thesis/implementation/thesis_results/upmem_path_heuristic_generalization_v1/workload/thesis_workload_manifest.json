@@ -1,0 +1,4779 @@
+{
+  "circuits_sha256": "9092807e727911689a4e261a6929eb73d38fd00f374c113deec57404850a036e",
+  "config_sha256": "d85cebd866034669ec51247b84f7564ff9cc0f59c9971215ef3fdd0c4158ca0f",
+  "contract": {
+    "calibration": {
+      "candidate_roles": [
+        "greedy",
+        "minimum_flops",
+        "minimum_peak_intermediate",
+        "minimum_writes",
+        "frozen_v1_selected",
+        "feature_diverse"
+      ],
+      "candidates_per_cell_maximum": 6,
+      "frozen_v1_profile": {
+        "path": "thesis_results/upmem_path_heuristic_v1/fit/physical_speedup_fit_v1.json",
+        "sha256": "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a"
+      },
+      "measurement_blocks": 3,
+      "splits": [
+        "training",
+        "validation"
+      ],
+      "warmup_blocks": 1
+    },
+    "numeric_policy": "split_complex_float32_v1",
+    "physical_execution": false,
+    "rank_count": 1,
+    "timing_selection_frozen": true,
+    "topologies": [
+      {
+        "dpu_count": 1,
+        "rank_count": 1,
+        "tasklets_per_dpu": 8,
+        "topology_id": "1dpu_t8"
+      },
+      {
+        "dpu_count": 4,
+        "rank_count": 1,
+        "tasklets_per_dpu": 8,
+        "topology_id": "4dpu_t8"
+      }
+    ],
+    "transport": "packed_operation_v1"
+  },
+  "dependency_versions": {
+    "PyYAML": "6.0.3",
+    "cotengra": "0.7.5",
+    "numpy": "2.2.6",
+    "opt_einsum": "3.4.0",
+    "python": "3.10.12",
+    "quimb": "1.11.2"
+  },
+  "descriptor_source_sha256": "afebe6419fe9eca02e4d19d23f17821c245eac4c7cf6b2ed7139412981239428",
+  "generator_source_sha256": "7570a15227f216b4e693789314bf7ee5c1dab98401defb7428a3b7d3273a6aaf",
+  "pilot_config_sha256": "bfa44de7287820ffbd29031102bedbf08d349531dbee81bbc142a23531316a87",
+  "schema_version": "upmem_path_thesis_workload_manifest_v1",
+  "software_baseline_sha": "70ba5e3899368942b62d682f1526d031d4b04100",
+  "source_sha": "de27ced63d601b58c5905d8f95739a626afcea42",
+  "study_id": "upmem_path_heuristic_generalization_v1",
+  "summary": {
+    "correctness_only_count": 3,
+    "declared_instance_count": 15,
+    "eligible_family_count": 6,
+    "heuristic_eligible_count": 12,
+    "pilot_development_count": 6,
+    "unobserved_eligible_count": 6,
+    "unobserved_final_test_count": 2
+  },
+  "workload": [
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 18,
+          "repeat_layers": 2
+        }
+      },
+      "circuit_id": "quantization_stress_18q_l2",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "quantization_stress_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              15,
+              16
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              15,
+              16
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              17
+            ]
+          }
+        ],
+        "source": {
+          "deterministic_unitary": true,
+          "kind": "builtin",
+          "measurement_mode": "pre_measurement_statevector",
+          "n_qubits": 18,
+          "name": "quantization_stress",
+          "repeat_layers": 2
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 24,
+        "gate_count": 124,
+        "gate_counts": {
+          "cx": 34,
+          "h": 36,
+          "rz": 54
+        },
+        "interaction_graph": {
+          "density": 0.1111111111111111,
+          "edge_count": 17,
+          "max_degree": 2
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 90,
+        "two_qubit_gate_count": 34
+      },
+      "exclusion_reason": null,
+      "family": "quantization_stress",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "b6aa901d13605c79b14d1ca4b2e25787d4487caf011b8ea735b947033bae4772",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "hs",
+        "parameters": {
+          "depth": 1,
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "hs_18q_d1",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "hs_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              8
+            ]
+          }
+        ],
+        "source": {
+          "allocated_qubits": 18,
+          "kind": "builtin",
+          "logical_qubits": 9,
+          "name": "hs"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 3,
+        "gate_count": 36,
+        "gate_counts": {
+          "cz": 9,
+          "h": 18,
+          "x": 9
+        },
+        "interaction_graph": {
+          "density": 0.058823529411764705,
+          "edge_count": 9,
+          "max_degree": 1
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 27,
+        "two_qubit_gate_count": 9
+      },
+      "exclusion_reason": null,
+      "family": "hs",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "af167175a83db373db19344f0751c23240b81d8a2fb00ef1ca59d2772db3c42d",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "ghz_chain_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "ghz_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              15,
+              16
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "ghz_chain"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 18,
+        "gate_count": 18,
+        "gate_counts": {
+          "cx": 17,
+          "h": 1
+        },
+        "interaction_graph": {
+          "density": 0.1111111111111111,
+          "edge_count": 17,
+          "max_degree": 2
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 1,
+        "two_qubit_gate_count": 17
+      },
+      "exclusion_reason": null,
+      "family": "ghz_chain",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "aefb9a12e8eb01aea9780d345c4abe10139904c499b1623a4b2a71503550d242",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "edc_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "edc_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "z",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              15,
+              16
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "edc"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 18,
+        "gate_count": 19,
+        "gate_counts": {
+          "cx": 17,
+          "h": 1,
+          "z": 1
+        },
+        "interaction_graph": {
+          "density": 0.1111111111111111,
+          "edge_count": 17,
+          "max_degree": 2
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 2,
+        "two_qubit_gate_count": 17
+      },
+      "exclusion_reason": null,
+      "family": "edc",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "f4fba91ed7bc914bbaa836481f0c2e9b4d6829831b751dcf1d8918c6e4e67772",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 16
+        }
+      },
+      "circuit_id": "edc_16q",
+      "circuit_spec": {
+        "n_qubits": 16,
+        "name": "edc_16q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "z",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 16,
+          "name": "edc"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 16,
+        "gate_count": 17,
+        "gate_counts": {
+          "cx": 15,
+          "h": 1,
+          "z": 1
+        },
+        "interaction_graph": {
+          "density": 0.125,
+          "edge_count": 15,
+          "max_degree": 2
+        },
+        "n_qubits": 16,
+        "one_qubit_gate_count": 2,
+        "two_qubit_gate_count": 15
+      },
+      "exclusion_reason": null,
+      "family": "edc",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "c2a77df6c49b1c6ae8049479a8e90c8bd4d006d798d85bf9e121940c2701d147",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "upmem_path_heuristic_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "bv",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "bv_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "bv_18q",
+        "operations": [
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "bv"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "pilot_config",
+      "descriptors": {
+        "circuit_depth": 12,
+        "gate_count": 45,
+        "gate_counts": {
+          "cx": 9,
+          "h": 35,
+          "x": 1
+        },
+        "interaction_graph": {
+          "density": 0.058823529411764705,
+          "edge_count": 9,
+          "max_degree": 9
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 36,
+        "two_qubit_gate_count": 9
+      },
+      "exclusion_reason": null,
+      "family": "bv",
+      "historical_physical_status": "pilot_observed",
+      "operations_sha256": "1a52c8ae2d906e8c6c3732f4f0ca9908ca2e7cbf9ac800fa715a0ae242b1fa39",
+      "split": "pilot_development"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 16,
+          "repeat_layers": 2
+        }
+      },
+      "circuit_id": "quantization_stress_16q_l2",
+      "circuit_spec": {
+        "n_qubits": 16,
+        "name": "quantization_stress_16q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.4487989505128276
+            ],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.6283185307179586
+            ],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              1.0471975511965976
+            ],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.7853981633974483
+            ],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              0.5235987755982988
+            ],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "rz",
+            "params": [
+              -0.39269908169872414
+            ],
+            "wires": [
+              15
+            ]
+          }
+        ],
+        "source": {
+          "deterministic_unitary": true,
+          "kind": "builtin",
+          "measurement_mode": "pre_measurement_statevector",
+          "n_qubits": 16,
+          "name": "quantization_stress",
+          "repeat_layers": 2
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 22,
+        "gate_count": 110,
+        "gate_counts": {
+          "cx": 30,
+          "h": 32,
+          "rz": 48
+        },
+        "interaction_graph": {
+          "density": 0.125,
+          "edge_count": 15,
+          "max_degree": 2
+        },
+        "n_qubits": 16,
+        "one_qubit_gate_count": 80,
+        "two_qubit_gate_count": 30
+      },
+      "exclusion_reason": null,
+      "family": "quantization_stress",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "33164097615c6a1dbb58f3c660cae44a145ec59923eac38459839b1dbfcbe43e",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "hs",
+        "parameters": {
+          "depth": 1,
+          "n_qubits": 20
+        }
+      },
+      "circuit_id": "hs_20q_d1",
+      "circuit_spec": {
+        "n_qubits": 20,
+        "name": "hs_20q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              18
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              19
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          },
+          {
+            "gate": "cz",
+            "params": [],
+            "wires": [
+              18,
+              19
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              9
+            ]
+          }
+        ],
+        "source": {
+          "allocated_qubits": 20,
+          "kind": "builtin",
+          "logical_qubits": 10,
+          "name": "hs"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 3,
+        "gate_count": 40,
+        "gate_counts": {
+          "cz": 10,
+          "h": 20,
+          "x": 10
+        },
+        "interaction_graph": {
+          "density": 0.05263157894736842,
+          "edge_count": 10,
+          "max_degree": 1
+        },
+        "n_qubits": 20,
+        "one_qubit_gate_count": 30,
+        "two_qubit_gate_count": 10
+      },
+      "exclusion_reason": null,
+      "family": "hs",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "30705d4132c61f3321f65dfb908c5455cf2adac2e253a608229f22d75022a7b5",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 14
+        }
+      },
+      "circuit_id": "edc_14q",
+      "circuit_spec": {
+        "n_qubits": 14,
+        "name": "edc_14q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "z",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 14,
+          "name": "edc"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 14,
+        "gate_count": 15,
+        "gate_counts": {
+          "cx": 13,
+          "h": 1,
+          "z": 1
+        },
+        "interaction_graph": {
+          "density": 0.14285714285714285,
+          "edge_count": 13,
+          "max_degree": 2
+        },
+        "n_qubits": 14,
+        "one_qubit_gate_count": 2,
+        "two_qubit_gate_count": 13
+      },
+      "exclusion_reason": null,
+      "family": "edc",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "cdef6427f6cbfac18f30500291f0f94cf9affc57faf8762a758fe72ef95296f0",
+      "split": "training"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 16
+        }
+      },
+      "circuit_id": "ghz_chain_16q",
+      "circuit_spec": {
+        "n_qubits": 16,
+        "name": "ghz_16q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              14
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              15
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 16,
+          "name": "ghz_chain"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 16,
+        "gate_count": 16,
+        "gate_counts": {
+          "cx": 15,
+          "h": 1
+        },
+        "interaction_graph": {
+          "density": 0.125,
+          "edge_count": 15,
+          "max_degree": 2
+        },
+        "n_qubits": 16,
+        "one_qubit_gate_count": 1,
+        "two_qubit_gate_count": 15
+      },
+      "exclusion_reason": null,
+      "family": "ghz_chain",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "1b67d188713f815d8ca3e546edab769d66c6a9a2d42bd2d436494e97f11a2cd1",
+      "split": "validation"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 14
+        }
+      },
+      "circuit_id": "ghz_chain_14q",
+      "circuit_spec": {
+        "n_qubits": 14,
+        "name": "ghz_14q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              2
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              3
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              4
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              5
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              6
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              7
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              8
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              9
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              10
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              11
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              12
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              13
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 14,
+          "name": "ghz_chain"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 14,
+        "gate_count": 14,
+        "gate_counts": {
+          "cx": 13,
+          "h": 1
+        },
+        "interaction_graph": {
+          "density": 0.14285714285714285,
+          "edge_count": 13,
+          "max_degree": 2
+        },
+        "n_qubits": 14,
+        "one_qubit_gate_count": 1,
+        "two_qubit_gate_count": 13
+      },
+      "exclusion_reason": null,
+      "family": "ghz_chain",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "5daa2b17e79756d8e6d6207808aee1fa5e474119e79e13b184915b7a4e5ae9e9",
+      "split": "test"
+    },
+    {
+      "candidate_source": "generalization_v1",
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "xor",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "xor_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "xor_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              1,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              2,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              3,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              4,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              5,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              6,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              7,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              8,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              9,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              10,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              11,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              12,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              13,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              14,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              15,
+              17
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              16,
+              17
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "xor"
+        }
+      },
+      "classification": "heuristic_eligible",
+      "definition_source": "workload_config",
+      "descriptors": {
+        "circuit_depth": 18,
+        "gate_count": 18,
+        "gate_counts": {
+          "cx": 17,
+          "h": 1
+        },
+        "interaction_graph": {
+          "density": 0.1111111111111111,
+          "edge_count": 17,
+          "max_degree": 17
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 1,
+        "two_qubit_gate_count": 17
+      },
+      "exclusion_reason": null,
+      "family": "xor",
+      "historical_physical_status": "unobserved_for_path_selection",
+      "operations_sha256": "139f7009f1ddc7ad08a3074a8ef348300b393cdcf0d886ccdbb5d4bd80ab621d",
+      "split": "test"
+    },
+    {
+      "candidate_source": null,
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "bell_2q",
+        "parameters": {}
+      },
+      "circuit_id": "bell_2q",
+      "circuit_spec": {
+        "n_qubits": 2,
+        "name": "bell_2q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "cx",
+            "params": [],
+            "wires": [
+              0,
+              1
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "name": "bell_2q"
+        }
+      },
+      "classification": "correctness_only",
+      "definition_source": "correctness_only_builtin",
+      "descriptors": {
+        "circuit_depth": 2,
+        "gate_count": 2,
+        "gate_counts": {
+          "cx": 1,
+          "h": 1
+        },
+        "interaction_graph": {
+          "density": 1.0,
+          "edge_count": 1,
+          "max_degree": 1
+        },
+        "n_qubits": 2,
+        "one_qubit_gate_count": 1,
+        "two_qubit_gate_count": 1
+      },
+      "exclusion_reason": "path_space_too_trivial_for_selection",
+      "family": "bell",
+      "historical_physical_status": null,
+      "operations_sha256": "d99716cd9c7df2cffb0d8d701fa6b75763a6b7622cd990693e8aebf7a982907f",
+      "split": "none"
+    },
+    {
+      "candidate_source": null,
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "qrng",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "qrng_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "qrng_18q",
+        "operations": [
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "qrng"
+        }
+      },
+      "classification": "correctness_only",
+      "definition_source": "correctness_only_builtin",
+      "descriptors": {
+        "circuit_depth": 1,
+        "gate_count": 18,
+        "gate_counts": {
+          "h": 18
+        },
+        "interaction_graph": {
+          "density": 0.0,
+          "edge_count": 0,
+          "max_degree": 0
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 18,
+        "two_qubit_gate_count": 0
+      },
+      "exclusion_reason": "product_state_path_space_not_representative",
+      "family": "qrng",
+      "historical_physical_status": null,
+      "operations_sha256": "bbeb515e67e099854610e97ac70063d4a004ffcc98834e46e32e643e7112f22c",
+      "split": "none"
+    },
+    {
+      "candidate_source": null,
+      "circuit_definition": {
+        "kind": "builtin",
+        "name": "bb84",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "bb84_18q",
+      "circuit_spec": {
+        "n_qubits": 18,
+        "name": "bb84_18q",
+        "operations": [
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              0
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              1
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              2
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              3
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              4
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              5
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              6
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              7
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              8
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              9
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              10
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              11
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              12
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              13
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              14
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              15
+            ]
+          },
+          {
+            "gate": "x",
+            "params": [],
+            "wires": [
+              16
+            ]
+          },
+          {
+            "gate": "h",
+            "params": [],
+            "wires": [
+              17
+            ]
+          }
+        ],
+        "source": {
+          "kind": "builtin",
+          "n_qubits": 18,
+          "name": "bb84"
+        }
+      },
+      "classification": "correctness_only",
+      "definition_source": "correctness_only_builtin",
+      "descriptors": {
+        "circuit_depth": 2,
+        "gate_count": 24,
+        "gate_counts": {
+          "h": 15,
+          "x": 9
+        },
+        "interaction_graph": {
+          "density": 0.0,
+          "edge_count": 0,
+          "max_degree": 0
+        },
+        "n_qubits": 18,
+        "one_qubit_gate_count": 24,
+        "two_qubit_gate_count": 0
+      },
+      "exclusion_reason": "product_state_path_space_not_representative",
+      "family": "bb84",
+      "historical_physical_status": null,
+      "operations_sha256": "b34f946c2d12948ca8d16e6d72ae18041891bea6af013d3d7afc193ad8fd75de",
+      "split": "none"
+    }
+  ]
+}

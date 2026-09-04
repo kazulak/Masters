@@ -1,0 +1,116 @@
+{
+  "all_passed": true,
+  "atol": 1e-05,
+  "candidate_set_sha256": "5269bfea2a1777b041e10edf9618ba613d44021ce89b3ff0d95093a81c095b65",
+  "candidates": [
+    {
+      "candidate_path_id": "184da471cc76cd1d48b06de75f26181a64ce963b01bacc55eacda830c14c49f8",
+      "circuit_id": "edc_16q",
+      "error": null,
+      "errors": {
+        "max_absolute_error": 1.2101617041793133e-08,
+        "norm_drift": 1.7114270889351246e-08,
+        "relative_l2_error": 1.7114270947149228e-08
+      },
+      "logical_plan_id": "a32832056086b3e70f67b03dac8ae1b53ddd56b42ac5669b5a1406daf2e8c9ff",
+      "max_absolute_error": 1.2101617041793133e-08,
+      "norm_drift": 1.7114270889351246e-08,
+      "output_sha256": "6399ceb70e8ef844e6263d37c0b67c612f463b4c2688ba77e966ac5b5f8c39e8",
+      "passed": true,
+      "reference_output_sha256": "94a21c134c9baadef894866d1e1d184c676d6f2ea6e3bf702c62a0079aa55c87",
+      "relative_l2_error": 1.7114270947149228e-08,
+      "roles": [
+        "minimum_flops"
+      ],
+      "split": "validation",
+      "topology_ids": [
+        "4dpu_t8"
+      ]
+    },
+    {
+      "candidate_path_id": "5b2de560595ee5ccd20c18c1d7e911104f48e90be704e247d836ea548977d70b",
+      "circuit_id": "edc_16q",
+      "error": null,
+      "errors": {
+        "max_absolute_error": 1.2101617041793133e-08,
+        "norm_drift": 1.7114270889351246e-08,
+        "relative_l2_error": 1.7114270947149228e-08
+      },
+      "logical_plan_id": "6da35cbc5d525c1aeecec9686241f8424fef46cf9de83c9b5e0c3c5d22657e02",
+      "max_absolute_error": 1.2101617041793133e-08,
+      "norm_drift": 1.7114270889351246e-08,
+      "output_sha256": "6399ceb70e8ef844e6263d37c0b67c612f463b4c2688ba77e966ac5b5f8c39e8",
+      "passed": true,
+      "reference_output_sha256": "94a21c134c9baadef894866d1e1d184c676d6f2ea6e3bf702c62a0079aa55c87",
+      "relative_l2_error": 1.7114270947149228e-08,
+      "roles": [
+        "greedy"
+      ],
+      "split": "validation",
+      "topology_ids": [
+        "1dpu_t8",
+        "4dpu_t8"
+      ]
+    },
+    {
+      "candidate_path_id": "741df3dd13fd2a00c006fed035ec5d341ca333f00f0db5c6627be618a6652a29",
+      "circuit_id": "edc_16q",
+      "error": null,
+      "errors": {
+        "max_absolute_error": 1.2101617041793133e-08,
+        "norm_drift": 1.7114270889351246e-08,
+        "relative_l2_error": 1.7114270947149228e-08
+      },
+      "logical_plan_id": "10fed67e60c5d993a9a3734f22f1a2d0aed0354d57f0d7080985cbd17ace82dd",
+      "max_absolute_error": 1.2101617041793133e-08,
+      "norm_drift": 1.7114270889351246e-08,
+      "output_sha256": "6399ceb70e8ef844e6263d37c0b67c612f463b4c2688ba77e966ac5b5f8c39e8",
+      "passed": true,
+      "reference_output_sha256": "94a21c134c9baadef894866d1e1d184c676d6f2ea6e3bf702c62a0079aa55c87",
+      "relative_l2_error": 1.7114270947149228e-08,
+      "roles": [
+        "minimum_flops",
+        "upmem_selected"
+      ],
+      "split": "validation",
+      "topology_ids": [
+        "1dpu_t8"
+      ]
+    },
+    {
+      "candidate_path_id": "e0b81bb8ba585d4d2d4e82612fa63a0455a71ca2c12524a7caf991f1794d5ceb",
+      "circuit_id": "edc_16q",
+      "error": null,
+      "errors": {
+        "max_absolute_error": 1.2101617041793133e-08,
+        "norm_drift": 1.7114270889351246e-08,
+        "relative_l2_error": 1.7114270947149228e-08
+      },
+      "logical_plan_id": "cff9ef176252f61f4f86ac9fe57009c6d743eb7157797d0ebc07d8315f7b438f",
+      "max_absolute_error": 1.2101617041793133e-08,
+      "norm_drift": 1.7114270889351246e-08,
+      "output_sha256": "6399ceb70e8ef844e6263d37c0b67c612f463b4c2688ba77e966ac5b5f8c39e8",
+      "passed": true,
+      "reference_output_sha256": "94a21c134c9baadef894866d1e1d184c676d6f2ea6e3bf702c62a0079aa55c87",
+      "relative_l2_error": 1.7114270947149228e-08,
+      "roles": [
+        "upmem_selected"
+      ],
+      "split": "validation",
+      "topology_ids": [
+        "4dpu_t8"
+      ]
+    }
+  ],
+  "numeric_policy": "split_complex_float32_v1",
+  "qualified_candidate_count": 4,
+  "reference_numeric_policy": "complex128",
+  "rtol": 1e-05,
+  "schema_version": "upmem_path_frozen_selection_cpu_qualification_v1",
+  "selected_cell_count": 2,
+  "selection_contract_passed": true,
+  "selection_schema_version": "upmem_path_frozen_selection_v1",
+  "selection_sha256": "f4e94e8c4c1e3cc7149079b4e21e81a532f331123fe0c4bb8bcdf3bbece110b2",
+  "source_sha": "68bde98e0696765cd5def2f8b41b686c6a2ffcb0",
+  "split": "validation"
+}

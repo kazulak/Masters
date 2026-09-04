@@ -1,0 +1,21 @@
+{
+  "audit_scope": [
+    "candidate and split freezing",
+    "training-only measured-candidate fitting",
+    "geometric-mean and worst-cell objective ordering",
+    "held-out timing independence and hash binding",
+    "result and claim consistency"
+  ],
+  "audited_source_sha": "fcfb9d22688c71234e78b8f5db4be72dad37e6f2",
+  "classification_counts": {
+    "A_scientific_or_correctness_blocker": 0,
+    "B_calibration_leakage": 0,
+    "C_physical_integration_blocker": 0,
+    "D_meaningful_simplification": 0,
+    "E_optional_polish": 0
+  },
+  "conclusion": "pass",
+  "independent": true,
+  "read_only": true,
+  "summary": "The fit accepts training rows only, requires exact measured-candidate coverage, ranks geometric-mean speedup before minimum-cell speedup, and keeps validation and test selection timing-independent and hash-bound. The milestone document accurately reports positive validation and a negative held-out BV18 result without a universal-speedup claim."
+}

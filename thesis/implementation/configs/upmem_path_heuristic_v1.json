@@ -1,0 +1,128 @@
+{
+  "calibration": {
+    "candidates_per_cell_maximum": 6,
+    "measurement_blocks": 3,
+    "warmup_blocks": 1
+  },
+  "candidate_generation": {
+    "physical_lowering_timeout_s": 60.0,
+    "cotengra_method": "greedy",
+    "cotengra_objective": "flops",
+    "master_seed": 20260902,
+    "maximum_planned_work_units": 400,
+    "maximum_semantic_identity_expansion_units": 1000000,
+    "one_trial_searches": 64,
+    "opt_einsum_reference": "greedy"
+  },
+  "circuits": [
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "quantization_stress",
+        "parameters": {
+          "n_qubits": 18,
+          "repeat_layers": 2
+        }
+      },
+      "circuit_id": "quantization_stress_18q_l2",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "hs",
+        "parameters": {
+          "depth": 1,
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "hs_18q_d1",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "ghz_chain",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "ghz_chain_18q",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "edc_18q",
+      "split": "training"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "edc",
+        "parameters": {
+          "n_qubits": 16
+        }
+      },
+      "circuit_id": "edc_16q",
+      "split": "validation"
+    },
+    {
+      "circuit": {
+        "kind": "builtin",
+        "name": "bv",
+        "parameters": {
+          "n_qubits": 18
+        }
+      },
+      "circuit_id": "bv_18q",
+      "split": "test"
+    }
+  ],
+  "host_memory_admission_bytes": 536870912,
+  "numeric_policy": "split_complex_float32_v1",
+  "physical_environment": {
+    "affinity": [
+      0
+    ],
+    "host": "safari-baguette1",
+    "rank_path": "/dev/dpu_rank1",
+    "transport": "packed_operation_v1"
+  },
+  "schema_version": "upmem_path_heuristic_preregistration_v1",
+  "score": {
+    "correlation_rejection_threshold": 0.98,
+    "normalization_epsilon_natural_units": 1,
+    "semantic_id": "upmem_slr_cost_v1",
+    "weight_search_samples": 100000,
+    "weight_search_seed": 20260903
+  },
+  "topologies": [
+    {
+      "dpu_count": 1,
+      "rank_count": 1,
+      "topology_id": "1dpu_t8",
+      "tasklets_per_dpu": 8
+    },
+    {
+      "dpu_count": 4,
+      "rank_count": 1,
+      "topology_id": "4dpu_t8",
+      "tasklets_per_dpu": 8
+    }
+  ],
+  "validation_and_test": {
+    "measurement_blocks": 5,
+    "paths": [
+      "greedy",
+      "minimum_flops",
+      "upmem_selected"
+    ],
+    "warmup_blocks": 1
+  }
+}

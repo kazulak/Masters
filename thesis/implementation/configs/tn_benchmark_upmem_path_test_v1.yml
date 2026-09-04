@@ -1,0 +1,84 @@
+schema_version: tn_benchmark_v3
+experiment_id: upmem-path-heuristic-evaluation-test-v1
+defaults:
+  timeout_s: 120.0
+collection:
+  claim_policy: diagnostic_v1
+  base_seed: 20260911
+  warmup_blocks: 1
+  measurement_blocks: 5
+  session_policy: fresh_session_per_attempt_v1
+  block_cooldown_s: 0.0
+  machine_policy:
+    machine_exclusivity:
+      mode: observed_v1
+    cpu_governor:
+      mode: observed_v1
+    affinity:
+      mode: exact_required_v1
+      expected_cpus:
+      - 0
+    numa_policy:
+      mode: observed_v1
+    background_load:
+      mode: observed_v1
+      max_load1_per_online_cpu: null
+cases:
+  bv_18q:
+    circuit:
+      kind: builtin
+      name: bv
+      parameters:
+        n_qubits: 18
+      path: null
+plans:
+  path_0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990:
+    planner:
+      engine: cotengra
+      mode: greedy
+      max_repeats: 1
+      seed: 20260933
+    slicing: null
+  path_1e1c2d68f9fdc734674877fae7a19373cdf42a2429093a07c779331b665fe646:
+    planner:
+      engine: opt_einsum
+      mode: greedy
+    slicing: null
+routes:
+  1dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 1
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/path_heuristic_physical_1dpu_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths:
+      - /dev/dpu_rank1
+  4dpu_t8:
+    executor: upmem_physical
+    numeric_policy: split_complex_float32_v1
+    options:
+      dpu_count: 4
+      rank_count: 1
+      tasklets_per_dpu: 8
+      session_root: ../runs/upmem_sessions/path_heuristic_physical_4dpu_t8
+      host_binary: ../native/upmem/runtime/bin/host_upmem_execution_plan_v4_t8
+      dpu_binary: ../native/upmem/runtime/bin/dpu_gemm_tile_v4_t8
+      initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
+      rank_paths:
+      - /dev/dpu_rank1
+matrix:
+- case_id: bv_18q
+  plan_id: path_0237c30aa5ad972e5d11791a887617024a5a7d06451372f08b6202c089984990
+  route_ids:
+  - 1dpu_t8
+  - 4dpu_t8
+- case_id: bv_18q
+  plan_id: path_1e1c2d68f9fdc734674877fae7a19373cdf42a2429093a07c779331b665fe646
+  route_ids:
+  - 1dpu_t8
+  - 4dpu_t8

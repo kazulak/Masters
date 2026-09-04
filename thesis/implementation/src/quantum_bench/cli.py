@@ -56,7 +56,12 @@ from quantum_bench.lowering import (
 )
 from quantum_bench.model import ContractNode, SimulationJob, make_simulation_job
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
-from quantum_bench.results import ExecutionSample, JsonValue, UnsupportedExecution
+from quantum_bench.results import (
+    ExecutionFailed,
+    ExecutionSample,
+    JsonValue,
+    UnsupportedExecution,
+)
 from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemResources,
@@ -930,6 +935,55 @@ def _complete_collection_block(
         _collection_cooldown(config)
 
 
+def _raise_physical_collection_failure(
+    rows: tuple[Mapping[str, JsonValue], ...],
+    session: Mapping[str, JsonValue],
+) -> None:
+    """Propagate a persisted physical failure after session cleanup."""
+
+    failed_sample = next(
+        (row for row in rows if row["status"] != "success"), None
+    )
+    if failed_sample is not None:
+        failure = failed_sample["failure"]
+        if not isinstance(failure, Mapping):
+            raise ValueError("physical UPMEM sample failure is missing details")
+        stage = failure.get("stage")
+        reason = failure.get("reason")
+        if not isinstance(stage, str) or not isinstance(reason, str):
+            raise ValueError("physical UPMEM sample failure has invalid details")
+        if failed_sample["status"] == "unsupported":
+            capability = failure.get("capability")
+            if not isinstance(capability, str):
+                raise ValueError(
+                    "physical UPMEM unsupported sample lacks a capability"
+                )
+            raise UnsupportedExecution(stage, reason, capability)
+        backend_facts = failed_sample.get("backend_facts", {})
+        raise ExecutionFailed(
+            stage,
+            reason,
+            backend_facts if isinstance(backend_facts, Mapping) else {},
+        )
+
+    if session["status"] != "success":
+        failure = session["failure"]
+        if not isinstance(failure, Mapping):
+            raise ValueError("physical UPMEM session failure is missing details")
+        stage = failure.get("stage")
+        reason = failure.get("reason")
+        if not isinstance(stage, str) or not isinstance(reason, str):
+            raise ValueError("physical UPMEM session failure has invalid details")
+        terminal_backend_facts = session.get("terminal_backend_facts", {})
+        raise ExecutionFailed(
+            stage,
+            reason,
+            terminal_backend_facts
+            if isinstance(terminal_backend_facts, Mapping)
+            else {},
+        )
+
+
 def _direct_runner(
     route: Mapping[str, object],
     job: SimulationJob,
@@ -1201,7 +1255,7 @@ def _run_config(
                         )
                     )
                 )
-                run_session_samples(
+                rows, session = run_session_samples(
                     run_id=run_id,
                     experiment_id=config["experiment_id"],
                     case_id=case_id,
@@ -1218,6 +1272,8 @@ def _run_config(
                     validate=validate,
                     attempts=(attempt,),
                 )
+                if route["executor"] == "upmem_physical":
+                    _raise_physical_collection_failure(rows, session)
                 _complete_collection_block(config, scheduled, schedule_index)
                 continue
 
