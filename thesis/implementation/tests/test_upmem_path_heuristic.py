@@ -9,6 +9,9 @@ import pytest
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
     FEATURE_NAMES,
+    GROUPED_FEATURE_MODEL,
+    GROUP_FEATURE_NAMES,
+    SIX_TERM_FEATURE_MODEL,
     canonicalize_path,
     ConventionalPathFeatures,
     NormalizedFeatureVector,
@@ -19,6 +22,7 @@ from quantum_bench.upmem.path_heuristic import (
     WeightVector,
     choose_feature_model,
     equal_model_weights,
+    explicit_feature_model,
     extract_conventional_features,
     extract_plan_features,
     explain_score,
@@ -106,6 +110,68 @@ def test_feature_vectors_and_weights_are_immutable_simplex_records() -> None:
         inactive=("B_mram_wram", "I_dpu", "N_sync", "E_num", "P_wram"),
     )
     assert inactive.as_tuple() == pytest.approx((1.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+
+
+def test_explicit_feature_models_are_fixed_raw_projections() -> None:
+    six_term = explicit_feature_model("six_term")
+    grouped = explicit_feature_model("grouped")
+    assert six_term is SIX_TERM_FEATURE_MODEL
+    assert grouped is GROUPED_FEATURE_MODEL
+    assert six_term.mode == "six_term"
+    assert six_term.active_features == FEATURE_NAMES
+    assert grouped.mode == "grouped"
+    assert grouped.active_features == GROUP_FEATURE_NAMES
+
+    raw = _raw(2.0, mram=3.0, work=5.0, sync=7.0, numeric=11.0, wram=13.0)
+    assert six_term.project_raw(raw) == raw.as_tuple()
+    assert grouped.project_raw(raw) == pytest.approx((5.0, 5.0, 7.0))
+
+    normalized = NormalizedFeatureVector((1.0, 2.0, 3.0, 4.0, 5.0, 6.0))
+    assert grouped.project(normalized) == pytest.approx((1.5, 3.0, 4.0))
+    grouped_weights = equal_model_weights(grouped)
+    assert grouped_weights.as_tuple() == pytest.approx(
+        (1.0 / 6.0, 1.0 / 6.0, 1.0 / 3.0, 1.0 / 3.0, 0.0, 0.0)
+    )
+    assert sum(grouped_weights.as_tuple()) == pytest.approx(1.0)
+
+
+def test_explicit_model_forms_can_select_different_paths() -> None:
+    greedy = _candidate(
+        "greedy-explicit",
+        _raw(100.0, mram=100.0),
+        greedy=True,
+    )
+    host_favoring = _candidate(
+        "host-favoring",
+        _raw(10.0, mram=190.0),
+    )
+    balanced_movement = _candidate(
+        "balanced-movement",
+        _raw(80.0, mram=20.0),
+    )
+    candidates = (greedy, host_favoring, balanced_movement)
+
+    six_term_weights = WeightVector.from_values((1.0, 0.0, 0.0, 0.0, 0.0, 0.0))
+    grouped_weights = WeightVector.from_values((0.5, 0.5, 0.0, 0.0, 0.0, 0.0))
+
+    assert select_best_candidate(
+        candidates,
+        "topology",
+        six_term_weights,
+        model=SIX_TERM_FEATURE_MODEL,
+    ).path_id == host_favoring.path_id
+    assert select_best_candidate(
+        candidates,
+        "topology",
+        grouped_weights,
+        model=GROUPED_FEATURE_MODEL,
+    ).path_id == balanced_movement.path_id
+    assert select_best_candidate(
+        candidates,
+        "topology",
+        grouped_weights,
+        model=GROUPED_FEATURE_MODEL,
+    ).path_id == balanced_movement.path_id
 
 
 def test_greedy_relative_log_normalization_uses_unit_epsilons() -> None:

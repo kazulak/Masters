@@ -661,6 +661,21 @@ class FeatureModelDecision:
         }
         return tuple(grouped[name] for name in self.active_features)
 
+    def project_raw(self, raw: RawFeatureVector) -> tuple[float, ...]:
+        """Project natural-unit features without changing their raw sums."""
+
+        if not isinstance(raw, RawFeatureVector):
+            raise TypeError("project_raw requires a RawFeatureVector")
+        values = raw.as_tuple()
+        if self.mode == "six_term":
+            return tuple(values[FEATURE_NAMES.index(name)] for name in self.active_features)
+        grouped = {
+            "movement": raw.host_dpu_bytes + raw.mram_wram_bytes,
+            "compute": raw.dpu_work,
+            "coordination": raw.sync_events,
+        }
+        return tuple(grouped[name] for name in self.active_features)
+
     def score(
         self,
         normalized: NormalizedFeatureVector,
@@ -678,6 +693,43 @@ class FeatureModelDecision:
             + normalized.values[2] * weights.dpu_work
             + normalized.values[3] * weights.sync
         )
+
+
+SIX_TERM_FEATURE_MODEL = FeatureModelDecision(
+    mode="six_term",
+    active_features=FEATURE_NAMES,
+    zero_range_features=(),
+    correlated_pairs=(),
+    matrix_rank=len(FEATURE_NAMES),
+    rank_tolerance=0.0,
+    reason="explicit six-term model",
+)
+GROUPED_FEATURE_MODEL = FeatureModelDecision(
+    mode="grouped",
+    active_features=GROUP_FEATURE_NAMES,
+    zero_range_features=(),
+    correlated_pairs=(),
+    matrix_rank=len(GROUP_FEATURE_NAMES),
+    rank_tolerance=0.0,
+    reason="explicit grouped movement/compute/coordination model",
+)
+
+
+def explicit_feature_model(
+    mode: Literal["six_term", "grouped"],
+) -> FeatureModelDecision:
+    """Return a deterministic explicit six-term or grouped model.
+
+    The current float32 policy has no independently identifiable ``E_num``
+    term, so the grouped model has exactly three terms.  ``P_wram`` remains a
+    feasibility constraint rather than a scored term.
+    """
+
+    if mode == "six_term":
+        return SIX_TERM_FEATURE_MODEL
+    if mode != "grouped":
+        raise ValueError(f"unsupported explicit feature model mode: {mode!r}")
+    return GROUPED_FEATURE_MODEL
 
 
 def normalize_features(
@@ -824,15 +876,7 @@ def score_normalized(
     *,
     model: FeatureModelDecision | None = None,
 ) -> float:
-    return (model or FeatureModelDecision(
-        mode="six_term",
-        active_features=FEATURE_NAMES,
-        zero_range_features=(),
-        correlated_pairs=(),
-        matrix_rank=len(FEATURE_NAMES),
-        rank_tolerance=0.0,
-        reason="explicit six-term score",
-    )).score(normalized, weights)
+    return (model or SIX_TERM_FEATURE_MODEL).score(normalized, weights)
 
 
 def score_features(
@@ -1344,6 +1388,8 @@ __all__ = [
     "COST_MODEL_ID",
     "FEATURE_NAMES",
     "GROUP_FEATURE_NAMES",
+    "SIX_TERM_FEATURE_MODEL",
+    "GROUPED_FEATURE_MODEL",
     "FEATURE_DEPENDENCY_METADATA",
     "FeatureDependency",
     "RawFeatureVector",
@@ -1365,6 +1411,7 @@ __all__ = [
     "path_id",
     "normalize_features",
     "choose_feature_model",
+    "explicit_feature_model",
     "equal_model_weights",
     "score_normalized",
     "score_features",
