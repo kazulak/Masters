@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+from copy import deepcopy
 import hashlib
 import importlib.util
 import json
@@ -279,7 +280,9 @@ def _fixture(tmp_path: Path) -> tuple[Path, Path, Path, Path, Path]:
                             ),
                             "logical_plan_id": candidate_id,
                             "physical_plan_id": candidate_id,
-                            "output_sha256": hashlib.sha256(circuit_id.encode()).hexdigest(),
+                            "output_sha256": hashlib.sha256(
+                                f"{circuit_id}:{candidate_id}".encode()
+                            ).hexdigest(),
                             "request_transport": "packed_operation_v1",
                             "requested_dpus": 1,
                             "allocated_dpus": 1,
@@ -358,6 +361,9 @@ def test_analysis_is_fold_isolated_and_freezes_grouped_profile(tmp_path: Path) -
     )
     assert profile["profile_id"] == "upmem_thesis_workload_float32_pretest_v1"
     assert profile["final_test_timing_used"] is False
+    workload_sha = analysis._object_sha256(json.loads(paths[4].read_text()))
+    assert profile["workload_manifest_sha256"] == workload_sha
+    assert result["workload_manifest_sha256"] == workload_sha
     with (output / "oracle_headroom.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     assert all(float(row["oracle_regret"]) == pytest.approx(1.0) for row in rows)
@@ -463,6 +469,8 @@ def test_analysis_accepts_noncanonical_json_serialization(tmp_path: Path) -> Non
     paths = _fixture(tmp_path)
     candidate = json.loads(paths[0].read_text(encoding="utf-8"))
     paths[0].write_text(json.dumps(candidate), encoding="ascii")
+    workload = json.loads(paths[4].read_text(encoding="utf-8"))
+    paths[4].write_text(json.dumps(workload, indent=2), encoding="ascii")
     result = analysis.analyze(
         *paths,
         tmp_path / "output",
@@ -472,6 +480,88 @@ def test_analysis_accepts_noncanonical_json_serialization(tmp_path: Path) -> Non
         bootstrap_seed=2,
     )
     assert result["development_cell_count"] == 2
+    assert result["workload_manifest_sha256"] == analysis._object_sha256(workload)
+
+
+def test_input_validation_accepts_path_specific_output_hashes(tmp_path: Path) -> None:
+    paths = _fixture(tmp_path)
+    analysis._load_inputs(*paths)
+
+
+def test_input_validation_accepts_topology_specific_output_hashes(tmp_path: Path) -> None:
+    paths = _fixture(tmp_path)
+    dataset, calibration, summary = [
+        json.loads(paths[index].read_text()) for index in (0, 1, 3)
+    ]
+    physical_ids = {}
+    for circuit in dataset["circuits"]:
+        for candidate in circuit["candidates"]:
+            topology = deepcopy(candidate["topologies"][0])
+            topology["topology_id"] = "4dpu_t8"
+            topology["topology"]["dpu_count"] = 4
+            physical_id = hashlib.sha256(
+                f"{candidate['candidate_path_id']}:4dpu_t8".encode()
+            ).hexdigest()
+            topology["physical_plan_id"] = physical_id
+            physical_ids[candidate["candidate_path_id"]] = physical_id
+            candidate["topologies"].append(topology)
+    for cell in list(calibration["cells"]):
+        calibration["cells"].append({
+            **cell,
+            "cell_id": f"{cell['circuit_id']}:4dpu_t8",
+            "topology_id": "4dpu_t8",
+        })
+    candidate_sha = analysis._object_sha256(dataset)
+    calibration["candidate_set_sha256"] = candidate_sha
+    calibration_sha = analysis._object_sha256(calibration)
+    summary.update(candidate_set_sha256=candidate_sha, calibration_set_sha256=calibration_sha)
+    for field in ("sample_count", "session_count", "expected_candidate_cell_count", "expected_cell_count"):
+        summary[field] *= 2
+    for index, value in ((0, dataset), (1, calibration), (3, summary)):
+        _write_json(paths[index], value)
+
+    def duplicate_topology(rows) -> None:
+        for row in list(rows):
+            rows.append({
+                **row,
+                "cell_id": f"{row['circuit_id']}:4dpu_t8",
+                "topology_id": "4dpu_t8",
+                "route_id": "4dpu_t8",
+                "requested_dpus": "4",
+                "allocated_dpus": "4",
+                "physical_plan_id": physical_ids[row["candidate_path_id"]],
+                "output_sha256": hashlib.sha256(row["output_sha256"].encode()).hexdigest(),
+            })
+        for row in rows:
+            row.update(candidate_set_sha256=candidate_sha, calibration_set_sha256=calibration_sha)
+
+    _rewrite_runtime(paths[2], duplicate_topology)
+    analysis._load_inputs(*paths)
+
+
+@pytest.mark.parametrize("attempt_type", ["warmup", "measurement"])
+def test_input_validation_rejects_inconsistent_path_repetitions(
+    tmp_path: Path, attempt_type: str
+) -> None:
+    paths = _fixture(tmp_path)
+
+    def corrupt_one_output(rows) -> None:
+        row = next(row for row in rows if row["attempt_type"] == attempt_type)
+        row["output_sha256"] = "0" * 64
+
+    _rewrite_runtime(paths[2], corrupt_one_output)
+    with pytest.raises(ValueError, match="inconsistent outputs for the same physical"):
+        analysis._load_inputs(*paths)
+
+
+@pytest.mark.parametrize("field", ["full_precision_passed", "policy_reference_passed"])
+def test_path_specific_outputs_still_require_numerical_validation(
+    tmp_path: Path, field: str
+) -> None:
+    paths = _fixture(tmp_path)
+    _rewrite_runtime(paths[2], lambda rows: rows[0].__setitem__(field, "false"))
+    with pytest.raises(ValueError, match=f"{field} contract failed"):
+        analysis._load_inputs(*paths)
 
 
 def test_analysis_rejects_dirty_reporting_source(

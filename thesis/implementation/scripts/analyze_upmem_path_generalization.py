@@ -222,7 +222,7 @@ def _load_inputs(
     dict[str, Any],
     dict[str, Any],
     dict[str, Any],
-    dict[str, dict[str, Any]],
+    dict[str, Any],
     dict[str, list[dict[str, Any]]],
 ]:
     dataset = _load(candidate_path)
@@ -477,15 +477,20 @@ def _load_inputs(
         raise ValueError("runtime table is incomplete")
     if len(rows) != int(summary["sample_count"]):
         raise ValueError("runtime table count does not match summary")
-    output_hashes = {
-        (str(row["circuit_id"]), str(row["output_sha256"]))
-        for rows_for_cell in rows_by_cell.values()
-        for row in rows_for_cell
-        if row["attempt_type"] == "measurement"
-    }
-    if len(output_hashes) != len({item[0] for item in output_hashes}):
-        raise ValueError("candidate paths produced inconsistent circuit outputs")
-    return dataset, calibration, summary, workload_entries, rows_by_cell
+    # Different contraction orders can produce different valid float32 bytes.
+    output_hashes: dict[tuple[str, str, str, str], str] = {}
+    for rows_for_cell in rows_by_cell.values():
+        for row in rows_for_cell:
+            configuration = tuple(
+                str(row[field])
+                for field in (
+                    "circuit_id", "candidate_path_id", "topology_id", "physical_plan_id"
+                )
+            )
+            digest = str(row["output_sha256"])
+            if output_hashes.setdefault(configuration, digest) != digest:
+                raise ValueError("inconsistent outputs for the same physical configuration")
+    return dataset, calibration, summary, workload, rows_by_cell
 
 
 def _cells(
@@ -1046,6 +1051,9 @@ def analyze(
         runtime_summary_path,
         workload_path,
     )
+    workload_entries = {
+        str(item["circuit_id"]): item for item in workload["workload"]
+    }
     cells, splits = _cells(dataset, calibration)
     metadata = {}
     family_groups: dict[str, set[str]] = {}
@@ -1055,8 +1063,8 @@ def analyze(
     }
     for cell_id in cells:
         circuit_id = str(calibration_by_id[cell_id]["circuit_id"])
-        family = str(workload[circuit_id]["family"])
-        split = str(workload[circuit_id]["split"])
+        family = str(workload_entries[circuit_id]["family"])
+        split = str(workload_entries[circuit_id]["split"])
         metadata[cell_id] = (circuit_id, family, split)
         family_groups.setdefault(family, set()).add(cell_id)
         instance_groups.setdefault(circuit_id, set()).add(cell_id)
