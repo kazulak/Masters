@@ -289,6 +289,26 @@ def _validate_contract(config: dict[str, Any]) -> None:
         raise ValueError("calibration collection must be one warmup and three measurements")
     if calibration.get("candidates_per_cell_maximum") != 6:
         raise ValueError("calibration candidate maximum must be six")
+    if calibration.get("candidate_roles") != [
+        "greedy",
+        "minimum_flops",
+        "minimum_peak_intermediate",
+        "minimum_writes",
+        "frozen_v1_selected",
+        "feature_diverse",
+    ]:
+        raise ValueError("calibration candidate roles are not frozen")
+    frozen_profile = _required_mapping(
+        calibration.get("frozen_v1_profile"), "calibration.frozen_v1_profile"
+    )
+    if frozen_profile.get("path") != (
+        "thesis_results/upmem_path_heuristic_v1/fit/physical_speedup_fit_v1.json"
+    ):
+        raise ValueError("calibration frozen-v1 profile path is not frozen")
+    if frozen_profile.get("sha256") != (
+        "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a"
+    ):
+        raise ValueError("calibration frozen-v1 profile hash is not frozen")
     final_policy = _required_mapping(config.get("final_test_policy"), "final_test_policy")
     if final_policy.get("timing_may_change_candidates_or_model") is not False:
         raise ValueError("final-test timing must not change candidates or the model")
@@ -500,6 +520,7 @@ def build_manifest(
         "generator_source_sha256": _sha256_file(Path(__file__).resolve()),
         "dependency_versions": _dependency_versions(),
         "contract": {
+            "calibration": _plain(config["calibration"]),
             "numeric_policy": config["numeric_policy"],
             "transport": config["physical_environment"]["transport"],
             "topologies": [dict(item) for item in TOPOLOGIES],

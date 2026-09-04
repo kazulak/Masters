@@ -67,6 +67,17 @@ def test_manifest_is_deterministic_and_freezes_workload_contract(tmp_path: Path)
     assert manifest["contract"]["numeric_policy"] == define.NUMERIC_POLICY
     assert manifest["contract"]["transport"] == define.TRANSPORT
     assert manifest["contract"]["topologies"] == list(define.TOPOLOGIES)
+    assert manifest["contract"]["calibration"]["candidate_roles"] == [
+        "greedy",
+        "minimum_flops",
+        "minimum_peak_intermediate",
+        "minimum_writes",
+        "frozen_v1_selected",
+        "feature_diverse",
+    ]
+    assert manifest["contract"]["calibration"]["frozen_v1_profile"][
+        "sha256"
+    ] == "cc1e3deb6b5a227b4efe9c84e43679d385cb9b65da76e293ad0d074889cb868a"
     assert len(manifest["source_sha"]) == 40
     for field in (
         "config_sha256",
