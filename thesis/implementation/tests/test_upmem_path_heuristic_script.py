@@ -47,6 +47,58 @@ def test_collection_admission_reasons_are_derived_from_existing_facts() -> None:
     ) == ("tasklet_row_sufficiency",)
 
 
+def test_generalization_calibration_includes_frozen_profile_selection() -> None:
+    greedy_id = "a" * 64
+    selected_id = "b" * 64
+    candidates = tuple(
+        script._candidate_from_record(record)
+        for record in (
+            _candidate_record(greedy_id, 100.0, greedy=True),
+            _candidate_record(selected_id, 50.0, greedy=False),
+        )
+    )
+    selected, roles = script._generalization_calibration_candidates(
+        candidates,
+        "1dpu_t8",
+        limit=6,
+        weights=script.WeightVector.from_values(
+            {"B_host_dpu": 1.0}
+        ),
+        model=script.explicit_feature_model("six_term"),
+        greedy_path_id=greedy_id,
+    )
+
+    assert {item.path_id for item in selected} == {greedy_id, selected_id}
+    assert next(
+        item["candidate_path_id"]
+        for item in roles
+        if item["role"] == "frozen_v1_selected"
+    ) == selected_id
+
+
+def test_candidate_pool_hashes_are_per_circuit_and_deterministic() -> None:
+    dataset = {
+        "source_sha": "a" * 40,
+        "workload_manifest_sha256": "b" * 64,
+        "circuits": [
+            {
+                "circuit_id": "fixture",
+                "candidates": [
+                    {"candidate_path_id": "c" * 64},
+                    {"candidate_path_id": "d" * 64},
+                ],
+            }
+        ],
+    }
+
+    first = script._candidate_pool_hashes(dataset)
+    second = script._candidate_pool_hashes(dataset)
+    assert first == second
+    assert first["workload_manifest_sha256"] == "b" * 64
+    assert first["circuits"][0]["candidate_count"] == 2
+    assert len(first["circuits"][0]["candidate_pool_sha256"]) == 64
+
+
 def test_candidate_generation_is_seeded_deduplicated_and_greedy_is_retained(monkeypatch) -> None:
     config = script.load_config()
     config["candidate_generation"]["one_trial_searches"] = 4
@@ -171,13 +223,17 @@ def test_offline_fit_uses_only_training_measurements_and_writes_every_evaluation
     output = tmp_path / "fit"
     result = script.fit(
         candidates_path, calibration_path, runtimes_path, output,
-        samples=4, seed=7,
+        samples=4, seed=7, model_form="grouped",
     )
     assert result.geometric_mean_speedup == 2.0
     profile = json.loads((output / "physical_speedup_fit_v1.json").read_text(encoding="utf-8"))
     assert profile["selected_path_ids"] == {"train:1dpu_t8": candidate}
     assert profile["candidate_generation_source_sha"] == "c" * 40
     assert profile["physical_execution_source_sha"] == "d" * 40
+    assert profile["requested_model_form"] == "grouped"
+    assert profile["fit_splits"] == ["training"]
+    assert profile["calibration_set_sha256"] == script._file_sha256(calibration_path)
+    assert profile["runtime_table_sha256"] == script._file_sha256(runtimes_path)
     with (output / "weight_search_candidates.csv").open(newline="", encoding="utf-8") as stream:
         rows = list(csv.DictReader(stream))
     assert 1 <= len(rows) <= result.evaluated_weight_vectors

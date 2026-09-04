@@ -35,6 +35,7 @@ from quantum_bench.upmem.path_heuristic import (
     WeightVector,
     choose_feature_model,
     equal_model_weights,
+    explicit_feature_model,
     explain_score,
     extract_conventional_features,
     extract_plan_features,
@@ -60,6 +61,14 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_CONFIG = ROOT / "configs" / "upmem_path_heuristic_v1.json"
 NUMERIC_POLICY = "split_complex_float32_v1"
 SCHEMA_VERSION = "upmem_path_candidate_dataset_v1"
+GENERALIZATION_STUDY_ID = "upmem_path_heuristic_generalization_v1"
+GENERALIZATION_WORKLOAD_MANIFEST = (
+    ROOT
+    / "thesis_results"
+    / "upmem_path_heuristic_generalization_v1"
+    / "workload"
+    / "thesis_workload_manifest.json"
+)
 FEATURE_COLUMNS = (
     "circuit_id", "split", "candidate_path_id", "source_kind", "source_seed",
     "is_greedy", "topology_id", "feasible", "infeasibility_reason",
@@ -165,6 +174,129 @@ def _calibration_splits(config: Mapping[str, Any]) -> frozenset[str]:
     if not result or not result <= {"training", "validation"}:
         raise ValueError("calibration splits must be training and/or validation")
     return result
+
+
+def _frozen_calibration_profile(
+    config: Mapping[str, Any],
+) -> tuple[WeightVector, FeatureModelDecision, str] | None:
+    calibration = _mapping(config.get("calibration"), "calibration config")
+    if "frozen_v1_profile" not in calibration:
+        return None
+    profile_spec = _mapping(
+        calibration.get("frozen_v1_profile"),
+        "calibration frozen_v1_profile",
+    )
+    profile_path = Path(str(profile_spec.get("path", "")))
+    if not profile_path.is_absolute():
+        profile_path = ROOT / profile_path
+    expected_sha = _required_sha(
+        profile_spec.get("sha256"), "calibration frozen profile sha256", 64
+    )
+    actual_sha = _file_sha256(profile_path)
+    if actual_sha != expected_sha:
+        raise ValueError("calibration frozen profile checksum mismatch")
+    profile = _mapping(
+        json.loads(profile_path.read_text(encoding="utf-8")),
+        "calibration frozen profile",
+    )
+    if profile.get("score_id") != COST_MODEL_ID:
+        raise ValueError("calibration frozen profile uses a different score")
+    return (
+        WeightVector.from_values(_mapping(profile.get("weights"), "profile weights")),
+        _model_from_profile(dict(profile)),
+        actual_sha,
+    )
+
+
+def _generalization_calibration_candidates(
+    candidates: tuple[PathCandidate, ...],
+    topology_id: str,
+    *,
+    limit: int,
+    weights: WeightVector,
+    model: FeatureModelDecision,
+    greedy_path_id: str,
+) -> tuple[tuple[PathCandidate, ...], tuple[dict[str, str], ...]]:
+    """Select the six preregistered roles without consulting physical timing."""
+
+    feasible = tuple(
+        sorted(
+            (item for item in candidates if item.feasible_for(topology_id)),
+            key=lambda item: item.path_id,
+        )
+    )
+    greedy = next(item for item in feasible if item.path_id == greedy_path_id)
+    normalized = {
+        item.path_id: normalize_features(
+            item.raw_for(topology_id), greedy.raw_for(topology_id)
+        )
+        for item in feasible
+    }
+    frozen_selected = select_best_candidate(
+        feasible,
+        topology_id,
+        weights,
+        model=model,
+        greedy_path_id=greedy.path_id,
+    )
+    farthest = min(
+        feasible,
+        key=lambda item: (
+            -math.sqrt(sum(value * value for value in normalized[item.path_id].values)),
+            item.path_id,
+        ),
+    )
+    role_candidates = (
+        ("greedy", greedy),
+        ("minimum_flops", min(feasible, key=lambda item: (item.conventional.flops, item.path_id))),
+        (
+            "minimum_peak_intermediate",
+            min(
+                feasible,
+                key=lambda item: (
+                    item.conventional.peak_intermediate_elements,
+                    item.path_id,
+                ),
+            ),
+        ),
+        (
+            "minimum_writes",
+            min(
+                feasible,
+                key=lambda item: (
+                    item.conventional.total_intermediate_writes,
+                    item.path_id,
+                ),
+            ),
+        ),
+        ("frozen_v1_selected", frozen_selected),
+        ("feature_diverse", farthest),
+    )
+    selected: list[PathCandidate] = []
+    selected_ids: set[str] = set()
+    roles = []
+    for role, candidate in role_candidates:
+        roles.append({"role": role, "candidate_path_id": candidate.path_id})
+        if candidate.path_id not in selected_ids and len(selected) < limit:
+            selected.append(candidate)
+            selected_ids.add(candidate.path_id)
+    if len(selected) < min(limit, len(feasible)):
+        ordered_diverse = sorted(
+            feasible,
+            key=lambda item: (
+                -math.sqrt(
+                    sum(value * value for value in normalized[item.path_id].values)
+                ),
+                item.path_id,
+            ),
+        )
+        for candidate in ordered_diverse:
+            if candidate.path_id not in selected_ids:
+                selected.append(candidate)
+                selected_ids.add(candidate.path_id)
+            if len(selected) == min(limit, len(feasible)):
+                break
+    return tuple(selected), tuple(roles)
 
 
 def _host_memory_estimate(inputs: dict[str, Any], dag: Any) -> int:
@@ -637,6 +769,7 @@ def build_dataset(
     total_generation_s = 0.0
     total_feature_s = 0.0
     calibration_splits = _calibration_splits(config)
+    calibration_profile = _frozen_calibration_profile(config)
     for circuit_spec in config["circuits"]:
         circuit_id = str(circuit_spec["circuit_id"])
         split = str(circuit_spec["split"])
@@ -708,13 +841,25 @@ def build_dataset(
                     }
                 )
             if split in calibration_splits:
-                selected = select_calibration_candidates(
-                    feasible,
-                    topology_id,
-                    limit=int(config["calibration"]["candidates_per_cell_maximum"]),
-                    model=model,
-                    greedy_path_id=greedy.path_id,
-                )
+                if calibration_profile is None:
+                    selected = select_calibration_candidates(
+                        feasible,
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        model=model,
+                        greedy_path_id=greedy.path_id,
+                    )
+                    roles: tuple[dict[str, str], ...] = ()
+                else:
+                    calibration_weights, calibration_model, _ = calibration_profile
+                    selected, roles = _generalization_calibration_candidates(
+                        tuple(feasible),
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        weights=calibration_weights,
+                        model=calibration_model,
+                        greedy_path_id=greedy.path_id,
+                    )
                 calibration_cells.append(
                     {
                         "cell_id": f"{circuit_id}:{topology_id}",
@@ -722,6 +867,7 @@ def build_dataset(
                         "topology_id": topology_id,
                         "greedy_path_id": greedy.path_id,
                         "feature_model": asdict(model),
+                        "candidate_roles": list(roles),
                         "candidate_path_ids": [candidate.path_id for candidate in selected],
                     }
                 )
@@ -760,6 +906,10 @@ def build_dataset(
         "timing_used_for_selection": False,
         "cells": calibration_cells,
     }
+    if calibration_profile is not None:
+        _, calibration_model, calibration_profile_sha = calibration_profile
+        calibration["selection_profile_sha256"] = calibration_profile_sha
+        calibration["selection_profile_model"] = asdict(calibration_model)
     return dataset, feature_rows, ranking_rows, calibration, {
         "candidate_generation_s": total_generation_s,
         "feature_extraction_s": total_feature_s,
@@ -771,6 +921,46 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], columns: tuple[str, ...])
         writer = csv.DictWriter(stream, fieldnames=columns, lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def _candidate_pool_hashes(dataset: Mapping[str, Any]) -> dict[str, Any]:
+    circuits = []
+    for circuit in dataset["circuits"]:
+        payload = {
+            "circuit_id": circuit["circuit_id"],
+            "candidate_path_ids": [
+                candidate["candidate_path_id"] for candidate in circuit["candidates"]
+            ],
+        }
+        circuits.append(
+            {
+                "circuit_id": circuit["circuit_id"],
+                "candidate_count": len(payload["candidate_path_ids"]),
+                "candidate_pool_sha256": _sha256_bytes(_canonical_bytes(payload)),
+            }
+        )
+    return {
+        "schema_version": "upmem_path_candidate_pool_hashes_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": _sha256_bytes(_canonical_bytes(dict(dataset))),
+        "workload_manifest_sha256": dataset.get("workload_manifest_sha256"),
+        "circuits": circuits,
+    }
+
+
+def _workload_manifest_sha(
+    config: Mapping[str, Any], config_path: Path
+) -> str | None:
+    if config.get("study_id") != GENERALIZATION_STUDY_ID:
+        return None
+    manifest = _mapping(
+        json.loads(GENERALIZATION_WORKLOAD_MANIFEST.read_text(encoding="utf-8")),
+        "generalization workload manifest",
+    )
+    config_sha = _file_sha256(config_path)
+    if manifest.get("config_sha256") != config_sha:
+        raise ValueError("generalization workload manifest does not match preregistration")
+    return _file_sha256(GENERALIZATION_WORKLOAD_MANIFEST)
 
 
 def _mapping(value: object, field: str) -> Mapping[str, Any]:
@@ -1431,10 +1621,16 @@ def generate(
     )
     preregistration_sha = _sha256_bytes(_canonical_bytes(full_config))
     dataset["preregistration_sha256"] = preregistration_sha
+    workload_manifest_sha = _workload_manifest_sha(full_config, config_path)
+    if workload_manifest_sha is not None:
+        dataset["workload_manifest_sha256"] = workload_manifest_sha
     calibration["candidate_set_sha256"] = _sha256_bytes(_canonical_bytes(dataset))
     outputs: dict[str, bytes] = {
         "candidate_paths.json": _canonical_bytes(dataset),
         "calibration_candidate_set.json": _canonical_bytes(calibration),
+        "candidate_pool_hashes.json": _canonical_bytes(
+            _candidate_pool_hashes(dataset)
+        ),
     }
     output_dir.mkdir(parents=True, exist_ok=True)
     for filename, contents in outputs.items():
@@ -1578,6 +1774,7 @@ def merge_shards(
     ranking_rows = []
     calibration_cells = []
     calibration_splits = _calibration_splits(config)
+    calibration_profile = _frozen_calibration_profile(config)
     for circuit in dataset["circuits"]:
         candidates = tuple(_candidate_from_record(item) for item in circuit["candidates"])
         for topology_id in topology_order:
@@ -1613,19 +1810,32 @@ def merge_shards(
                     "feature_model": model.mode,
                 })
             if circuit["split"] in calibration_splits:
-                selected = select_calibration_candidates(
-                    feasible,
-                    topology_id,
-                    limit=int(config["calibration"]["candidates_per_cell_maximum"]),
-                    model=model,
-                    greedy_path_id=greedy.path_id,
-                )
+                if calibration_profile is None:
+                    selected = select_calibration_candidates(
+                        feasible,
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        model=model,
+                        greedy_path_id=greedy.path_id,
+                    )
+                    roles = ()
+                else:
+                    calibration_weights, calibration_model, _ = calibration_profile
+                    selected, roles = _generalization_calibration_candidates(
+                        feasible,
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        weights=calibration_weights,
+                        model=calibration_model,
+                        greedy_path_id=greedy.path_id,
+                    )
                 calibration_cells.append({
                     "cell_id": f"{circuit['circuit_id']}:{topology_id}",
                     "circuit_id": circuit["circuit_id"],
                     "topology_id": topology_id,
                     "greedy_path_id": greedy.path_id,
                     "feature_model": asdict(model),
+                    "candidate_roles": list(roles),
                     "candidate_path_ids": [item.path_id for item in selected],
                 })
     calibration = {
@@ -1635,10 +1845,17 @@ def merge_shards(
         "timing_used_for_selection": False,
         "cells": calibration_cells,
     }
+    if calibration_profile is not None:
+        _, calibration_model, calibration_profile_sha = calibration_profile
+        calibration["selection_profile_sha256"] = calibration_profile_sha
+        calibration["selection_profile_model"] = asdict(calibration_model)
     output_dir.mkdir(parents=True, exist_ok=True)
     (output_dir / "candidate_paths.json").write_bytes(_canonical_bytes(dataset))
     (output_dir / "calibration_candidate_set.json").write_bytes(
         _canonical_bytes(calibration)
+    )
+    (output_dir / "candidate_pool_hashes.json").write_bytes(
+        _canonical_bytes(_candidate_pool_hashes(dataset))
     )
     _write_csv(output_dir / "candidate_features.csv", feature_rows, FEATURE_COLUMNS)
     _write_csv(
@@ -1671,7 +1888,17 @@ def _candidate_from_record(record: dict[str, Any]) -> PathCandidate:
     )
 
 
-def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output_dir: Path, *, samples: int, seed: int) -> WeightFitResult:
+def fit(
+    candidate_path: Path,
+    calibration_path: Path,
+    runtime_path: Path,
+    output_dir: Path,
+    *,
+    samples: int,
+    seed: int,
+    model_form: str = "auto",
+    fit_splits: tuple[str, ...] = ("training",),
+) -> WeightFitResult:
     dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
     candidate_set_sha = _sha256_bytes(_canonical_bytes(dataset))
@@ -1679,6 +1906,15 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         raise ValueError("calibration candidate-set identity does not match dataset")
     if calibration.get("source_sha") != dataset.get("source_sha"):
         raise ValueError("calibration source identity does not match dataset")
+    allowed_fit_splits = {"training", "validation"}
+    if not fit_splits or not set(fit_splits) <= allowed_fit_splits:
+        raise ValueError("fit splits must contain training and/or validation")
+    if model_form not in {"auto", "six_term", "grouped"}:
+        raise ValueError("model form must be auto, six_term, or grouped")
+    circuit_splits = {
+        str(circuit["circuit_id"]): str(circuit.get("split", "training"))
+        for circuit in dataset["circuits"]
+    }
     by_circuit = {
         circuit["circuit_id"]: {
             candidate["candidate_path_id"]: _candidate_from_record(candidate)
@@ -1687,7 +1923,14 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         for circuit in dataset["circuits"]
     }
     cells = []
-    for item in calibration["cells"]:
+    selected_calibration_cells = [
+        item
+        for item in calibration["cells"]
+        if circuit_splits[str(item["circuit_id"])] in fit_splits
+    ]
+    if not selected_calibration_cells:
+        raise ValueError("fit scope contains no calibration cells")
+    for item in selected_calibration_cells:
         candidates = tuple(by_circuit[item["circuit_id"]][path] for path in item["candidate_path_ids"])
         cells.append(
             TrainingCell(
@@ -1713,13 +1956,16 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
             )["topologies"]
             if topology["topology_id"] == item["topology_id"]
         )
-        for item in calibration["cells"]
+        for item in selected_calibration_cells
         for candidate_id in item["candidate_path_ids"]
     }
     with runtime_path.open(newline="", encoding="utf-8") as stream:
         for row in csv.DictReader(stream):
-            if row.get("split") != "training":
-                raise ValueError("calibration runtime table contains a non-training row")
+            row_split = str(row.get("split"))
+            if row_split not in allowed_fit_splits:
+                raise ValueError("calibration runtime table contains an invalid split")
+            if row_split not in fit_splits:
+                continue
             if row.get("attempt_type") not in {"warmup", "measurement"}:
                 raise ValueError("calibration runtime table has an invalid attempt type")
             if row.get("candidate_generation_source_sha") != dataset["source_sha"]:
@@ -1791,8 +2037,10 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         if current is None or result_order(item) > result_order(current):
             representatives[key] = item
 
+    model = None if model_form == "auto" else explicit_feature_model(model_form)
     result = fit_weights(
         tuple(cells), tuple(measurements), seed=seed,
+        model=model,
         random_sample_count=samples, evaluation_callback=record,
     )
     ordered_representatives = sorted(
@@ -1826,8 +2074,12 @@ def fit(candidate_path: Path, calibration_path: Path, runtime_path: Path, output
         "physical_execution_source_sha": physical_execution_source,
         "reporting_tool_source_sha": _source_sha(),
         "candidate_set_sha256": candidate_set_sha,
+        "calibration_set_sha256": _file_sha256(calibration_path),
+        "runtime_table_sha256": _file_sha256(runtime_path),
         "weights": result.weights.as_mapping(),
         "feature_model": asdict(result.model),
+        "requested_model_form": model_form,
+        "fit_splits": list(fit_splits),
         "training_cell_ids": [cell.cell_id for cell in cells],
         "selected_path_ids": dict(result.selected_path_ids),
         "cell_speedups": dict(result.cell_speedups),
@@ -1966,6 +2218,15 @@ def main() -> None:
     fit_parser.add_argument("--output-dir", type=Path, required=True)
     fit_parser.add_argument("--samples", type=int, default=100_000)
     fit_parser.add_argument("--seed", type=int, default=20260903)
+    fit_parser.add_argument(
+        "--model-form", choices=("auto", "six_term", "grouped"), default="auto"
+    )
+    fit_parser.add_argument(
+        "--fit-split",
+        choices=("training", "validation"),
+        action="append",
+        default=[],
+    )
     extract_parser = subparsers.add_parser(
         "extract-calibration", aliases=("extract",)
     )
@@ -2003,7 +2264,11 @@ def main() -> None:
     elif args.command == "fit":
         result = fit(
             args.candidate_paths, args.calibration_set, args.runtime_table,
-            args.output_dir, samples=args.samples, seed=args.seed,
+            args.output_dir,
+            samples=args.samples,
+            seed=args.seed,
+            model_form=args.model_form,
+            fit_splits=tuple(args.fit_split or ("training",)),
         )
         print(json.dumps({"weights": result.weights.as_mapping(), "geometric_mean_speedup": result.geometric_mean_speedup}, sort_keys=True))
     elif args.command in {"extract-calibration", "extract"}:
