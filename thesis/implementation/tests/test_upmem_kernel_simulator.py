@@ -444,7 +444,10 @@ def test_active_wram_panel_target_uses_the_v4_binary() -> None:
 
 
 def test_active_wram_panel_source_uses_global_staging_and_bounded_dma() -> None:
-    source = SOURCE.read_text(encoding="ascii")
+    wrapper = SOURCE.read_text(encoding="ascii")
+    assert '#include "panel_compute.h"' in wrapper
+    assert "panel_compute(V4_MRAM," in wrapper
+    source = (NATIVE / "panel_compute.h").read_text(encoding="ascii")
 
     assert "#define KC EXECUTION_PLAN_V4_WRAM_PANEL_KC" in source
     assert "#define NC EXECUTION_PLAN_V4_WRAM_PANEL_NC" in source

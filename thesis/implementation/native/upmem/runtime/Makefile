@@ -24,9 +24,14 @@ v4: bin/host_upmem_execution_plan_v4_t$(NR_TASKLETS) \
 bin:
 	mkdir -p $@
 
-bin/dpu_gemm_tile_v4_t%: dpu.c protocol.h | bin
+bin/dpu_gemm_tile_v4_t%: dpu.c panel_compute.h protocol.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 DPU binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu.c
+
+# Experimental launch target; not selected by the active v4 host.
+bin/dpu_wave_v5_t%: dpu_wave.c panel_compute.h wave_protocol.h protocol.h | bin
+	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "wave DPU binary requires tasklets in [1,24]" >&2; exit 1; }
+	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu_wave.c
 
 bin/dpu_simplepim_management_init_t%: management_init.c $(SIMPLEPIM_ROOT)/lib/management/SmallTableInit_dpu.c | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "v4 initialization binary requires tasklets in [1,24]" >&2; exit 1; }

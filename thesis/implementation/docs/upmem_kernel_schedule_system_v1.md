@@ -49,7 +49,7 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | --- | --- | --- |
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Not implemented | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P2 kernels | Experimental one-launch four-product DPU target; host wiring and specialization pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Pure scheduler implemented/tested; native execution not wired | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -91,21 +91,21 @@ layouts, bounded simultaneous storage and exact policy preservation.
 
 ### Initial Native Boundary Work
 
-An inactive private v5 control codec and C validation helper are under test in
+An experimental private v5 control codec and C validation helper are under test in
 `wave_protocol.py` and `wave_protocol.h`. Controls are 144 explicitly
 little-endian bytes with operation/launch/tile identity and eight bounded plane
 descriptors; the declared completion layout is 72 bytes. Python and C reject
 unknown selectors, invalid resources, corrupt geometry, reserved fields,
 unaligned/overlapping regions and overflow before MRAM access. The C header also
-passes DPU-compiler syntax checks. This is not yet an executable v5 runtime:
-operation tables, envelope digests, completion handling, kernel dispatch and
-native host integration remain required.
+passes DPU-compiler syntax checks. This is not yet a production v5 runtime:
+operation tables, envelope digests and native host integration remain required.
 
 The 59 focused control tests include Python/C layout, native corruption
 rejection, idle controls, explicit non-contiguous spans, and the existing int8
 component accumulation bound. Kernels must dereference validated spans rather
 than assume canonical offsets. Whole-wave operation tables, payload hashes and
-completion correlation remain integration gates, not claims made by this codec.
+runtime completion correlation remain integration gates, not claims made by the
+standalone codec.
 
 The independent source audit confirmed that fusion needs `2A + 2B + 4C`
 aligned MRAM bytes. A current legal float32 tile `(M,N,K)=(128,256,256)`
@@ -147,8 +147,50 @@ PYTHONPATH=src /home/tom/repos/Masters/thesis/.venv/bin/python \
   scripts/characterize_upmem_frontiers.py --output-dir <new-ignored-run-directory>
 ```
 
-Do not treat the worker's earlier dirty-worktree output as final source-bound
-evidence. The integrated census must be regenerated and checked after commit.
+The clean checkpoint `de783052e6f2b5bf2008da2ba229bbeae44a1b87` regenerated
+all 40 cells: 36 eligible, four excluded, no measured timings. Relative checksums
+pass. Its full pinned suite passed 1,201 tests with zero failures/skips and strict
+SDK requirements, Ruff passed, and exact-head hosted CI `33991586159` succeeded.
+The source-only census reports 164 non-fitting fused tiles across 20 operation
+entries; these retain generic UPMEM geometry. Its local portable archive is
+`runs/kernel-schedule-system-v1/kernel-schedule-census-de78305.tar.gz`, SHA-256
+`7fe44a5d7f4252ac2b0e62bf855087e82fd145c065aeb00218101d83ae2ba41d`.
+Second independent-copy upload is awaiting explicit export approval; do not
+describe this archive as satisfying the two-copy completion gate yet.
+
+### Experimental One-Launch Kernel
+
+`panel_compute.h` contains the accepted real-product panel body, extracted
+without arithmetic or panel-barrier changes. Both `dpu.c` and experimental
+`dpu_wave.c` call this one implementation. The latter dispatches one real product
+or RR, II, RI, IR in one SDK launch and retains four distinct output planes.
+It validates controls before MRAM access and dereferences explicit plane spans.
+Tasklet zero alone updates completion facts; all tasklets follow the same panel
+barriers, including idle tasklets. Idle/invalid controls skip arithmetic.
+
+The test-only native probe always requests `backend=simulator`, loads once and
+can issue repeated launches. It is not a second production host. Tests compare
+individual products byte for byte with four real launches and deterministic
+sequential float32/int32 replay, including odd rows, K panels, inactive tasklets,
+noncontiguous spans, untouched padding, invalid controls and session-local reset.
+No simulator time is performance evidence. Compile qualification covers T1-T24.
+The focused kernel gate passed 29 tests; the control/completion codec gate passed
+87 tests, including native/Python byte-layout checks. Pending prefix progress is
+retained only as diagnostic information. Even a pending record with all four bits
+set cannot satisfy successful terminal correlation.
+
+The new kernel is not selected by public runtime configuration. Operation-table
+identity, input digest/scale binding, completion correlation in the native host,
+and packed transport integration remain mandatory. Host reconstruction must
+retain original lane-major and K-chunk accumulation order when fused outputs
+arrive wave-major. Do not interleave lane reductions simply because products
+arrive together. A hard DPU/SDK fault can still prevent completion retrieval;
+the caller must fail closed and never interpret a missing response as success.
+The independent native review found no arithmetic, barrier or addressing blocker
+in this experimental target. Physical DPU-index ownership is deliberately a host
+gate: the kernel checks range and echoes the supplied index but cannot establish
+the host's enumeration mapping. Production dispatch must call admission with the
+actual selected DPU index and correlate every completion before publishing data.
 
 ## Budget and Preregistration
 
@@ -205,7 +247,8 @@ source identities separate. Never reconstruct missing raw observations.
 
 At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
-Current bounded work is P1 frontier/liveness analysis and the native-boundary
-audit. Next: finish and test P1, freeze opportunity/eligibility facts, then build
-the required protocol/kernel/scheduler prototypes. No final path fitting starts
+Current bounded work is the experimental one-launch kernel and completion codec.
+Next: wire the admitted operation/control/response contract into the existing
+native host, then qualify the geometry specialization and genuine DAG launches.
+The pure scheduler alone is not runtime DAG concurrency. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
