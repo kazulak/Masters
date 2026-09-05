@@ -32,6 +32,7 @@ EXECUTION_TARGET_PHYSICAL = "physical_hardware"
 EXECUTION_TARGET_SIMULATOR = "sdk_simulator"
 REQUEST_TRANSPORT_DIRECTORY = "directory_v1"
 REQUEST_TRANSPORT_PACKED_OPERATION = "packed_operation_v1"
+REQUEST_TRANSPORT_PACKED_WAVE = "packed_wave_v1"
 
 NATIVE_EXECUTION_IDENTITY = {
     "backend_id": "upmem_sdk_hardware_v4_tile_session",
@@ -45,18 +46,29 @@ NATIVE_EXECUTION_IDENTITY = {
 }
 
 
-def native_execution_identity(execution_target: str) -> dict[str, str]:
-    """Return the target-specific identity emitted by the unchanged v4 ABI."""
+def native_execution_identity(
+    execution_target: str,
+    request_transport: str = REQUEST_TRANSPORT_PACKED_OPERATION,
+) -> dict[str, str]:
+    """Return the target and transport identity compiled into the native host."""
 
     if execution_target == EXECUTION_TARGET_PHYSICAL:
-        return dict(NATIVE_EXECUTION_IDENTITY)
-    if execution_target == EXECUTION_TARGET_SIMULATOR:
-        return {
+        identity = dict(NATIVE_EXECUTION_IDENTITY)
+    elif execution_target == EXECUTION_TARGET_SIMULATOR:
+        identity = {
             **NATIVE_EXECUTION_IDENTITY,
             "backend_id": "upmem_sdk_simulator_v4_tile_session",
             "execution_class": "sdk_simulator_v4_output_tile",
         }
-    raise ValueError(f"unsupported v4 execution target: {execution_target!r}")
+    else:
+        raise ValueError(f"unsupported v4 execution target: {execution_target!r}")
+    if request_transport == REQUEST_TRANSPORT_PACKED_WAVE:
+        identity.update(profile="prepared_wave_v1", abi="wave_control_v5",
+                        session_protocol="prepared_wave_session_v1",
+                        kernel_identity="dpu_panel_dispatch_v5_v1")
+    elif request_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
+        raise ValueError(f"unsupported native request transport: {request_transport!r}")
+    return identity
 
 
 MAX_DPUS = 64
@@ -247,8 +259,10 @@ class V4Profile:
             EXECUTION_TARGET_SIMULATOR,
         }:
             raise ValueError("unsupported v4 execution_target")
-        if self.request_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
-            raise ValueError("v4 sessions require packed_operation_v1")
+        if self.request_transport not in {
+            REQUEST_TRANSPORT_PACKED_OPERATION, REQUEST_TRANSPORT_PACKED_WAVE
+        }:
+            raise ValueError("native sessions require a supported packed transport")
         if self.rank_path is not None and not _RANK_PATH.fullmatch(self.rank_path):
             raise ValueError("v4 rank_path must be an explicit /dev/dpu_rankN path")
         if (
@@ -283,7 +297,10 @@ class V4Profile:
         result = asdict(self)
         result["numeric_mode"] = self.numeric_mode_name
         result["numeric_mode_code"] = self.numeric_mode_code
-        result["profile"] = PROFILE
+        result["profile"] = (
+            "prepared_wave_v1"
+            if self.request_transport == REQUEST_TRANSPORT_PACKED_WAVE else PROFILE
+        )
         return result
 
 
@@ -1116,6 +1133,7 @@ __all__ = [
     "EXECUTION_TARGET_SIMULATOR",
     "REQUEST_TRANSPORT_DIRECTORY",
     "REQUEST_TRANSPORT_PACKED_OPERATION",
+    "REQUEST_TRANSPORT_PACKED_WAVE",
     "native_execution_identity",
     "NUMERIC_FLOAT32",
     "NUMERIC_HOST_PACKED_INT8",

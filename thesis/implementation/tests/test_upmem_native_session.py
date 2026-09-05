@@ -99,7 +99,7 @@ class FakeProcess:
 
     def _handle(self, value: str) -> None:
         command = value.strip()
-        if command.startswith(("SUBMIT ", "SUBMIT_PACKED_OPERATION ")):
+        if command.startswith(("SUBMIT ", "SUBMIT_PACKED_OPERATION ", "SUBMIT_PACKED_WAVES ")):
             response = self.response_factory(command)
             if response is not None:
                 self.stdout.emit(
@@ -1105,3 +1105,182 @@ def test_timeout_does_not_fabricate_release(tmp_path: Path) -> None:
     assert time.monotonic() - started < 1.0
     assert process.poll() is not None
     assert session.close().release_confirmed is False
+
+
+def _wave_session(tmp_path, mutate=lambda event, path: None):
+    from quantum_bench.upmem.packed_wave import WaveOperation, WaveTile
+    from quantum_bench.upmem.wave_protocol import (
+        FOUR_PRODUCT_PANEL, NO_PRODUCT, WaveCompletion, WaveControl, product_layout,
+    )
+
+    profile = v4.V4Profile(dpu_count=1, tasklets_per_dpu=8,
+                           execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+                           request_transport=v4.REQUEST_TRANSPORT_PACKED_WAVE)
+    control = WaveControl(0, 8, 0, 0, FOUR_PRODUCT_PANEL, 0, 0, 10, 0, 0,
+                          1, 1, 1, 0, product_layout(1, 1, 1, numeric_mode=0,
+                                                    kernel=FOUR_PRODUCT_PANEL))
+    tile = WaveTile(control, 0, 0, (struct.pack('<f', 2.) + b'\0' * 4,) * 4)
+    kwargs = dict(plan_sha256=b'p' * 32, dpu_binary_sha256=b'b' * 32, sequence=1,
+                  operations=(WaveOperation(b'n' * 32, b'c' * 32, 1, 1, 1, 1, 1., 1.),),
+                  waves=((tile,),))
+    completion = WaveCompletion(1, 0, 0, 15, 0, 10, 0, 42, 4, 0, NO_PRODUCT)
+
+    def respond(command):
+        _, name, digest = command.split()
+        payload = (tmp_path / name).read_bytes()
+        assert hashlib.sha256(payload).hexdigest() == digest
+        result = completion.to_bytes() + struct.pack('<4f', 4., 4., 4., 4.)
+        path = tmp_path / 'wave-result-00000000000000000001.bin'
+        path.write_bytes(result)
+        event = dict(event='WAVE_RESPONSE', status='completed', sequence=1,
+                     completed_wave_count=1, launch_count=1, completed_result_count=1,
+                     allocated_dpu_count=1, tasklets_per_dpu=8, cpu_fallback_used=False,
+                     target_observed='sdk_simulator', envelope_bytes=len(payload),
+                     native_snapshot_bytes=len(payload), operation_count=1, control_count=1,
+                     h2d_bytes=144 + 32, d2h_bytes=72 + 32, input_payload_bytes=32,
+                     response_path=path.name, response_sha256=hashlib.sha256(result).hexdigest(),
+                     native_output_buffer_bytes=256 * 256 * 4)
+        event.update({key: None for key in ('failure_stage', 'error', 'failed_wave_index',
+                     'failed_dpu_id', 'failed_operation_index', 'failed_completion_mask',
+                     'failed_completion_status', 'failed_completion_stage', 'failed_product')})
+        event.update({key: 0.001 for key in ('h2d_time_s', 'kernel_time_s', 'd2h_time_s',
+                                           'output_time_s', 'total_route_time_s')})
+        mutate(event, path)
+        return event
+
+    process = FakeProcess(respond, profile=profile, ready_overrides={
+        **v4.native_execution_identity(profile.execution_target, profile.request_transport),
+        'dpu_binary_sha256': (b'b' * 32).hex(), 'initialization_binary_sha256': 'ab' * 32,
+    })
+    session = session_v4.V4Session.start(
+        ('fake-native',), session_root=tmp_path, profile=profile,
+        environment={}, popen_factory=lambda *a, **kw: process,
+    )
+    return session, process, kwargs
+
+
+def test_wave_client_reuses_lifecycle_and_exposes_validated_results(tmp_path):
+    session, process, kwargs = _wave_session(tmp_path)
+    assert session.command[-1] == '--wave-v5'
+    assert session.profile.to_dict()['profile'] == 'prepared_wave_v1'
+    result = session.submit_waves(**kwargs)
+    assert tuple(bytes(p) for p in result['results'][0][0]) == (struct.pack('<f', 4.),) * 4
+    assert result['host_submit_timing']['total_submit_s'] >= 0
+    assert (tmp_path / result['request_path']).stat().st_mode & 0o777 == 0o600
+    with pytest.raises(ValueError, match='sequence'):
+        session.submit_waves(**kwargs)
+    with pytest.raises(ValueError, match='physical plan'):
+        session.submit_waves(**{**kwargs, 'sequence': 2, 'plan_sha256': b'q' * 32})
+    assert sum(cmd.startswith('SUBMIT') for cmd in process.stdin.commands) == 1
+    assert session.close().release_confirmed
+    assert session.close().release_confirmed
+    assert process.stdin.commands.count('CLOSE\n') == 1
+
+
+@pytest.mark.parametrize('field,value', [
+    ('sequence', 2), ('completed_wave_count', 0), ('completed_result_count', 2),
+    ('launch_count', 0), ('allocated_dpu_count', 4), ('tasklets_per_dpu', 3),
+    ('cpu_fallback_used', 0), ('target_observed', 'physical_hardware'),
+    ('envelope_bytes', 0), ('native_snapshot_bytes', 0), ('operation_count', 2),
+    ('control_count', 2), ('input_payload_bytes', 0), ('h2d_bytes', 0), ('d2h_bytes', 0),
+    ('kernel_time_s', float('nan')), ('output_time_s', -1),
+    ('failed_dpu_id', 0), ('response_path', '../escape'), ('response_sha256', 'ab' * 32),
+    ('event', 'RESPONSE'),
+])
+def test_wave_client_rejects_false_success_and_poison_session(tmp_path, field, value):
+    session, process, kwargs = _wave_session(tmp_path, lambda e, p: e.update({field: value}))
+    with pytest.raises(v4.V4ProtocolError) as caught:
+        session.submit_waves(**kwargs)
+    assert caught.value.wave_response[field] == value or field == 'kernel_time_s'
+    assert caught.value.backend_facts['request_path'].startswith('wave-operation-')
+    with pytest.raises(v4.V4Error, match='closed'):
+        session.submit_waves(**{**kwargs, 'sequence': 2})
+    assert sum(cmd.startswith('SUBMIT') for cmd in process.stdin.commands) == 1
+    assert session.close().release_confirmed
+
+
+@pytest.mark.parametrize('kind', ['truncated', 'extra', 'completion', 'symlink', 'fifo'])
+def test_wave_client_reads_one_bounded_regular_result_snapshot(tmp_path, kind):
+    def mutate(event, path):
+        data = path.read_bytes()
+        if kind == 'truncated':
+            path.write_bytes(data[:-1])
+        elif kind == 'extra':
+            path.write_bytes(data + b'\0')
+        elif kind == 'completion':
+            path.write_bytes(data[:24] + struct.pack('<Q', 999) + data[32:])
+            event['response_sha256'] = hashlib.sha256(path.read_bytes()).hexdigest()
+        else:
+            path.unlink()
+            if kind == 'symlink':
+                target = tmp_path / 'target'
+                target.write_bytes(data)
+                path.symlink_to(target)
+            else:
+                session_v4.os.mkfifo(path)
+    session, _, kwargs = _wave_session(tmp_path, mutate)
+    with pytest.raises(v4.V4ProtocolError):
+        session.submit_waves(**kwargs)
+    assert session.close().release_confirmed
+
+
+def test_wave_client_preserves_partial_failure_without_retry(tmp_path):
+    def mutate(event, path):
+        event.update(status='failed', failure_stage='completion_validation_failed',
+                     error='second wave fault', completed_wave_count=0,
+                     completed_result_count=0, failed_wave_index=0,
+                     failed_dpu_id=0, failed_operation_index=0, failed_product=2)
+    session, process, kwargs = _wave_session(tmp_path, mutate)
+    with pytest.raises(v4.V4ProtocolError, match='second wave fault') as caught:
+        session.submit_waves(**kwargs)
+    assert caught.value.wave_response['failed_product'] == 2
+    assert (tmp_path / caught.value.wave_response['response_path']).is_file()
+    assert process.stdin.commands[-1] == 'CLOSE\n'
+
+
+def test_wave_client_reentry_and_preflight_reject_without_submission(tmp_path):
+    session, process, kwargs = _wave_session(tmp_path)
+    session._enter_operation()
+    try:
+        with pytest.raises(v4.V4Error, match='active operation'):
+            session.submit_waves(**kwargs)
+        with pytest.raises(v4.V4Error, match='active operation'):
+            session.close()
+    finally:
+        session._leave_operation()
+    with pytest.raises(ValueError, match='binary'):
+        session.submit_waves(**{**kwargs, 'dpu_binary_sha256': b'x' * 32})
+    with pytest.raises(ValueError, match='timeout'):
+        session.submit_waves(**kwargs, timeout_s=float('nan'))
+    assert not process.stdin.commands
+    session.close()
+
+
+def test_wave_client_timeout_poisoning_reuses_native_cleanup(tmp_path):
+    session, process, kwargs = _wave_session(tmp_path)
+    process.response_factory = lambda command: None
+    with pytest.raises(v4.V4ProtocolError, match='timed out'):
+        session.submit_waves(**kwargs, timeout_s=0.03)
+    assert process.poll() is not None
+    assert not session.close().release_confirmed
+    assert sum(cmd.startswith('SUBMIT') for cmd in process.stdin.commands) == 1
+
+
+@pytest.mark.parametrize('field,value', [
+    ('abi', 'execution_plan_v4'), ('request_transport', 'packed_operation_v1'),
+    ('kernel_identity', 'dpu_real_tile_v4_wram_panel_v1'),
+    ('dpu_binary_sha256', 'missing'), ('initialization_binary_sha256', None),
+])
+def test_wave_ready_requires_explicit_protocol_and_binary_identity(tmp_path, field, value):
+    profile = v4.V4Profile(dpu_count=1, execution_target=v4.EXECUTION_TARGET_SIMULATOR,
+                           request_transport=v4.REQUEST_TRANSPORT_PACKED_WAVE)
+    process = FakeProcess(lambda command: None, profile=profile, ready_overrides={
+        **v4.native_execution_identity(profile.execution_target, profile.request_transport),
+        'dpu_binary_sha256': 'ab' * 32, 'initialization_binary_sha256': 'bc' * 32,
+        field: value,
+    })
+    with pytest.raises(v4.V4ProtocolError):
+        session_v4.V4Session.start(('fake',), session_root=tmp_path, profile=profile,
+                                  environment={}, popen_factory=lambda *a, **kw: process)
+    assert process.poll() is not None
+    assert process.stdin.commands == ['CLOSE\n']

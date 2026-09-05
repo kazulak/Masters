@@ -129,6 +129,46 @@ def verify_result(tmp_path, response, cases):
     assert offset == len(data)
 
 
+@pytest.mark.parametrize("tasklets,mode", [(3, 0), (7, 1), (8, 0), (12, 1), (24, 0)])
+def test_python_session_executes_and_reuses_prepared_cohorts(tmp_path, binaries, tasklets, mode):
+    from quantum_bench.upmem.native_session import V4Session
+    from quantum_bench.upmem.protocol import V4Profile, REQUEST_TRANSPORT_PACKED_WAVE
+
+    host, binary, init = binaries[tasklets]
+    profile = V4Profile(dpu_count=3, tasklets_per_dpu=tasklets, numeric_mode=mode,
+                        execution_target="sdk_simulator",
+                        request_transport=REQUEST_TRANSPORT_PACKED_WAVE, timeout_s=30)
+    command = (host, "--target", "simulator", "--session-root", tmp_path,
+               "--dpus", "3", "--tasklets", str(tasklets),
+               "--initialization-binary", init, "--dpu-binary", binary, "--timeout-s", "30")
+    session = V4Session.start(command, session_root=tmp_path, profile=profile)
+    try:
+        for sequence in (1, 2):
+            data, cases = corpus(binary, tasklets, mode, sequence=sequence,
+                                 request_start=sequence * 10)
+            operations, waves = unpack_wave_envelope(data)
+            result = session.submit_waves(
+                plan_sha256=hashlib.sha256(b"plan").digest(),
+                dpu_binary_sha256=hashlib.sha256(binary.read_bytes()).digest(),
+                sequence=sequence, operations=operations, waves=waves,
+            )
+            verify_result(tmp_path, result, cases)
+            assert len(result["results"]) == 2
+            for products, (control, arrays) in zip(
+                (slot for wave in result["results"] for slot in wave), cases, strict=True
+            ):
+                if not arrays:
+                    assert all(len(p) == 0 for p in products)
+                    continue
+                dtype = np.int32 if mode else np.float32
+                for payload, (a, b) in zip(products, ((0, 2), (1, 3), (0, 3), (1, 2)), strict=True):
+                    assert bytes(payload) == (arrays[a].astype(dtype) @ arrays[b].astype(dtype)).tobytes()
+            assert result["launch_count"] == 2
+    finally:
+        release = session.close()
+    assert release.release_confirmed
+
+
 @pytest.mark.parametrize("tasklets", [3, 7, 8, 12, 24])
 @pytest.mark.parametrize("mode", [0, 1])
 def test_persistent_host_launches_disjoint_operations_and_partial_waves(tmp_path, binaries, tasklets, mode):
@@ -204,7 +244,8 @@ def test_wave_host_rejects_wrong_binary_before_ready(tmp_path, binaries, wrong):
     assert events[-1]["release_succeeded"]
 
 
-def test_partial_cohort_failure_preserves_prefix_and_stops_session(tmp_path, binaries):
+@pytest.mark.parametrize("client", [False, True])
+def test_partial_cohort_failure_preserves_prefix_and_stops_session(tmp_path, binaries, client):
     # Inject a reported second-wave failure in a test-only DPU binary.
     source = (NATIVE / "dpu_wave.c").read_text()
     anchor = "WAVE_COMPLETION.status = UPMEM_WAVE_COMPLETED;"
@@ -225,10 +266,47 @@ def test_partial_cohort_failure_preserves_prefix_and_stops_session(tmp_path, bin
                     "-o", str(binary), str(fixture)], capture_output=True, check=True)
     data, cases = corpus(binary)
     later, _ = corpus(binary, sequence=2, request_start=12)
-    result, events = invoke(tmp_path, binaries, data, second=later, dpu_binary=binary)
-    assert result.returncode != 0
-    assert [event["event"] for event in events] == ["READY", "WAVE_RESPONSE", "RELEASE"]
-    response = events[1]
+    if client:
+        from quantum_bench.upmem.native_session import V4Session
+        from quantum_bench.upmem.protocol import (
+            V4Error, V4Profile, REQUEST_TRANSPORT_PACKED_WAVE,
+        )
+        host, _, init = binaries[8]
+        profile = V4Profile(dpu_count=3, tasklets_per_dpu=8,
+                            execution_target="sdk_simulator", timeout_s=30,
+                            request_transport=REQUEST_TRANSPORT_PACKED_WAVE)
+        session = V4Session.start(
+            (host, "--target", "simulator", "--session-root", tmp_path,
+             "--dpus", "3", "--tasklets", "8", "--initialization-binary", init,
+             "--dpu-binary", binary, "--timeout-s", "30"),
+            session_root=tmp_path, profile=profile,
+        )
+        operations, waves = unpack_wave_envelope(data)
+        next_event = session._next_event
+
+        def after_native_exit(timeout_s):
+            # Exercise RESPONSE, RELEASE and EOF arriving before the caller reads.
+            session.process.wait(timeout=30)
+            session._stdout_pump.thread.join(timeout=30)
+            return next_event(timeout_s)
+
+        session._next_event = after_native_exit
+        with pytest.raises(V4Error) as caught:
+            session.submit_waves(
+                plan_sha256=hashlib.sha256(b"plan").digest(),
+                dpu_binary_sha256=hashlib.sha256(binary.read_bytes()).digest(),
+                sequence=1, operations=operations, waves=waves,
+            )
+        response = caught.value.wave_response
+        release = session.close()
+        assert session.process.poll() is not None
+        assert release.event["dpu_free_called_once"] and release.event["release_succeeded"]
+    else:
+        result, events = invoke(tmp_path, binaries, data, second=later, dpu_binary=binary)
+        assert result.returncode != 0
+        assert [event["event"] for event in events] == ["READY", "WAVE_RESPONSE", "RELEASE"]
+        response = events[1]
+        assert events[-1]["release_succeeded"] and events[-1]["dpu_free_called_once"]
     assert response["status"] == "failed"
     assert response["failure_stage"] == "wave_completion_failed"
     assert response["completed_wave_count"] == 1
@@ -239,7 +317,6 @@ def test_partial_cohort_failure_preserves_prefix_and_stops_session(tmp_path, bin
     assert response["failed_completion_mask"] == response["failed_product"] == 0
     assert response["failed_completion_status"] == response["failed_completion_stage"] == 2
     verify_result(tmp_path, response, cases[:3])
-    assert events[-1]["release_succeeded"] and events[-1]["dpu_free_called_once"]
 
 
 @pytest.mark.parametrize("kind", ["fifo", "symlink", "oversized"])

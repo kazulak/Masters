@@ -257,6 +257,51 @@ qualification archive has SHA-256
 `e960b14fe20a8cd59bdff20f6abe7d75e5f0002a012470e9e2dedd9d5a2af276`.
 ETH-toolchain qualification and physical acceptance are separate pending gates.
 
+### Python Prepared-Cohort Client
+
+The existing `V4Profile`/`V4Session` lifecycle now admits an explicit experimental
+`packed_wave_v1` profile and selects the native `--wave-v5` mode. READY must match
+the profile, ABI, kernel, resource allocation and target; binary digests are
+required. There is still one process manager, non-reentrant operation lock,
+bounded output pump, timeout path and release implementation. The default public
+whole-TN route remains the qualified packed-operation executor during integration.
+
+`submit_waves` binds each envelope to the opened DPU binary, exact profile
+resources/numeric mode, a session-fixed plan digest and increasing invocation
+sequences. It packs once, writes one exclusive session-owned file and validates
+native launch/result counts, transfer bytes, timing facts and failure fields.
+The result must be the exact sequence-named regular file with its expected byte
+length and SHA-256; symlinks and FIFOs are rejected without blocking. Result
+snapshots have a separate 512-MiB admission cap checked before submission. This
+is not complete host-memory admission, and oversized work is never silently
+retiled or sent to CPU.
+
+`decode_wave_results` checks every completion against its control, including idle
+slots, and exposes RR/II/RI/IR as read-only views of one immutable result snapshot.
+Absent products remain empty slots; generic real execution has only RR populated.
+Float outputs must be finite; arbitrary int32 patterns are not incorrectly
+restricted to the int8 operand range. Failure poisons the session and retains
+the request identity, native partial-progress fields and available result file.
+No retry or atomicity is implied. Successful artifact cleanup remains the
+whole-runtime caller's responsibility after reconstruction/evidence capture.
+An adversarial simulator regression delays Python consumption until a faulted
+native process has exited. The wave event queue must retain RESPONSE, RELEASE and
+EOF together, and cleanup must consume a queued release even if the process is
+already dead. Otherwise valid failure/provenance records can be lost to a host
+timing race. The queue remains bounded to these three protocol events.
+The deadline is cooperative between preparation, submission, response reading,
+hashing and decoding; individual Python/native-array operations and regular-file
+system calls are not forcibly preempted. Existing terminate/kill cleanup can add
+up to two seconds of process-wait grace. This is not a hard real-time timeout.
+Whole-attempt/session-close accounting must include actual elapsed cleanup time.
+The independent client audit retained these timeout limitations explicitly and
+found no further identity, reentry, file-admission or partial-failure blocker.
+
+The prepared-cohort client is not yet whole-DAG execution. Its caller must still
+prove the tables cover the exact scheduled `UpmemPlan` units and preserve input
+ownership, producer readiness, lane-major/K-chunk reduction order and final tensor
+publication. Low-level byte equivalence alone cannot establish those properties.
+
 ## Budget and Preregistration
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
@@ -312,9 +357,9 @@ source identities separate. Never reconstruct missing raw observations.
 
 At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
-Current bounded work is the prepared-cohort encoder and native host dispatch.
-Next: connect the existing Python session lifecycle and whole-DAG executor to the
-admitted cohort/result contract; verify exact `UpmemPlan` work coverage and
+Prepared-cohort encoding, native host dispatch and the Python session lifecycle
+are connected. Next: connect the whole-DAG executor to the admitted cohort/result
+contract; verify exact `UpmemPlan` work coverage and
 lane-major/K-chunk reconstruction. Then qualify the geometry specialization and
 genuine full-TN DAG launches.
 The pure scheduler alone is not runtime DAG concurrency. No final path fitting starts

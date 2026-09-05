@@ -1,15 +1,17 @@
-"""Persistent native-process lifecycle for the UPMEM v4 tile protocol."""
+"""One persistent native-process lifecycle for packed UPMEM execution."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 from pathlib import PurePosixPath
 import queue
 import re
+import stat
 import subprocess
 import threading
 import time
@@ -23,6 +25,7 @@ from quantum_bench.upmem.protocol import (
     FLAG_ZERO_WORK,
     native_execution_identity,
     REQUEST_TRANSPORT_PACKED_OPERATION,
+    REQUEST_TRANSPORT_PACKED_WAVE,
     STATUS_COMPLETED,
     V4Error,
     V4Profile,
@@ -30,6 +33,11 @@ from quantum_bench.upmem.protocol import (
     V4RequestArtifact,
 )
 from quantum_bench.upmem.packed_operation import PackedOperation
+from quantum_bench.upmem.packed_wave import (
+    MAX_ENVELOPE_BYTES, WaveOperation, WaveTile, pack_wave_envelope,
+)
+from quantum_bench.upmem.wave_protocol import COMPLETION, CONTROL
+from quantum_bench.upmem.wave_result import decode_wave_results
 
 
 _RANK_PATH = re.compile(r"^/dev/dpu_rank[0-9]+$")
@@ -159,7 +167,7 @@ class V4Release:
 
 
 class V4Session:
-    """Persistent one-rank physical v4 native process client."""
+    """Persistent one-rank client, with an explicit experimental wave profile."""
 
     def __init__(
         self,
@@ -180,6 +188,8 @@ class V4Session:
         self._stderr_pump = stderr_pump
         self._events = events
         self._last_sequence = -1
+        self._last_wave_sequence = -1
+        self._wave_plan_sha256: bytes | None = None
         self._closed = False
         self._poisoned = False
         self._release: V4Release | None = None
@@ -259,6 +269,11 @@ class V4Session:
         argv = tuple(str(value) for value in command)
         if not argv:
             raise V4Error("hardware_profile_violation", "v4 command cannot be empty")
+        if profile.request_transport == REQUEST_TRANSPORT_PACKED_WAVE:
+            if "--wave-v5" not in argv:
+                argv += ("--wave-v5",)
+        elif "--wave-v5" in argv:
+            raise V4Error("hardware_profile_violation", "wave command requires wave profile")
         try:
             process = popen_factory(
                 argv,
@@ -272,7 +287,9 @@ class V4Session:
             )
         except OSError as exc:
             raise V4Error("sdk_discovery_failed", str(exc)) from exc
-        events: "queue.Queue[tuple[str, str | None]]" = queue.Queue(maxsize=2)
+        # A failed wave may emit RESPONSE, RELEASE and EOF without another command.
+        event_limit = 3 if profile.request_transport == REQUEST_TRANSPORT_PACKED_WAVE else 2
+        events: "queue.Queue[tuple[str, str | None]]" = queue.Queue(maxsize=event_limit)
         stdout_pump = _OutputPump(
             process.stdout,
             line_limit=profile.max_stdout_bytes,
@@ -421,12 +438,17 @@ class V4Session:
                     f"READY field {field!r} is not verified",
                 )
         observed_transport = event.get("request_transport")
-        if observed_transport != REQUEST_TRANSPORT_PACKED_OPERATION:
+        if observed_transport != self.profile.request_transport:
             raise V4ProtocolError(
                 "hardware_allocation_failed",
-                "READY request transport is not packed_operation_v1",
+                "READY request transport does not match the selected profile",
             )
         self._validate_native_identity(event, event_name="READY")
+        if self.profile.request_transport == REQUEST_TRANSPORT_PACKED_WAVE:
+            for field in ("dpu_binary_sha256", "initialization_binary_sha256"):
+                value = event.get(field)
+                if not isinstance(value, str) or not _HEX_SHA256.fullmatch(value):
+                    raise V4ProtocolError("protocol_error", f"READY {field} is invalid")
 
     def _validate_native_identity(
         self, event: Mapping[str, Any], *, event_name: str
@@ -434,7 +456,7 @@ class V4Session:
         """Require the identity compiled into the native host protocol."""
 
         for field, expected in native_execution_identity(
-            self.profile.execution_target
+            self.profile.execution_target, self.profile.request_transport
         ).items():
             if event.get(field) != expected:
                 raise V4ProtocolError(
@@ -476,6 +498,8 @@ class V4Session:
     ) -> Mapping[str, Any]:
         if self._closed or self._poisoned:
             raise V4Error("session_closed", "v4 session is closed or poisoned")
+        if self.profile.request_transport == REQUEST_TRANSPORT_PACKED_WAVE:
+            raise V4Error("hardware_profile_violation", "wave sessions require submit_waves")
         if artifact.root.resolve() != self.session_root:
             raise V4Error(
                 "request_manifest_failed",
@@ -670,6 +694,171 @@ class V4Session:
             "total_submit_s": float(time.perf_counter() - submit_started),
         }
         return result
+
+    def submit_waves(
+        self, *, plan_sha256: bytes, dpu_binary_sha256: bytes, sequence: int,
+        operations: tuple[WaveOperation, ...], waves: tuple[tuple[WaveTile, ...], ...],
+        timeout_s: float | None = None,
+    ) -> Mapping[str, Any]:
+        """Execute one admitted cohort using the existing single-owner process.
+
+        Input/result files remain session-owned until the caller cleans them up.
+        Results expose views of one immutable snapshot, not separate plane copies.
+        The whole-DAG caller must bind these tables to its exact physical plan.
+        The timeout is cooperative between bounded packing/I/O/decoding phases;
+        process termination can add the existing two-second teardown grace.
+        """
+        self._enter_operation()
+        try:
+            return self._submit_waves_unlocked(
+                plan_sha256=plan_sha256, dpu_binary_sha256=dpu_binary_sha256,
+                sequence=sequence, operations=operations, waves=waves,
+                timeout_s=timeout_s,
+            )
+        finally:
+            self._leave_operation()
+
+    def _submit_waves_unlocked(
+        self, *, plan_sha256: bytes, dpu_binary_sha256: bytes, sequence: int,
+        operations: tuple[WaveOperation, ...], waves: tuple[tuple[WaveTile, ...], ...],
+        timeout_s: float | None,
+    ) -> Mapping[str, Any]:
+        if self._closed or self._poisoned:
+            raise V4Error("session_closed", "native session is closed or poisoned")
+        if self.profile.request_transport != REQUEST_TRANSPORT_PACKED_WAVE:
+            raise V4Error("hardware_profile_violation", "submit_waves requires packed_wave_v1")
+        timeout = self.profile.timeout_s if timeout_s is None else timeout_s
+        if not math.isfinite(timeout) or timeout <= 0:
+            raise ValueError("wave timeout must be finite and positive")
+        started = time.perf_counter()
+        deadline = time.monotonic() + timeout
+        if type(plan_sha256) is not bytes or type(dpu_binary_sha256) is not bytes:
+            raise ValueError("wave plan and binary digests must be immutable bytes")
+        if dpu_binary_sha256.hex() != self.startup["dpu_binary_sha256"].lower():
+            raise ValueError("wave DPU binary differs from verified startup")
+        if self._wave_plan_sha256 is not None and plan_sha256 != self._wave_plan_sha256:
+            raise ValueError("wave physical plan changed within the session")
+        if type(sequence) is not int or sequence <= self._last_wave_sequence:
+            raise ValueError("wave envelope sequence must increase")
+        data = pack_wave_envelope(
+            plan_sha256=plan_sha256, dpu_binary_sha256=dpu_binary_sha256,
+            sequence=sequence, operations=operations, waves=waves,
+            numeric_mode=self.profile.numeric_mode_code,
+        )
+        if (len(waves[0]) != self.profile.dpu_count
+                or waves[0][0].control.tasklets != self.profile.tasklets_per_dpu):
+            raise ValueError("wave resources differ from the opened session")
+        if waves[0][0].control.request_sequence <= self._last_sequence:
+            raise ValueError("wave request sequence must increase across submissions")
+        controls = tuple(tile.control for wave in waves for tile in wave)
+        output_bytes = sum(COMPLETION.size + sum(
+            c.m * c.n * 4 for _, length in c.planes[4:] if length
+        ) for c in controls)
+        if output_bytes > MAX_ENVELOPE_BYTES:
+            raise ValueError("wave result exceeds the 512-MiB snapshot admission limit")
+        request_name = f"wave-operation-{sequence:020d}.bin"
+        request_path = self.session_root / request_name
+        request_hash = hashlib.sha256(data).hexdigest()
+        fd = os.open(request_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+        envelope_bytes = len(data)
+        del data
+        preparation_s = time.perf_counter() - started
+        event: Mapping[str, Any] = {}
+        try:
+            if time.monotonic() >= deadline:
+                raise V4ProtocolError("kernel_timeout", "wave preparation exceeded deadline")
+            write_started = time.perf_counter()
+            self._write(f"SUBMIT_PACKED_WAVES {request_name} {request_hash}\n")
+            write_s = time.perf_counter() - write_started
+            wait_started = time.perf_counter()
+            event = self._next_event(max(0.001, deadline - time.monotonic()))
+            wait_s = time.perf_counter() - wait_started
+            validation_started = time.perf_counter()
+            if event.get("event") != "WAVE_RESPONSE":
+                raise V4ProtocolError("protocol_error", "expected WAVE_RESPONSE")
+            if event.get("status") != "completed":
+                raise V4ProtocolError(str(event.get("failure_stage") or "request_execution_failed"),
+                                      str(event.get("error") or "prepared cohort failed"))
+            expected = {
+                "sequence": sequence, "completed_wave_count": len(waves),
+                "launch_count": len(waves), "completed_result_count": len(controls),
+                "allocated_dpu_count": self.profile.dpu_count,
+                "tasklets_per_dpu": self.profile.tasklets_per_dpu,
+                "cpu_fallback_used": False, "target_observed": self.profile.execution_target,
+                "envelope_bytes": envelope_bytes, "native_snapshot_bytes": envelope_bytes,
+                "operation_count": len(operations), "control_count": len(controls),
+                "h2d_bytes": sum(CONTROL.size + sum(n for _, n in c.planes[:4]) for c in controls),
+                "d2h_bytes": sum(COMPLETION.size + sum(n for _, n in c.planes[4:]) for c in controls),
+                "input_payload_bytes": sum(sum(n for _, n in c.planes[:4]) for c in controls),
+            }
+            for field, value in expected.items():
+                if type(event.get(field)) is not type(value) or event[field] != value:
+                    raise V4ProtocolError("response_validation_failed", f"wave {field} mismatch")
+            for field in ("failure_stage", "error", "failed_wave_index", "failed_dpu_id",
+                          "failed_operation_index", "failed_completion_mask",
+                          "failed_completion_status", "failed_completion_stage", "failed_product"):
+                if field not in event or event[field] is not None:
+                    raise V4ProtocolError("response_validation_failed", f"completed wave has {field}")
+            for field in ("h2d_time_s", "kernel_time_s", "d2h_time_s", "output_time_s",
+                          "total_route_time_s"):
+                value = event.get(field)
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 0:
+                    raise V4ProtocolError("response_validation_failed", f"invalid wave {field}")
+            name = f"wave-result-{sequence:020d}.bin"
+            if event.get("response_path") != name:
+                raise V4ProtocolError("response_validation_failed", "wave result path mismatch")
+            if time.monotonic() >= deadline:
+                raise V4ProtocolError("kernel_timeout", "wave response exceeded deadline")
+            snapshot = self._read_wave_snapshot(name, output_bytes)
+            if time.monotonic() >= deadline:
+                raise V4ProtocolError("kernel_timeout", "wave result read exceeded deadline")
+            if hashlib.sha256(snapshot).hexdigest() != event.get("response_sha256"):
+                raise V4ProtocolError("response_validation_failed", "wave result hash mismatch")
+            if time.monotonic() >= deadline:
+                raise V4ProtocolError("kernel_timeout", "wave result hashing exceeded deadline")
+            results = decode_wave_results(snapshot, waves)
+            if time.monotonic() >= deadline:
+                raise V4ProtocolError("kernel_timeout", "wave response exceeded deadline")
+        except (V4Error, ValueError, OSError) as exc:
+            error = exc if isinstance(exc, V4Error) else V4ProtocolError(
+                "response_validation_failed", str(exc)
+            )
+            error.wave_response = dict(event)  # type: ignore[attr-defined]
+            error.backend_facts = {  # type: ignore[attr-defined]
+                **event, "request_path": request_name, "request_sha256": request_hash,
+            }
+            self._poisoned = True
+            try:
+                self._close_unlocked(timeout_s=max(0.001, deadline - time.monotonic()))
+            except BaseException:
+                self._terminate()
+            raise error from (exc if error is not exc else None)
+        self._wave_plan_sha256 = plan_sha256
+        self._last_wave_sequence = sequence
+        self._last_sequence = waves[-1][0].control.request_sequence
+        return {
+            **event, "results": results, "request_path": request_name,
+            "request_sha256": request_hash,
+            "host_submit_timing": {
+                "preparation_s": preparation_s, "protocol_write_s": write_s,
+                "response_wait_s": wait_s,
+                "response_validation_s": time.perf_counter() - validation_started,
+                "total_submit_s": time.perf_counter() - started,
+            },
+        }
+
+    def _read_wave_snapshot(self, name: str, expected_bytes: int) -> bytes:
+        fd = os.open(self.session_root / name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+        with os.fdopen(fd, "rb") as stream:
+            info = os.fstat(stream.fileno())
+            if not stat.S_ISREG(info.st_mode) or info.st_size != expected_bytes:
+                raise ValueError("wave result is not a regular file of the expected size")
+            data = stream.read(expected_bytes + 1)
+        if len(data) != expected_bytes:
+            raise ValueError("wave result size changed during read")
+        return data
 
     def _raise_packed_operation_failure(
         self,
@@ -1043,7 +1232,9 @@ class V4Session:
         close_deadline = time.monotonic() + (timeout_s or self.profile.timeout_s)
         event: Mapping[str, Any] = {}
         confirmed = False
-        if alive_before_close and sent_close:
+        if (alive_before_close and sent_close) or (
+            self.profile.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
+        ):
             try:
                 event = self._next_event(max(0.001, close_deadline - time.monotonic()))
                 confirmed = (
