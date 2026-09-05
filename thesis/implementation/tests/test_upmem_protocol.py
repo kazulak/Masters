@@ -497,6 +497,7 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     protocol_header = (NATIVE / "protocol.h").read_text(encoding="ascii")
     host = (NATIVE / "host.c").read_text(encoding="ascii")
     dpu = (NATIVE / "dpu.c").read_text(encoding="ascii")
+    panel = (NATIVE / "panel_compute.h").read_text(encoding="ascii")
     provider = (NATIVE / "simplepim_provider.c").read_text(encoding="ascii")
     makefile = (NATIVE / "Makefile").read_text(encoding="ascii")
 
@@ -514,10 +515,12 @@ def test_v4_native_sources_preserve_the_abi_and_build_contract() -> None:
     assert "request_manifest_sha256" in host
     assert "cpu_fallback_used\\\":false" in host
     assert "__mram_noinit uint8_t V4_MRAM" in dpu
-    assert "__dma_aligned uint8_t shared_b_panel" in dpu
-    assert "__dma_aligned uint8_t tasklet_a_buffer" in dpu
-    assert "__dma_aligned v4_output_slot_t tasklet_output_buffer" in dpu
-    assert "mram_read" in dpu and "mram_write" in dpu
+    assert '#include "panel_compute.h"' in dpu
+    assert "panel_compute(V4_MRAM," in dpu
+    assert "__dma_aligned uint8_t shared_b_panel" in panel
+    assert "__dma_aligned uint8_t tasklet_a_buffer" in panel
+    assert "__dma_aligned v4_output_slot_t tasklet_output_buffer" in panel
+    assert "mram_read" in panel and "mram_write" in panel
     assert "v4 requires NR_TASKLETS in [1,24]" in dpu
     assert "V4_CONTROL.reserved0 != (uint32_t)NR_TASKLETS" in dpu
     assert "#define EXECUTION_PLAN_V4_INT8_MAX_ABS 127u" in protocol_header
