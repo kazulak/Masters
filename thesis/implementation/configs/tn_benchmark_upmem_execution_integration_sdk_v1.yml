@@ -1,5 +1,5 @@
 schema_version: tn_benchmark_v3
-experiment_id: upmem-execution-integration-sdk-v1
+experiment_id: upmem-execution-integration-sdk-v2
 defaults:
   timeout_s: 120.0
 collection:
@@ -18,12 +18,12 @@ collection:
 cases:
   bell2:
     circuit: {kind: builtin, name: bell_2q, path: null, parameters: {}}
-  stress4:
+  stress14:
     circuit:
       kind: builtin
       name: quantization_stress
       path: null
-      parameters: {n_qubits: 4, repeat_layers: 2}
+      parameters: {n_qubits: 14, repeat_layers: 2}
 plans:
   greedy:
     planner: {engine: opt_einsum, mode: greedy}
@@ -108,4 +108,4 @@ routes:
       initialization_binary: ../native/upmem/runtime/bin/dpu_simplepim_management_init_t8
 matrix:
   - {case_id: bell2, plan_id: greedy, route_ids: [float32_1dpu_t1, int8_1dpu_t1, float32_1dpu_t8, int8_1dpu_t8, float32_4dpu_t8, int8_3dpu_t8, int8_4dpu_t8]}
-  - {case_id: stress4, plan_id: greedy, route_ids: [float32_1dpu_t1, int8_1dpu_t1, float32_1dpu_t8, int8_1dpu_t8, float32_4dpu_t8, int8_3dpu_t8, int8_4dpu_t8]}
+  - {case_id: stress14, plan_id: greedy, route_ids: [float32_1dpu_t1, int8_1dpu_t1, float32_1dpu_t8, int8_1dpu_t8, float32_4dpu_t8, int8_3dpu_t8, int8_4dpu_t8]}

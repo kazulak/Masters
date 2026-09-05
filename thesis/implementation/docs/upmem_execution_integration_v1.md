@@ -60,9 +60,9 @@ session cleanup and no-fallback requirements still apply.
 
 ## Bounded Qualification and Audit
 
-The SDK gate contains 14 one-shot cells: Bell2 and Stress4 at float32/int8 T1,
+The SDK gate contains 14 one-shot cells: Bell2 and Stress14 at float32/int8 T1,
 float32/int8 T8 with one and four DPUs, and int8 T8 with three DPUs. The physical
-gate contains seven one-shot cells: Bell2 at float32/int8 T1 and Stress4 at the
+gate contains seven one-shot cells: Bell2 at float32/int8 T1 and Stress14 at the
 five T8 routes. Both use one rank, fresh sessions, zero warmups, one measured
 block, and observed CPU-0 affinity. These measurements establish correctness,
 not comparative performance. No final-test circuit is used for tuning here.
@@ -78,6 +78,34 @@ Independent read-only review found an executable-binding gap in the initial
 inspector. It now recomputes each executable ID from the recorded host, DPU and
 initializer SHA-256 values, executor and packed transport policy. Mutation
 tests reject either an altered executable ID or an altered binary digest.
+
+The first ETH SDK stage at `09e19e0713517a40c2f74e46641f6bd50ad928f4`
+completed 14 successful samples and sessions, but exposed a qualification
+coverage defect: both Bell2 and Stress4 placed all useful work on DPU 0. The
+inspector also conflated allocated resources with active work. This stage is
+preserved as a successful SDK execution with insufficient integration coverage,
+not accepted as the full multi-DPU qualification. No physical run occurred.
+
+Before any physical timing, software-only lowering selected Stress14: its
+largest stage has four work units and uses all four DPUs under both policies.
+Bell2 remains as the deliberate partial-wave/idle-DPU case. The corrected
+configuration labels end in `sdk-v2` and `physical-v2`, with new experiment
+identities. No old observations are replaced or spliced.
+
+The corrected inspector reconstructs each expected physical plan and verifies
+its identity and active placements. The existing
+`execution_resource_admission_passed` fact tests full allocation utilization,
+so it is false for the deliberately idle Bell2 multi-DPU routes. Its value and
+reason must match the reconstructed plan; this is not treated as permission
+to omit planned work or accept wrong allocation. Stress14 must activate every
+requested DPU. Startup allocation, same-policy replay and release remain strict.
+See `thesis_results/upmem_execution_integration_v1/sdk_coverage_incident.json`.
+
+That stage's explicit preflight records SDK 2023.1.0, while the old CLI
+manifest labels pkg-config's 0.29.1 tool version as the SDK version. The CLI now
+queries `dpu-pkg-config --modversion dpu` in both environment and preflight
+facts. Historical manifests are not rewritten. This corrects provenance only;
+the existing evidence schema, numerical policy and execution code are retained.
 
 The integration audit exposed narrow correctness gaps in the shared boundary:
 

@@ -1063,6 +1063,26 @@ def test_block_cooldown_occurs_once_after_each_nonfinal_block(
     assert calls == [0.25]
 
 
+def test_sdk_version_queries_the_runtime_package(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "config.yml"
+    _write_config(path, _numpy_config())
+    config = load_experiment_config(path)
+    calls = []
+
+    def version(command):
+        calls.append(command)
+        return "2023.1.0" if command == ("dpu-pkg-config", "--modversion", "dpu") else "0.29.1"
+
+    monkeypatch.setattr(cli, "_tool_version", version)
+    preflight = cli._machine_preflight(config)
+    _, environment = cli._environment(config, preflight)
+    assert preflight["sdk_version"] == "2023.1.0"
+    assert environment["upmem_sdk_version"] == "2023.1.0"
+    assert calls == [("dpu-pkg-config", "--modversion", "dpu")] * 2
+
+
 def test_physical_machine_preflight_records_static_admission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

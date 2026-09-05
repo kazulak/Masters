@@ -38,8 +38,8 @@ def test_integration_matrices_are_bounded_and_cross_policy_complete() -> None:
 
     assert len(QUALIFIER._expected_cells(sdk)) == 14
     assert len(QUALIFIER._expected_cells(physical)) == 7
-    assert set(sdk["cases"]) == {"bell2", "stress4"}
-    assert set(physical["cases"]) == {"bell2", "stress4"}
+    assert set(sdk["cases"]) == {"bell2", "stress14"}
+    assert set(physical["cases"]) == {"bell2", "stress14"}
     assert "stress18" not in sdk["cases"]
     assert "ghz14" not in sdk["cases"]
     assert "xor18" not in sdk["cases"]
@@ -66,7 +66,7 @@ def test_integration_matrices_are_bounded_and_cross_policy_complete() -> None:
     assert physical["matrix"] == [
         {"case_id": "bell2", "plan_id": "greedy", "route_ids": ["float32_1dpu_t1", "int8_1dpu_t1"]},
         {
-            "case_id": "stress4",
+            "case_id": "stress14",
             "plan_id": "greedy",
             "route_ids": [
                 "float32_1dpu_t8",
@@ -92,7 +92,7 @@ def test_prepare_uses_explicit_remote_paths_and_rehashes_identity(tmp_path: Path
     )
     prepared = load_experiment_config(output)
     assert prepared["experiment_identity_payload"]["label"] == (
-        "upmem-execution-integration-physical-v1"
+        "upmem-execution-integration-physical-v2"
     )
     assert QUALIFIER.identity_hash(
         "quantum_bench.experiment_id.v3", prepared["experiment_identity_payload"]
@@ -182,12 +182,15 @@ def _fixture_evidence(kind: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
     physical = kind == "physical"
     target = "physical_hardware" if physical else "sdk_simulator"
     cells = sorted(QUALIFIER.KINDS[kind]["cells"])
+    contracts = QUALIFIER._expected_execution_contract(config)
     samples: list[dict[str, Any]] = []
     sessions: list[dict[str, Any]] = []
     for index, (case_id, plan_id, route_id) in enumerate(cells):
         policy, dpus, ranks, tasklets = QUALIFIER.ROUTE_SPECS[route_id]
         session_id = f"{kind}-session-{index}"
-        physical_plan_id = f"{index + 1:064x}"
+        contract = contracts[(case_id, plan_id, route_id)]
+        identities = contract["identities"]
+        physical_plan_id = identities["physical_plan_id"]
         binary_hashes = {f"{field}_sha256": f"{tasklets * 10 + i:064x}" for i, field in enumerate(QUALIFIER.PATH_FIELDS)}
         executable_id = QUALIFIER._expected_executable_id(
             binary_hashes, executor=QUALIFIER.KINDS[kind]["executor"]
@@ -197,7 +200,8 @@ def _fixture_evidence(kind: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
             "cpu_fallback_used": False,
             "requested_dpus": dpus,
             "allocated_dpus": dpus,
-            "active_dpus": dpus,
+            "active_dpus": len(contract["active_dpu_ids"]),
+            "active_ranks": contract["active_rank_indices"],
             "rank_count": ranks,
             "tasklets_per_dpu": tasklets,
             "observed_rank_count": ranks,
@@ -206,11 +210,12 @@ def _fixture_evidence(kind: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
             "allocated_dpu_count": dpus,
             "observed_dpu_count": dpus,
             "startup_resource_admission_passed": True,
-            "execution_resource_admission_passed": True,
+            **contract["admission"],
             "request_transport": QUALIFIER.PACKED,
             "kernel_policy": QUALIFIER.KERNEL_POLICY,
             "kernel_implementation_id": QUALIFIER.KERNEL_IMPLEMENTATION,
             "physical_plan_id": physical_plan_id,
+            "logical_plan_id": identities["logical_plan_id"],
             "physical_target_verified": physical,
             "hardware_kernel_executed": physical,
             "simulator_kernel_executed": not physical,
@@ -218,6 +223,8 @@ def _fixture_evidence(kind: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
         terminal = {
             **common,
             **binary_hashes,
+            "active_dpu_ids": contract["active_dpu_ids"],
+            "active_rank_indices": contract["active_rank_indices"],
             "binary_identity_verified": True,
             "native_identity_verified": True,
             "simulator_target_verified": not physical,
@@ -254,7 +261,7 @@ def _fixture_evidence(kind: str) -> tuple[dict[str, Any], list[dict[str, Any]], 
                 "measurement": {"scope_id": "steady_execution_v1"},
                 "output_sha256": "e" * 64,
                 "identities": {
-                    "physical_plan_id": physical_plan_id,
+                    **identities,
                     "executable_id": executable_id,
                 },
                 "numeric_facts": {
@@ -298,7 +305,7 @@ def _patch_inspector(
 
 
 @pytest.mark.parametrize("kind", ["sdk", "physical"])
-def test_inspector_accepts_exact_replay_fixture_and_physical_partial_wave(
+def test_inspector_accepts_exact_plan_coverage(
     kind: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fixture = _fixture_evidence(kind)
@@ -307,6 +314,100 @@ def test_inspector_accepts_exact_replay_fixture_and_physical_partial_wave(
     assert result["status"] == "passed"
     assert result["matrix_cell_count"] == (14 if kind == "sdk" else 7)
     assert result["correctness_only"] is (kind == "physical")
+
+
+@pytest.mark.parametrize("kind", ["sdk", "physical"])
+def test_v1_probe_identity_cannot_qualify_as_v2(kind: str) -> None:
+    config = _config(f"tn_benchmark_upmem_execution_integration_{kind}_v1.yml")
+    payload = config["experiment_identity_payload"]
+    payload["label"] = f"upmem-execution-integration-{kind}-v1"
+    config["experiment_id"] = QUALIFIER.identity_hash("quantum_bench.experiment_id.v3", payload)
+    with pytest.raises(ValueError, match="identity label is not frozen"):
+        QUALIFIER._validate_frozen_config(config, kind=kind)
+
+
+def test_real_plans_cover_every_stress14_dpu_and_bell2_partial_waves() -> None:
+    config = _config("tn_benchmark_upmem_execution_integration_sdk_v1.yml")
+    QUALIFIER._validate_frozen_config(config, kind="sdk")
+    assert config["experiment_identity_payload"]["label"] == "upmem-execution-integration-sdk-v2"
+    assert config["cases"]["stress14"]["circuit"]["parameters"] == {
+        "n_qubits": 14, "repeat_layers": 2,
+    }
+    contracts = QUALIFIER._expected_execution_contract(config)
+    for (case_id, _, route_id), contract in contracts.items():
+        dpus = QUALIFIER.ROUTE_SPECS[route_id][1]
+        expected_active = dpus if case_id == "stress14" else 1
+        assert contract["active_dpu_ids"] == [[0, dpu] for dpu in range(expected_active)]
+        assert all(work > 0 for work in contract["work_by_dpu"].values())
+        admission = contract["admission"]
+        assert admission["execution_active_dpu_count"] == expected_active
+        assert admission["execution_resource_admission_passed"] is (expected_active == dpus)
+        assert admission["execution_resource_admission_reasons"] == (
+            [] if expected_active == dpus else ["active_dpu_count_mismatch"]
+        )
+
+    # A smaller stress circuit cannot silently replace the multi-DPU coverage case.
+    config["cases"]["stress14"]["circuit"]["parameters"]["n_qubits"] = 4
+    with pytest.raises(ValueError, match="does not cover every requested DPU"):
+        QUALIFIER._expected_execution_contract(config)
+
+
+@pytest.mark.parametrize("kind", ["sdk", "physical"])
+@pytest.mark.parametrize("mutation", [
+    "missing_dpu", "wrong_active_count", "wrong_terminal_count", "wrong_requested_count",
+    "physical_plan", "problem", "network", "logical_plan", "admission", "reasons",
+])
+def test_inspector_rejects_plan_coverage_and_identity_drift(
+    kind: str, mutation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture_evidence(kind)
+    _, samples, sessions, _ = fixture
+    sample = next(row for row in samples if row["case_id"] == "stress14"
+                  and row["route_id"] == "int8_4dpu_t8")
+    terminal = next(row["terminal_backend_facts"] for row in sessions
+                    if row["session_instance_id"] == sample["session_instance_id"])
+    if mutation == "missing_dpu":
+        terminal["active_dpu_ids"] = [[0, 0], [0, 1], [0, 2]]
+    elif mutation == "wrong_active_count":
+        sample["backend_facts"]["active_dpus"] = 3
+    elif mutation == "wrong_terminal_count":
+        terminal["allocated_dpu_count"] = 3
+    elif mutation == "wrong_requested_count":
+        sample["backend_facts"]["requested_dpus"] = 3
+    elif mutation == "admission":
+        sample["backend_facts"]["execution_resource_admission_passed"] = False
+    elif mutation == "reasons":
+        sample["backend_facts"]["execution_resource_admission_reasons"] = ["active_dpu_count_mismatch"]
+    else:
+        field = {"physical_plan": "physical_plan_id", "problem": "problem_id",
+                 "network": "tensor_network_structure_id", "logical_plan": "logical_plan_id"}[mutation]
+        sample["identities"][field] = "f" * 64
+        # Internal agreement is insufficient; IDs must match the rebuilt plan.
+        sample["backend_facts"][field] = "f" * 64
+    _patch_inspector(monkeypatch, tmp_path, fixture)
+    with pytest.raises(ValueError):
+        QUALIFIER.inspect(tmp_path, kind=kind, expected_source="a" * 40)
+
+
+@pytest.mark.parametrize("mutation", ["passed", "missing_reason", "extra_dpu"])
+def test_bell2_partial_wave_requires_exact_admission_facts(
+    mutation: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    fixture = _fixture_evidence("sdk")
+    _, samples, sessions, _ = fixture
+    sample = next(row for row in samples if row["case_id"] == "bell2"
+                  and row["route_id"] == "int8_3dpu_t8")
+    if mutation == "passed":
+        sample["backend_facts"]["execution_resource_admission_passed"] = True
+    elif mutation == "missing_reason":
+        sample["backend_facts"]["execution_resource_admission_reasons"] = []
+    else:
+        terminal = next(row["terminal_backend_facts"] for row in sessions
+                        if row["session_instance_id"] == sample["session_instance_id"])
+        terminal["active_dpu_ids"] = [[0, 0], [0, 1]]
+    _patch_inspector(monkeypatch, tmp_path, fixture)
+    with pytest.raises(ValueError):
+        QUALIFIER.inspect(tmp_path, kind="sdk", expected_source="a" * 40)
 
 
 @pytest.mark.parametrize("mutation", ["dirty", "transport", "int8_threshold", "executable", "binary"])

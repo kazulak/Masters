@@ -178,7 +178,7 @@ def _environment(
         "affinity": observed_affinity,
         "selected_cpu_ids": machine_preflight.get("selected_cpu_ids"),
         "requested_rank_paths": sorted(set(rank_paths)),
-        "upmem_sdk_version": _tool_version(("dpu-pkg-config", "--version")),
+        "upmem_sdk_version": _tool_version(("dpu-pkg-config", "--modversion", "dpu")),
         "collection_machine_policy": config["collection"]["machine_policy"],
         "initial_background_load_1m": _background_load_1m(),
         "observed_cpu_governors": observed_governors,
@@ -284,7 +284,7 @@ def _machine_preflight(config: Mapping[str, object]) -> Mapping[str, JsonValue]:
     numa_nodes = _numa_nodes()
     rank_paths = _physical_rank_paths(config)
     rank_paths_accessible = _rank_paths_accessible(rank_paths)
-    sdk_version = _tool_version(("dpu-pkg-config", "--version"))
+    sdk_version = _tool_version(("dpu-pkg-config", "--modversion", "dpu"))
     initial_load1 = _background_load_1m()
     online_cpu_count = _online_logical_cpu_count()
     initial_load_per_cpu = (

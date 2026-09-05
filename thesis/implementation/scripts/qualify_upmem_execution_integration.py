@@ -16,9 +16,15 @@ from typing import Any, Mapping
 
 import yaml
 
-from quantum_bench.evidence import canonical_json, executable_id, identity_hash, load_artifacts
+from quantum_bench.cli import _job, _plan_dag
+from quantum_bench.evidence import (
+    canonical_json, executable_id, identity_hash, load_artifacts,
+    problem_id, tensor_network_structure_id,
+)
 from quantum_bench.experiment import load_experiment_config
+from quantum_bench.lowering import contraction_dag_hash
 from quantum_bench.report import verify_artifacts
+from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +35,7 @@ KERNEL_POLICY = "dpu_real_tile_v4_wram_panel_v1"
 KERNEL_IMPLEMENTATION = "upmem_sdk_hardware_v4_wram_panel_kernel"
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
-CASES = ("bell2", "stress4")
+CASES = ("bell2", "stress14")
 ROUTE_SPECS = {
     "float32_1dpu_t1": (FLOAT32, 1, 1, 1),
     "int8_1dpu_t1": (INT8, 1, 1, 1),
@@ -45,22 +51,22 @@ PHYSICAL_CELLS = frozenset(
     {
         ("bell2", "greedy", "float32_1dpu_t1"),
         ("bell2", "greedy", "int8_1dpu_t1"),
-        ("stress4", "greedy", "float32_1dpu_t8"),
-        ("stress4", "greedy", "int8_1dpu_t8"),
-        ("stress4", "greedy", "float32_4dpu_t8"),
-        ("stress4", "greedy", "int8_3dpu_t8"),
-        ("stress4", "greedy", "int8_4dpu_t8"),
+        ("stress14", "greedy", "float32_1dpu_t8"),
+        ("stress14", "greedy", "int8_1dpu_t8"),
+        ("stress14", "greedy", "float32_4dpu_t8"),
+        ("stress14", "greedy", "int8_3dpu_t8"),
+        ("stress14", "greedy", "int8_4dpu_t8"),
     }
 )
 KINDS = {
     "sdk": {
-        "label": "upmem-execution-integration-sdk-v1",
+        "label": "upmem-execution-integration-sdk-v2",
         "executor": "upmem_sdk_simulator",
         "cells": SDK_CELLS,
         "target": "sdk_simulator",
     },
     "physical": {
-        "label": "upmem-execution-integration-physical-v1",
+        "label": "upmem-execution-integration-physical-v2",
         "executor": "upmem_physical",
         "cells": PHYSICAL_CELLS,
         "target": "physical_hardware",
@@ -133,17 +139,17 @@ def _validate_frozen_config(
                 "parameters": {},
             }
         },
-        "stress4": {
+        "stress14": {
             "circuit": {
                 "kind": "builtin",
                 "name": "quantization_stress",
                 "path": None,
-                "parameters": {"n_qubits": 4, "repeat_layers": 2},
+                "parameters": {"n_qubits": 14, "repeat_layers": 2},
             }
         },
     }
     if config.get("cases") != expected_cases:
-        raise ValueError("case set is not the frozen Bell2/stress4 matrix")
+        raise ValueError("case set is not the frozen Bell2/stress14 matrix")
     if config.get("plans") != {
         "greedy": {
             "planner": {"engine": "opt_einsum", "mode": "greedy"},
@@ -273,6 +279,66 @@ def prepare(
     return output
 
 
+def _expected_execution_contract(config: Mapping[str, Any]) -> dict[tuple, dict[str, Any]]:
+    """Rebuild identities and useful DPU coverage without executing a contraction."""
+
+    contracts = {}
+    for item in config["matrix"]:
+        case_id, plan_id = item["case_id"], item["plan_id"]
+        job = _job(config["cases"][case_id])
+        network, _, dag, _ = _plan_dag(job, config["plans"][plan_id])
+        identities = {
+            "problem_id": problem_id(job),
+            "tensor_network_structure_id": tensor_network_structure_id(network),
+            "logical_plan_id": contraction_dag_hash(dag),
+        }
+        for route_id in item["route_ids"]:
+            route = config["routes"][route_id]
+            options = route["options"]
+            plan = plan_upmem(
+                dag,
+                numeric_policy=route["numeric_policy"],
+                topology=UpmemTopology(**{
+                    field: options[field]
+                    for field in ("dpu_count", "rank_count", "tasklets_per_dpu")
+                }),
+            )
+            work = {}
+            for stage in plan.stages:
+                for unit in stage.work_units:
+                    slot = (unit.logical_rank, unit.logical_dpu)
+                    work[slot] = work.get(slot, 0) + unit.estimated_arithmetic_work
+            active_ids = sorted(work)
+            active_ranks = sorted({rank for rank, _ in active_ids})
+            if not work or any(value <= 0 for value in work.values()):
+                raise ValueError(f"plan lacks positive work on an active DPU: {case_id}/{route_id}")
+            if case_id == "stress14" and active_ids != [
+                (0, dpu) for dpu in range(options["dpu_count"])
+            ]:
+                raise ValueError(f"Stress14 plan does not cover every requested DPU: {route_id}")
+            reasons = []
+            if len(active_ids) != options["dpu_count"]:
+                reasons.append("active_dpu_count_mismatch")
+            if len(active_ranks) != options["rank_count"]:
+                reasons.append("active_rank_count_mismatch")
+            if reasons and (case_id != "bell2" or reasons != ["active_dpu_count_mismatch"]):
+                raise ValueError(f"unexpected partial plan: {case_id}/{route_id}")
+            contracts[(case_id, plan_id, route_id)] = {
+                "plan": plan,
+                "identities": {**identities, "physical_plan_id": physical_plan_id(plan)},
+                "active_dpu_ids": [list(slot) for slot in active_ids],
+                "active_rank_indices": active_ranks,
+                "work_by_dpu": work,
+                "admission": {
+                    "execution_resource_admission_passed": not reasons,
+                    "execution_resource_admission_reasons": reasons,
+                    "execution_active_dpu_count": len(active_ids),
+                    "execution_active_rank_count": len(active_ranks),
+                },
+            }
+    return contracts
+
+
 def _joined_facts(
     sample: Mapping[str, Any], sessions: Mapping[str, Mapping[str, Any]]
 ) -> dict[str, Any]:
@@ -347,6 +413,7 @@ def inspect(root: Path, *, kind: str, expected_source: str) -> dict[str, Any]:
     if not isinstance(config, Mapping):
         raise ValueError("embedded experiment configuration is missing")
     cells = _validate_frozen_config(config, kind=kind)
+    contracts = _expected_execution_contract(config)
     if manifest.get("experiment_id") != config.get("experiment_id"):
         raise ValueError("manifest and embedded experiment IDs differ")
 
@@ -408,6 +475,16 @@ def inspect(root: Path, *, kind: str, expected_source: str) -> dict[str, Any]:
         if not isinstance(session_id, str) or session_id not in sessions or session_id in observed_sessions:
             raise ValueError("samples do not bind one fresh session per cell")
         observed_sessions.add(session_id)
+        session = sessions[session_id]
+        if tuple(session.get(field) for field in ("case_id", "plan_id", "route_id")) != cell:
+            raise ValueError("sample and session cells differ")
+        contract = contracts[cell]
+        terminal = session["terminal_backend_facts"]
+        _require_exact(
+            terminal,
+            {field: contract[field] for field in ("active_dpu_ids", "active_rank_indices")},
+            "terminal active resources",
+        )
         if sample.get("status") != "success":
             raise ValueError("integration qualification requires successful samples")
         if sample.get("attempt_kind") != "measurement" or sample.get("sample_index") != 0 or sample.get("block_id") != 0:
@@ -453,8 +530,10 @@ def inspect(root: Path, *, kind: str, expected_source: str) -> dict[str, Any]:
             raise ValueError("sample identities are missing")
         _require_hash(identities.get("executable_id"), "sample.identities.executable_id")
         _require_hash(identities.get("physical_plan_id"), "sample.identities.physical_plan_id")
+        _require_exact(identities, contract["identities"], "recomputed plan identities")
 
         facts = _joined_facts(sample, sessions)
+        _require_exact(sample["backend_facts"], contract["admission"], "planned execution admission")
         if identities["executable_id"] != _expected_executable_id(
             facts, executor=spec["executor"]
         ):
@@ -467,18 +546,18 @@ def inspect(root: Path, *, kind: str, expected_source: str) -> dict[str, Any]:
                 "cpu_fallback_used": False,
                 "requested_dpus": dpu_count,
                 "allocated_dpus": dpu_count,
-                "active_dpus": dpu_count,
+                "active_dpus": len(contract["active_dpu_ids"]),
+                "active_ranks": contract["active_rank_indices"],
                 "rank_count": rank_count,
                 "tasklets_per_dpu": tasklets,
                 "startup_resource_admission_passed": True,
-                "execution_resource_admission_passed": True,
                 "kernel_policy": KERNEL_POLICY,
                 "kernel_implementation_id": KERNEL_IMPLEMENTATION,
             },
             "sample execution provenance",
         )
         _require_exact(
-            facts,
+            terminal,
             {
                 "observed_rank_count": rank_count,
                 "observed_tasklets_per_dpu": tasklets,
@@ -490,6 +569,8 @@ def inspect(root: Path, *, kind: str, expected_source: str) -> dict[str, Any]:
         )
         if facts.get("physical_plan_id") != identities.get("physical_plan_id"):
             raise ValueError("sample physical plan identity does not match execution facts")
+        if facts.get("logical_plan_id") != identities.get("logical_plan_id"):
+            raise ValueError("sample logical plan identity does not match execution facts")
         if spec["target"] == "physical_hardware":
             _require_exact(
                 facts,

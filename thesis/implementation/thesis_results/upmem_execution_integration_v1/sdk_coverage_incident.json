@@ -1,0 +1,47 @@
+{
+  "incident": "execution_integration_sdk_initial_matrix_coverage",
+  "execution_source": "09e19e0713517a40c2f74e46641f6bd50ad928f4",
+  "run_id": "17ecfa82-bc22-4d77-96bf-5baa2c17d1eb",
+  "experiment_id": "756abbfdc169c6fbe11a6072d6bf70579a8eb4eea67da6d223af0792c474a854",
+  "canonical_status": "completed",
+  "successful_samples": 14,
+  "successful_sessions": 14,
+  "failed_samples": 0,
+  "unsupported_samples": 0,
+  "all_policy_replay_passed": true,
+  "all_session_releases_verified": true,
+  "hardware_execution": false,
+  "fallback": false,
+  "integration_gate_accepted": false,
+  "classification": "qualification_inspector_and_matrix_coverage_defect",
+  "finding": "Bell2 and Stress4 place all work on one DPU even when three or four DPUs are allocated. The initial inspector incorrectly required full allocation utilization for every correctness case.",
+  "runtime_defect_inferred_from_this_incident": false,
+  "sdk_provenance_caveat": {
+    "explicit_preflight_sdk_version": "2023.1.0",
+    "historical_manifest_sdk_label": "0.29.1",
+    "cause": "CLI used dpu-pkg-config --version, which reports the pkg-config tool version.",
+    "correction": "Use dpu-pkg-config --modversion dpu for new environment and preflight facts. Do not rewrite historical raw manifests."
+  },
+  "correction": {
+    "sdk_cells": 14,
+    "physical_cells": 7,
+    "partial_wave_case": "Bell2",
+    "multi_dpu_work_case": {"name": "quantization_stress", "n_qubits": 14, "repeat_layers": 2},
+    "selection_used_physical_timing": false,
+    "software_geometry": {
+      "stress_sizes_6_8_10_12_max_stage_work_units": 1,
+      "stress14_max_stage_work_units_both_policies": 4,
+      "stress14_active_dpus_at_4d_both_policies": [0, 1, 2, 3]
+    },
+    "gate": "Reconstruct exact plans, bind scientific identities, and compare active DPU IDs and counts with planned placements. Require full activity for Stress14 and exact planned partial activity for Bell2.",
+    "new_experiment_labels": ["upmem-execution-integration-sdk-v2", "upmem-execution-integration-physical-v2"]
+  },
+  "retention": {
+    "remote_stage": "safari-baguette1:/home/tkazulak/evidence/upmem-execution-integration-09e19e0/sdk",
+    "local_stage_relative_to_implementation": "runs/eth/safari-baguette1/09e19e0713517a40c2f74e46641f6bd50ad928f4/execution-integration-v1/sdk-stage",
+    "relative_sha256sums_verified_remotely_and_locally": true,
+    "raw_observations_modified": false,
+    "raw_observations_replaced_or_spliced": false
+  },
+  "disposition": "Retain as an auditable SDK coverage probe. Use a newly frozen corrected integration matrix and source for the next full gate. No physical performance claim or allocation-incident claim follows from this record."
+}
