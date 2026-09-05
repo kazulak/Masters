@@ -3,18 +3,22 @@
 ## Objective and Sequence
 
 The governing plan is `thesis/upmem-system-and-path-optimization-plan.md`.
-The full objective remains integration, shape attribution, one useful kernel
-specialization with dispatch and matched ablations, execution-profile freeze,
-bounded physical-feedback path search, independent confirmation, untouched
-testing, and archived release. This document does not redefine completion as
-software integration alone.
+The full objective remains integration, fixed-path host/shape attribution,
+bounded GO/NO-GO gates for complex batching, explicit CPU placement and one
+further measured improvement in a shared float32/int8 system, useful
+tasklet/DPU scaling, execution-profile freeze, bounded physical-feedback
+path search, independent confirmation,
+untouched testing, and archived release. Optional residency and multi-rank
+probes are independently gated, not prerequisites for the final path study.
+The revised execution-phase effort cap is ten focused days excluding hardware
+queues. This document does not redefine completion as software integration alone.
 
 | Phase | Current state | Acceptance evidence still required |
 | --- | --- | --- |
-| A: integrate numerics and path infrastructure | Histories integrated; qualification in progress | Full pinned tests, exact-head CI, SDK matrix, small physical correctness matrix and retained evidence |
-| B: shape census and kernel system | Not started | Fixed development paths, shape/cost attribution, generic plus one useful specialization, deterministic physical dispatch, matched ablations and system freeze |
-| Optional ATiM probe | Primary-source boundary review complete; no code executed | At most one engineering day and 32 configurations; emitted-code and full-route qualification, or a documented no-go |
-| Optional second kernel or CPU placement | Deferred pending measured need | A distinct bottleneck and bounded independent evidence |
+| A: integrate numerics and path infrastructure | `b921b88`: published; 1,088 strict-SDK tests, Ruff, exact-head CI and corrected 14-cell ETH SDK gate passed | Seven-cell physical correctness matrix, verified evidence retention and adoption |
+| B: shared execution system | Not started | Fixed development paths, host/shape census, separate batching/placement/improvement decisions, both-policy qualification for retained mechanisms, useful scaling and system freeze |
+| Optional ATiM probe | Primary-source boundary review complete; no code executed | At most one day within the shared optional allowance and 32 configurations; emitted-code and full-route qualification, or a documented no-go |
+| Optional residency or multi-rank probe | Not started; off the critical path | A distinct measured bottleneck, both-policy correctness, bounded independent evidence and no duplicate runtime |
 | C: final-system path study | Not started | Frozen system, named split, round manifests, fixed query/time budget, paired controls, fitting and profile freeze |
 | Confirmation and untouched tests | Not started | Separate confirmation and final-test raw evidence without retuning |
 | Closure | Not started | Main adoption after gates, tags, two verified evidence copies, release verification and standalone export |
@@ -30,6 +34,49 @@ software integration alone.
 - Integration preserves both histories; released commits and tags are not rewritten.
 - The separate parallel-runtime-hardening branch is not silently included in
   these two merges. Newly exposed correctness defects require explicit review.
+
+## Qualified Execution Checkpoint
+
+The immutable Phase A execution source is
+`b921b8804e324da75222354ee2f4df41e770b75c`. Its hosted CI run is
+[33951186529](https://github.com/kazulak/Masters/actions/runs/33951186529).
+The local strict-SDK suite passed 1,088 tests with zero failures, errors or
+skips. The corrected ETH SDK experiment is
+`9c365d1d4126e16cf4f832bfc54cbd2ce1574cb49f81bd69adf5f8c2eb57eacb`,
+run `12b8f8fd-ea98-4ba9-9de4-c28dca5a0bd9`: 14 successful samples and
+sessions, all policy replays passed, no fallback. Six float32 samples passed
+full-precision accuracy; eight int8 samples remain explicitly unqualified
+under that accuracy criterion. Stress14 used every planned DPU; Bell2's
+intentional idle slots matched its exact plan.
+
+Retained archives and outer SHA-256 values:
+
+- `software-b921b88.tar.gz`:
+  `f17ddbd4e8986a889e0fbb7741d58e6497b3a29d16b014f0d8b8636a4a0be107`.
+- `sdk-correctness-b921b88.tar.gz`:
+  `a52b7baaee95fb9397d3a5f7c35b365943ab65df5fcfa01d51ca70a285652bfe`.
+
+Both were independently copied, safely extracted and checksum-verified
+locally and on ETH. Canonical and strict SDK inspection also passed on the
+extracted copies. Raw evidence remains under the ignored local
+`runs/eth/safari-baguette1/b921b8804e324da75222354ee2f4df41e770b75c/execution-integration-v1/`
+and remote `/home/tkazulak/evidence/upmem-execution-integration-b921b88/`.
+The earlier `09e19e0` coverage probe remains preserved separately.
+
+The missing temporary integration worktree was restored from its committed
+branch at `/home/tom/repos/Masters/.agent-work-execution-integration-v1`.
+Roadmap-only descendants do not replace the qualified execution source.
+Keep the remote execution checkout at the exact clean `b921b88` source for
+the pending, unchanged seven-cell gate; do not rerun software or SDK simply
+because the roadmap changed. A production or experiment-definition change
+requires a new execution identity and affected qualification.
+
+At the fresh read-only preflight on 5 September 2026, 09:31 UTC, the remote
+source was clean and exact but all ranks were owned while another user's
+`gwfa_host` ran. No physical attempt was launched and no rank was taken.
+The next action remains a fresh bounded hardware admission check, not kernel
+development or the superseded 192-attempt calibration. No main merge, tag
+or release is implied by this checkpoint.
 
 The automatic overlap resolution preserves explicit simulator selection and
 simulator virtual-rank handling while hardware admission still requires one
