@@ -49,8 +49,8 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | --- | --- | --- |
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Experimental one-launch four-product DPU target; host wiring and specialization pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
-| P3 DAG waves | Pure scheduler implemented/tested; native execution not wired | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
+| P2 kernels | Experimental kernel and persistent-host dispatch tested; Python executor wiring and specialization pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P3 DAG waves | Pure scheduler and mixed-operation native launch tested separately; TN runtime composition pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
@@ -97,15 +97,15 @@ little-endian bytes with operation/launch/tile identity and eight bounded plane
 descriptors; the declared completion layout is 72 bytes. Python and C reject
 unknown selectors, invalid resources, corrupt geometry, reserved fields,
 unaligned/overlapping regions and overflow before MRAM access. The C header also
-passes DPU-compiler syntax checks. This is not yet a production v5 runtime:
-operation tables, envelope digests and native host integration remain required.
+passes DPU-compiler syntax checks. The prepared-cohort integration below adds
+operation tables, envelope digests and native host dispatch. Python whole-DAG
+execution and evidence integration are still required before production use.
 
 The 59 focused control tests include Python/C layout, native corruption
 rejection, idle controls, explicit non-contiguous spans, and the existing int8
 component accumulation bound. Kernels must dereference validated spans rather
-than assume canonical offsets. Whole-wave operation tables, payload hashes and
-runtime completion correlation remain integration gates, not claims made by the
-standalone codec.
+than assume canonical offsets. The standalone control codec alone does not prove
+operation-table binding, payload hashing or whole-runtime completion correlation.
 
 The independent source audit confirmed that fusion needs `2A + 2B + 4C`
 aligned MRAM bytes. A current legal float32 tile `(M,N,K)=(128,256,256)`
@@ -180,8 +180,9 @@ retained only as diagnostic information. Even a pending record with all four bit
 set cannot satisfy successful terminal correlation.
 
 The new kernel is not selected by public runtime configuration. Operation-table
-identity, input digest/scale binding, completion correlation in the native host,
-and packed transport integration remain mandatory. Host reconstruction must
+identity, input digest/scale binding and native completion checks are implemented
+in the experimental prepared-cohort path. Whole-runtime integration remains
+mandatory. Host reconstruction must
 retain original lane-major and K-chunk accumulation order when fused outputs
 arrive wave-major. Do not interleave lane reductions simply because products
 arrive together. A hard DPU/SDK fault can still prevent completion retrieval;
@@ -191,6 +192,70 @@ in this experimental target. Physical DPU-index ownership is deliberately a host
 gate: the kernel checks range and echoes the supplied index but cannot establish
 the host's enumeration mapping. Production dispatch must call admission with the
 actual selected DPU index and correlate every completion before publishing data.
+
+### Prepared-Cohort Native Dispatch
+
+The existing persistent host accepts experimental `--wave-v5` and
+`SUBMIT_PACKED_WAVES <session-root-basename> <sha256>`. Each process selects exactly
+one protocol; the accepted default remains v4 during the bounded integration/A-B
+period. Retire the superseded active path after parity and adoption, not before
+physical qualification. No second native host or Python thread scheduler was added.
+
+The private executable envelope contains a 136-byte little-endian header,
+112-byte operation records, 160-byte dense wave-major/DPU-major tile records and
+one input blob. It binds physical-plan and DPU-binary hashes, node/contract hashes,
+canonical geometry, shared numeric scales, output offsets, invocation identities
+and all four input-plane bytes through a submitted whole-file SHA-256. Controls
+remain the existing 144-byte v5 records. This is a lowering of `UpmemPlan`, not a
+new planning model. Native dispatch does not perform DAG dependency analysis.
+
+Python/C reject geometry overflow, overlapping outputs, duplicate identities,
+invalid padding/nonfinite float data/asymmetric int8 values, and DPU group changes
+within a cohort. Wave/request IDs increase within each envelope; envelope and
+request sequences increase across the session. Logical wave/tile IDs may recur in
+a later execution with new request IDs. A global tile-ID exclusion cache would
+incorrectly prohibit legitimate prepared-plan reuse and is intentionally absent.
+
+All request data is validated before its SDK transfers or launches. The existing
+session allocation and executable load happen at startup, before dynamic inputs
+exist. Required symbols and `WAVE_TASKLETS` are checked before READY; wrong
+executables/tasklet builds release the allocation and fail startup. Do not claim
+that request validation precedes persistent session allocation.
+
+The native reader uses a nonblocking, no-symlink regular-file open and one owned
+snapshot, with a 512-MiB per-envelope admission limit. This is a parser/host
+allocation policy, not a DPU geometry or complete-host-liveness guarantee. An
+oversized cohort is rejected, not silently retiled or routed to CPU. The snapshot
+is hashed before use, preventing file truncation/mutation from changing validated
+bytes during execution. One reusable 256-KiB output buffer bounds collection
+scratch. Reported snapshot/payload/control/output-buffer byte counts expose the
+copy cost; do not claim it disappeared. Future full-route memory admission must
+include Python inputs, encoded planes, the packed blob and this native snapshot.
+
+One synchronous set launch executes each subwave. Disjoint DPU groups can carry
+different operations/geometries, with explicit idle controls in tail waves.
+The host validates every completion and writes one deterministic result stream:
+72-byte completion followed by that slot's logical product bytes, without MRAM
+padding. Responses retain file hash, completed-wave/result counts and failing
+wave/DPU/operation/product facts. A failure stops the session, preserves available
+prefix evidence, ignores later queued submissions and releases once. The stream
+is not an atomic transaction and no completed work is retried automatically.
+
+The focused gates cover 39 Python/native codec checks and 22 persistent-host SDK
+checks: T3/T7/T8/T12/T24, float32/int8, two independent operations on three DPUs,
+partial waves, repeated invocations, exact product/completion bytes, transfer
+counts, malformed/replayed envelopes, wrong binaries, FIFO/symlink/oversize input,
+and injected second-wave failure. Independent review found no remaining native
+correctness blocker within this scope. The whole `session.run_once()` DAG route
+still needs exact scheduled-unit coverage, tensor ownership, completion/reduction
+and result publication integration. These tests are not a physical DAG speedup.
+
+Local SDK development qualification uses **2025.1.0**, not ETH's frozen
+**2023.1.0** toolchain. The previous clean kernel checkpoint `412fc3c5fac70fdb0e30688b643ab6caf38502d6`
+passed 1,258 local strict tests and hosted CI `33992817366`. Its portable local
+qualification archive has SHA-256
+`e960b14fe20a8cd59bdff20f6abe7d75e5f0002a012470e9e2dedd9d5a2af276`.
+ETH-toolchain qualification and physical acceptance are separate pending gates.
 
 ## Budget and Preregistration
 
@@ -247,8 +312,10 @@ source identities separate. Never reconstruct missing raw observations.
 
 At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
-Current bounded work is the experimental one-launch kernel and completion codec.
-Next: wire the admitted operation/control/response contract into the existing
-native host, then qualify the geometry specialization and genuine DAG launches.
+Current bounded work is the prepared-cohort encoder and native host dispatch.
+Next: connect the existing Python session lifecycle and whole-DAG executor to the
+admitted cohort/result contract; verify exact `UpmemPlan` work coverage and
+lane-major/K-chunk reconstruction. Then qualify the geometry specialization and
+genuine full-TN DAG launches.
 The pure scheduler alone is not runtime DAG concurrency. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.

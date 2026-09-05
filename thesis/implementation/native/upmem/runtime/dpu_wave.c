@@ -20,6 +20,7 @@
 __mram_noinit uint8_t WAVE_MRAM[UPMEM_WAVE_MRAM_BYTES];
 __host upmem_wave_control_t WAVE_CONTROL;
 __host upmem_wave_completion_t WAVE_COMPLETION;
+__host uint32_t WAVE_TASKLETS = NR_TASKLETS;
 static volatile int wave_valid;
 static perfcounter_t start_cycles;
 

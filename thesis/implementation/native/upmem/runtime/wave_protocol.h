@@ -85,6 +85,19 @@ typedef struct __attribute__((packed)) {
     uint32_t failing_product;
 } upmem_wave_completion_t;
 
+static inline int upmem_wave_completion_success(const upmem_wave_completion_t *r,
+        const upmem_wave_control_t *c) {
+    const uint32_t products = c->flags == UPMEM_WAVE_IDLE ? 0u :
+        (c->kernel == UPMEM_WAVE_KERNEL_REAL_PANEL ? 1u : 4u);
+    return r->magic == UPMEM_WAVE_COMPLETION_MAGIC && r->version == UPMEM_WAVE_VERSION &&
+        r->status == UPMEM_WAVE_COMPLETED && r->dpu_id == c->dpu_id &&
+        r->operation_index == c->operation_index && r->wave_id == c->wave_id &&
+        r->request_sequence == c->request_sequence && r->tile_id == c->tile_id &&
+        r->completed_product_mask == ((1u << products) - 1u) &&
+        r->processed_elements == (uint64_t)c->m * c->n * products &&
+        r->failure_stage == UPMEM_WAVE_FAILURE_NONE && r->failing_product == UPMEM_WAVE_NO_PRODUCT;
+}
+
 _Static_assert(sizeof(upmem_wave_span_t) == 8u, "wave span ABI drift");
 _Static_assert(sizeof(upmem_wave_control_t) == 144u, "wave control ABI drift");
 _Static_assert(sizeof(upmem_wave_completion_t) == 72u, "wave completion ABI drift");

@@ -16,6 +16,7 @@
 
 #include "plan.h"
 #include "operation_envelope.h"
+#include "wave_envelope.h"
 #include "simplepim_provider.h"
 
 #ifndef NR_TASKLETS
@@ -60,6 +61,10 @@ static uint64_t v4_last_request_sequence = 0u;
 static int v4_have_request_sequence = 0;
 static uint64_t v4_last_operation_sequence = 0u;
 static int v4_have_operation_sequence = 0;
+static int wave_mode = 0;
+static char wave_binary_sha256[65];
+static unsigned char wave_plan_digest[32];
+static int wave_have_plan = 0;
 
 static const char *v4_target_requested(void) {
     return v4_simulator_target ? "simulator" : "hardware";
@@ -176,17 +181,17 @@ static void v4_emit_ready(
     fputs("\",\"backend_family\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_BACKEND_FAMILY, stdout);
     fputs("\",\"profile\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_M5_PROFILE, stdout);
+    fputs(wave_mode ? "prepared_wave_v1" : EXECUTION_PLAN_V4_NATIVE_M5_PROFILE, stdout);
     fputs("\",\"abi\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_ABI, stdout);
+    fputs(wave_mode ? "wave_control_v5" : EXECUTION_PLAN_V4_NATIVE_ABI, stdout);
     fputs("\",\"session_protocol\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_SESSION, stdout);
+    fputs(wave_mode ? "prepared_wave_session_v1" : EXECUTION_PLAN_V4_NATIVE_SESSION, stdout);
     fputs("\",\"request_transport\":\"", stdout);
-    fputs("packed_operation_v1", stdout);
+    fputs(wave_mode ? "packed_wave_v1" : "packed_operation_v1", stdout);
     fputs("\",\"dispatch_mode\":\"", stdout);
     fputs(EXECUTION_PLAN_V4_NATIVE_DISPATCH, stdout);
     fputs("\",\"kernel_identity\":\"", stdout);
-    fputs(EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
+    fputs(wave_mode ? "dpu_panel_dispatch_v5_v1" : EXECUTION_PLAN_V4_NATIVE_KERNEL, stdout);
     fputs("\",\"execution_class\":\"", stdout);
     fputs(v4_execution_class(), stdout);
     fputs("\",\"target_requested\":\"", stdout);
@@ -662,8 +667,204 @@ static int execute_packed_operation(
     return rc;
 }
 
+static int verify_wave_binary(struct dpu_program_t *program, uint32_t tasklets) {
+    const char *names[] = {"WAVE_CONTROL", "WAVE_COMPLETION", "WAVE_MRAM", "WAVE_TASKLETS"};
+    const uint32_t sizes[] = {sizeof(upmem_wave_control_t), sizeof(upmem_wave_completion_t),
+        UPMEM_WAVE_MRAM_BYTES, sizeof(uint32_t)};
+    struct dpu_symbol_t symbol;
+    for (unsigned i = 0; i < 4; ++i)
+        if (dpu_get_symbol(program, names[i], &symbol) != DPU_OK || symbol.size != sizes[i]) return 1;
+    struct dpu_set_t dpu;
+    DPU_FOREACH(v4_provider.set, dpu) {
+        uint32_t actual = 0;
+        if (dpu_copy_from(dpu, "WAVE_TASKLETS", 0, &actual, sizeof(actual)) != DPU_OK ||
+                actual != tasklets) return 1;
+    }
+    return 0;
+}
+
+static int execute_wave_envelope(const char *root, const char *name, const char *digest,
+        uint32_t dpus, uint32_t tasklets, uint32_t timeout_s) {
+    upmem_wave_envelope_t envelope = {.fd = -1};
+    char *message = NULL;
+    const char *failure = NULL;
+    FILE *output = NULL;
+    unsigned char *output_buffer = NULL;
+    uint32_t output_buffer_bytes = 0;
+    char output_name[96] = {0}, output_path[PATH_MAX] = {0}, output_sha256[65] = {0};
+    uint64_t completed_waves = 0, completed_results = 0, launches = 0;
+    uint32_t failed_dpu = UINT32_MAX, failed_operation = UINT32_MAX;
+    upmem_wave_completion_t failed_completion = {0};
+    int have_failed_completion = 0;
+    int have_output = 0;
+    v4_request_metrics_t metrics = {0};
+    const double started = now_s();
+    if (upmem_wave_envelope_open(root, name, digest, wave_binary_sha256, dpus, tasklets,
+            &envelope, &message)) { failure = "wave_envelope_failed"; goto done; }
+    upmem_wave_tile_t first;
+    upmem_wave_envelope_tile(&envelope, 0, &first);
+    if ((v4_have_operation_sequence && envelope.sequence <= v4_last_operation_sequence) ||
+            (v4_have_request_sequence && first.control.request_sequence <= v4_last_request_sequence) ||
+            (wave_have_plan && memcmp(wave_plan_digest, envelope.data+72, 32))) {
+        failure = "wave_identity_failed";
+        v4_error(&message, "wave session plan changed or sequence replay detected");
+        goto done;
+    }
+    memcpy(wave_plan_digest, envelope.data+72, 32); wave_have_plan = 1;
+    v4_last_operation_sequence = envelope.sequence; v4_have_operation_sequence = 1;
+    snprintf(output_name, sizeof(output_name), "wave-result-%020llu.bin",
+        (unsigned long long)envelope.sequence);
+    if (snprintf(output_path, sizeof(output_path), "%s/%s", root, output_name) >= (int)sizeof(output_path)) {
+        failure = "output_manifest_failed"; goto done;
+    }
+    int fd = open(output_path, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, 0600);
+    if (fd < 0) { failure = "output_manifest_failed"; goto done; }
+    output = fdopen(fd, "wb");
+    if (!output) { close(fd); unlink(output_path); failure = "output_manifest_failed"; goto done; }
+    have_output = 1;
+    output_buffer = malloc(256u * 256u * sizeof(uint32_t));
+    if (!output_buffer) { failure = "host_allocation_failed"; goto done; }
+    output_buffer_bytes = 256u * 256u * sizeof(uint32_t);
+    size_t cursor = envelope.payload_offset;
+    for (uint32_t w = 0; w < envelope.wave_count; ++w) {
+        upmem_wave_tile_t tiles[UPMEM_WAVE_MAX_DPUS];
+        struct dpu_set_t dpu;
+        uint32_t d;
+        double section = now_s();
+        DPU_FOREACH(v4_provider.set, dpu, d) {
+            upmem_wave_envelope_tile(&envelope, (uint64_t)w * dpus + d, &tiles[d]);
+            const upmem_wave_control_t *c = &tiles[d].control;
+            failed_dpu = d; failed_operation = c->operation_index;
+            if (v4_interrupted || !upmem_wave_control_valid(c, d, tasklets)) {
+                failure = v4_timeout ? "kernel_timeout" : "wave_identity_failed"; break;
+            }
+            if (dpu_copy_to(dpu, "WAVE_CONTROL", 0, c, sizeof(*c)) != DPU_OK) {
+                failure = "argument_transfer_failed"; break;
+            }
+            metrics.h2d_bytes += sizeof(*c);
+            for (unsigned plane = 0; plane < 4; ++plane) {
+                const upmem_wave_span_t span = c->planes[plane];
+                if (span.length && dpu_copy_to(dpu, "WAVE_MRAM", span.offset,
+                        envelope.data+cursor, span.length) != DPU_OK) {
+                    failure = "argument_transfer_failed"; break;
+                }
+                cursor += span.length; metrics.h2d_bytes += span.length;
+            }
+            if (failure) break;
+        }
+        metrics.h2d_time_s += now_s() - section;
+        if (failure) break;
+        failed_dpu = failed_operation = UINT32_MAX;
+        v4_last_request_sequence = tiles[0].control.request_sequence;
+        v4_have_request_sequence = 1;
+        section = now_s();
+        alarm(timeout_s);
+        dpu_error_t launched = dpu_launch(v4_provider.set, DPU_SYNCHRONOUS);
+        alarm(0);
+        metrics.launch_time_s += now_s() - section;
+        ++launches;
+        if (launched != DPU_OK || v4_interrupted || v4_timeout) {
+            failure = v4_timeout ? "kernel_timeout" : "kernel_launch_failed"; break;
+        }
+        DPU_FOREACH(v4_provider.set, dpu, d) {
+            const upmem_wave_control_t *c = &tiles[d].control;
+            upmem_wave_completion_t completion;
+            failed_dpu = d; failed_operation = c->operation_index;
+            section = now_s();
+            dpu_error_t copied = dpu_copy_from(dpu, "WAVE_COMPLETION", 0,
+                &completion, sizeof(completion));
+            metrics.d2h_time_s += now_s() - section;
+            metrics.d2h_bytes += sizeof(completion);
+            if (copied != DPU_OK) { failure = "result_transfer_failed"; break; }
+            if (!upmem_wave_completion_success(&completion, c)) {
+                failed_completion = completion; have_failed_completion = 1;
+                failure = "wave_completion_failed"; break;
+            }
+            section = now_s();
+            if (fwrite(&completion, 1, sizeof(completion), output) != sizeof(completion))
+                failure = "output_manifest_failed";
+            metrics.output_time_s += now_s() - section;
+            if (failure) break;
+            for (unsigned plane = 4; plane < UPMEM_WAVE_PLANE_COUNT; ++plane) {
+                const upmem_wave_span_t span = c->planes[plane];
+                if (!span.length) continue;
+                section = now_s();
+                copied = dpu_copy_from(dpu, "WAVE_MRAM", span.offset, output_buffer, span.length);
+                metrics.d2h_time_s += now_s() - section;
+                metrics.d2h_bytes += span.length;
+                if (copied != DPU_OK) failure = "result_transfer_failed";
+                else {
+                    const size_t live = (size_t)c->m * c->n * sizeof(uint32_t);
+                    section = now_s();
+                    if (fwrite(output_buffer, 1, live, output) != live) failure = "output_manifest_failed";
+                    metrics.output_time_s += now_s() - section;
+                }
+                if (failure) break;
+            }
+            if (failure) break;
+            ++completed_results;
+        }
+        if (failure) break;
+        ++completed_waves;
+        failed_dpu = failed_operation = UINT32_MAX;
+    }
+done:
+    free(output_buffer);
+    if (v4_interrupted && !failure) failure = v4_timeout ? "kernel_timeout" : "kernel_launch_failed";
+    if (output) {
+        if (fclose(output) && !failure) failure = "output_manifest_failed";
+        output = NULL;
+        if (execution_plan_sha256_file(output_path, output_sha256) && !failure)
+            failure = "output_manifest_failed";
+    }
+    metrics.total_route_time_s = now_s() - started;
+    printf("{\"event\":\"WAVE_RESPONSE\",\"status\":\"%s\",\"failure_stage\":",
+        failure ? "failed" : "completed");
+    json_string(stdout, failure);
+    fputs(",\"error\":", stdout); json_string(stdout, message ? message : failure);
+    printf(",\"sequence\":%llu,\"completed_wave_count\":%llu,\"completed_result_count\":%llu,"
+        "\"launch_count\":%llu,\"failed_wave_index\":",
+        (unsigned long long)envelope.sequence, (unsigned long long)completed_waves,
+        (unsigned long long)completed_results, (unsigned long long)launches);
+    if (failure && envelope.data && completed_waves < envelope.wave_count)
+        printf("%llu", (unsigned long long)completed_waves);
+    else fputs("null", stdout);
+    fputs(",\"failed_dpu_id\":", stdout);
+    if (failed_dpu != UINT32_MAX) printf("%u", failed_dpu); else fputs("null", stdout);
+    fputs(",\"failed_operation_index\":", stdout);
+    if (failed_operation != UINT32_MAX) printf("%u", failed_operation); else fputs("null", stdout);
+    fputs(",\"failed_completion_mask\":", stdout);
+    if (have_failed_completion) printf("%u", failed_completion.completed_product_mask); else fputs("null", stdout);
+    fputs(",\"failed_completion_status\":", stdout);
+    if (have_failed_completion) printf("%u", failed_completion.status); else fputs("null", stdout);
+    fputs(",\"failed_completion_stage\":", stdout);
+    if (have_failed_completion) printf("%u", failed_completion.failure_stage); else fputs("null", stdout);
+    fputs(",\"failed_product\":", stdout);
+    if (have_failed_completion && failed_completion.failing_product != UPMEM_WAVE_NO_PRODUCT)
+        printf("%u", failed_completion.failing_product); else fputs("null", stdout);
+    fputs(",\"response_path\":", stdout); json_string(stdout, have_output ? output_name : NULL);
+    fputs(",\"response_sha256\":", stdout); json_string(stdout, *output_sha256 ? output_sha256 : NULL);
+    printf(",\"h2d_bytes\":%llu,\"d2h_bytes\":%llu,\"h2d_time_s\":%.9f,"
+        "\"kernel_time_s\":%.9f,\"d2h_time_s\":%.9f,\"output_time_s\":%.9f,"
+        "\"total_route_time_s\":%.9f,\"allocated_dpu_count\":%u,\"tasklets_per_dpu\":%u,"
+        "\"cpu_fallback_used\":false,\"target_observed\":",
+        (unsigned long long)metrics.h2d_bytes, (unsigned long long)metrics.d2h_bytes,
+        metrics.h2d_time_s, metrics.launch_time_s, metrics.d2h_time_s,
+        metrics.output_time_s, metrics.total_route_time_s, dpus, tasklets);
+    json_string(stdout, v4_target_observed());
+    printf(",\"envelope_bytes\":%llu,\"native_snapshot_bytes\":%llu,"
+        "\"input_payload_bytes\":%llu,\"operation_count\":%u,\"control_count\":%llu,"
+        "\"native_output_buffer_bytes\":%u",
+        (unsigned long long)envelope.size, (unsigned long long)envelope.size,
+        (unsigned long long)(envelope.size - envelope.payload_offset), envelope.operation_count,
+        (unsigned long long)envelope.control_count, output_buffer_bytes);
+    fputs("}\n", stdout); fflush(stdout);
+    upmem_wave_envelope_close(&envelope); free(message);
+    return failure ? 1 : 0;
+}
+
 static void v4_usage(const char *program) {
-    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N]\n", program);
+    fprintf(stderr, "usage: %s --target hardware|simulator --session-root DIR [--rank-path /dev/dpu_rankN] --dpus N --tasklets N --initialization-binary PATH --dpu-binary PATH [--timeout-s N] [--wave-v5]\n", program);
 }
 
 int main(int argc, char **argv) {
@@ -686,6 +887,7 @@ int main(int argc, char **argv) {
         else if (strcmp(argv[index], "--initialization-binary") == 0 && index + 1 < argc) initialization_binary = argv[++index];
         else if (strcmp(argv[index], "--dpu-binary") == 0 && index + 1 < argc) dpu_binary = argv[++index];
         else if (strcmp(argv[index], "--timeout-s") == 0 && index + 1 < argc) { if (parse_u32(argv[++index], &timeout_s) != 0) return 2; }
+        else if (strcmp(argv[index], "--wave-v5") == 0) wave_mode = 1;
         else { v4_usage(argv[0]); return 2; }
     }
     (void)signal(SIGINT, v4_signal_handler);
@@ -741,9 +943,16 @@ int main(int argc, char **argv) {
         v4_emit_release();
         return 1;
     }
-    error = dpu_load(v4_provider.set, dpu_binary, NULL);
+    struct dpu_program_t *program = NULL;
+    error = dpu_load(v4_provider.set, dpu_binary, &program);
     if (error != DPU_OK) {
         v4_emit_startup_failure("binary_load_failed", "v4 DPU binary load failed");
+        v4_emit_release();
+        return 1;
+    }
+    if (wave_mode && (verify_wave_binary(program, tasklets) ||
+            execution_plan_sha256_file(dpu_binary, wave_binary_sha256))) {
+        v4_emit_startup_failure("tasklet_binary_mismatch", "v5 wave symbols or tasklet identity mismatch");
         v4_emit_release();
         return 1;
     }
@@ -757,10 +966,19 @@ int main(int argc, char **argv) {
         fields = sscanf(line, "%31s %4095s %64s %7s", command, path, digest, extra);
         if (fields == 1 &&
             strcmp(command, "CLOSE") == 0) break;
-        if (fields != 3 || strcmp(command, "SUBMIT_PACKED_OPERATION") != 0) {
+        if (fields != 3 || strcmp(command, wave_mode ? "SUBMIT_PACKED_WAVES" : "SUBMIT_PACKED_OPERATION") != 0) {
             v4_emit_startup_failure("request_manifest_failed",
+                wave_mode ? "expected SUBMIT_PACKED_WAVES <session-basename> <sha256> or CLOSE" :
                 "expected SUBMIT_PACKED_OPERATION <safe-relative-envelope> <sha256> or CLOSE");
             rc = 1;
+            if (wave_mode) break;
+            continue;
+        }
+        if (wave_mode) {
+            if (execute_wave_envelope(root_real, path, digest, dpus, tasklets, timeout_s)) {
+                rc = 1;
+                break;
+            }
             continue;
         }
         if (execute_packed_operation(root_real, path, digest, dpus, tasklets, timeout_s) != 0) {
