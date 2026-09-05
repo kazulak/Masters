@@ -56,6 +56,11 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
 
+The initial v2 documentation/budget checkpoint `f07e7d98fb81b533e8b669016cc9b7913c63aa37`
+passed 1,114 local tests with strict SDK requirements enabled, Ruff, and hosted
+CI run `33989762666`. This qualification does not cover subsequent uncommitted
+kernel/scheduler work or establish physical acceptance.
+
 Software work may proceed before P0 hardware access; no downstream physical
 campaign may bypass that gate. Do not launch the superseded 192-attempt path
 calibration. No old pilot medians or lost raw archives become final-system data.
@@ -83,6 +88,33 @@ current tile/reduction geometry: non-fitting fusion cases take the explicit
 generic UPMEM policy. Do not silently retile or combine complex outputs in core.
 Resident segments additionally require complete local reductions, compatible
 layouts, bounded simultaneous storage and exact policy preservation.
+
+### Initial Native Boundary Work
+
+An inactive private v5 control codec and C validation helper are under test in
+`wave_protocol.py` and `wave_protocol.h`. Controls are 144 explicitly
+little-endian bytes with operation/launch/tile identity and eight bounded plane
+descriptors; the declared completion layout is 72 bytes. Python and C reject
+unknown selectors, invalid resources, corrupt geometry, reserved fields,
+unaligned/overlapping regions and overflow before MRAM access. The C header also
+passes DPU-compiler syntax checks. This is not yet an executable v5 runtime:
+operation tables, envelope digests, completion handling, kernel dispatch and
+native host integration remain required.
+
+The independent source audit confirmed that fusion needs `2A + 2B + 4C`
+aligned MRAM bytes. A current legal float32 tile `(M,N,K)=(128,256,256)`
+uses 512 KiB for one product but 1,310,720 bytes for all four products. That
+case must take the declared generic route in the initial fixed-tiling study.
+Control/completion symbols are outside the MRAM arena; do not invent additional
+MRAM reservations unless the implementation actually places metadata there.
+Preserve the distinction between KC panels accumulated within one request and
+separate K-chunk work units reduced on the host. Fusion does not add K residency.
+
+Review also identified two census/scheduling safeguards before integration:
+memory-only resident candidates are not residency-qualified; and a DAG cohort
+must not coalesce a node's existing K-wave boundaries and thereby change the
+serial control even when the frontier has width one. These are software review
+corrections, not failed physical experiments.
 
 ## Budget and Preregistration
 
