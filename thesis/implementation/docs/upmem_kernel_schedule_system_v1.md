@@ -49,8 +49,8 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | --- | --- | --- |
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Experimental kernel and persistent-host dispatch tested; Python executor wiring and specialization pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
-| P3 DAG waves | Pure scheduler and mixed-operation native launch tested separately; TN runtime composition pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
+| P2 kernels | Experimental fusion kernel connected to whole-DAG SDK execution; geometry specialization and physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
@@ -297,10 +297,59 @@ Whole-attempt/session-close accounting must include actual elapsed cleanup time.
 The independent client audit retained these timeout limitations explicitly and
 found no further identity, reentry, file-admission or partial-failure blocker.
 
-The prepared-cohort client is not yet whole-DAG execution. Its caller must still
-prove the tables cover the exact scheduled `UpmemPlan` units and preserve input
-ownership, producer readiness, lane-major/K-chunk reduction order and final tensor
-publication. Low-level byte equivalence alone cannot establish those properties.
+The client-only checkpoint did not establish whole-DAG correctness. The following
+integration supplies that caller; physical acceptance remains a separate gate.
+
+## Whole-DAG Prepared-Wave Integration
+
+`plan_upmem(..., schedule_policy="static_dag_waves_v1")` lowers the existing
+deterministic scheduler into the existing `UpmemPlan.stages`. Validation
+recomputes that exact schedule. Logical DAG identity stays unchanged; scheduled
+placement and policy enter physical-plan identity. Default serial-plan hashes
+remain unchanged. Runtime never reschedules or retile-fixes an admitted plan.
+
+Select `UpmemResources(request_transport="packed_wave_v1")` to execute prepared
+waves. The default remains the accepted packed-operation route while prototypes
+await physical decisions. A static-wave plan cannot use the old transport.
+`fuse_complex=True` enables one-launch four-product tiles only when their existing
+geometry fits the fused MRAM layout; otherwise the same tile uses four real
+launches. This is kernel dispatch, never CPU fallback. Transport, schedule,
+native ABI/binary and complex-launch policy are recorded in execution identities.
+
+`wave_work.py` checks exact tile/work-unit coverage, extents, resource slots,
+exclusive DPU-group ownership and canonical encoded operands. Whole-operand int8
+scales are established before slicing into tiles. Generic and fused results are
+reconstructed lane-major with the existing K-chunk order and CPU policy replay.
+All cohort results and reconstructions must finish before any cohort output is
+published. Host reductions then follow the existing deterministic order.
+
+Native kernel/transfer/route counters describe a cohort, not an individual node.
+They are carried on its first operation only, with explicit
+`cohort_counters_on_first_node_v1` scope; sums therefore count each launch once.
+Per-operation preparation, arithmetic products and bytes remain separately
+attributed. Idle control/completion overhead is carried only on the first node
+under `cohort_idle_overhead_on_first_node_v1`, with explicit
+`cohort_idle_h2d_bytes`/`cohort_idle_d2h_bytes`; subtract these to obtain that
+node's active traffic. This is an accounting allocation, not an operation-local
+measurement. Shared preparation extraction includes operand copies in the inner
+operation timer; whole `steady_execution_v1` already included those copies.
+No timing comparison should silently treat that inner boundary as unchanged.
+The old serial SLR feature extractor rejects static-wave plans until P5 supplies
+qualified schedule-aware costs. SDK timing is not calibration evidence.
+
+SDK tests cover full fork/join DAGs, repeated runs, split-K, sliced host reductions,
+Bell/GHZ/Stress full statevectors, float32 and shared-scale int8, T3/T7/T8/T12/T24,
+one/three/four DPUs, partial waves, and both launch policies. Injected partial
+failure preserves the cohort/operation context and prevents dependent submission
+or session reuse. Lower-level parser/native-failure tests remain required.
+Successful cohort files are removed after reconstruction and evidence capture;
+failed artifacts are retained deliberately for incident retrieval, not deleted
+as successful-work cleanup. A poisoned session cannot submit another cohort;
+the failed cohort has at most one envelope and one result file, each under its
+512-MiB cap. The campaign owner must archive these before removal. Encoded inputs,
+envelope buffers and result views
+can coexist in host memory. The existing per-envelope/result size caps are not
+a complete peak-live-host-memory bound; that remains a composition admission gate.
 
 ## Budget and Preregistration
 
@@ -357,10 +406,9 @@ source identities separate. Never reconstruct missing raw observations.
 
 At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
-Prepared-cohort encoding, native host dispatch and the Python session lifecycle
-are connected. Next: connect the whole-DAG executor to the admitted cohort/result
-contract; verify exact `UpmemPlan` work coverage and
-lane-major/K-chunk reconstruction. Then qualify the geometry specialization and
-genuine full-TN DAG launches.
-The pure scheduler alone is not runtime DAG concurrency. No final path fitting starts
+Prepared-cohort encoding, native host dispatch, session lifecycle and whole-DAG
+execution are connected with SDK correctness coverage. Next: finish the bounded
+geometry specialization and independent review, then physical fusion/DAG gates
+after P0 access. The residency/slicing probe and composition gates remain open.
+SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.

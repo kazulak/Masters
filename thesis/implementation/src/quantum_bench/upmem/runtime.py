@@ -53,6 +53,9 @@ from quantum_bench.upmem.plan import (
     validate_upmem_plan,
 )
 from quantum_bench.upmem.native_session import V4Session
+from quantum_bench.upmem.packed_wave import WaveOperation
+from quantum_bench.upmem.wave_protocol import CONTROL, COMPLETION, IDLE, FOUR_PRODUCT_PANEL
+from quantum_bench.upmem.wave_work import build_cohort_waves
 from quantum_bench.upmem.packed_operation import (
     PACKED_OPERATION_TRANSPORT,
     PackedOperation,
@@ -66,6 +69,7 @@ from quantum_bench.upmem.protocol import (
     MAX_INT32_SAFE_K,
     NUMERIC_FLOAT32,
     NUMERIC_HOST_PACKED_INT8,
+    REQUEST_TRANSPORT_PACKED_WAVE,
     V4Error,
     V4Profile,
     V4ProtocolError,
@@ -653,6 +657,38 @@ def _validate_complex_lowerings(
             )
 
 
+def _prepare_complex_operation(node, left, right, stage, numeric_policy):
+    """Shared canonicalization and whole-operand encoding for both transports."""
+    packed = _is_packed_policy(numeric_policy)
+    limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
+    materialized_left = np.array(left, copy=True, order="C")
+    materialized_right = np.array(right, copy=True, order="C")
+    if materialized_left.shape != node.left.shape or materialized_right.shape != node.right.shape:
+        raise ValueError("operand shape does not match contract node")
+    if not all(np.issubdtype(x.dtype, np.number) for x in (materialized_left, materialized_right)):
+        raise ValueError("complex execution requires numeric operands")
+    started = time.perf_counter()
+    dtype = np.float64 if packed else np.float32
+    real = lower_binary_contraction(node, np.asarray(materialized_left.real, dtype=dtype),
+                                    np.asarray(materialized_right.real, dtype=dtype), limits=limits)
+    imag = lower_binary_contraction(node, np.asarray(materialized_left.imag, dtype=dtype),
+                                    np.asarray(materialized_right.imag, dtype=dtype), limits=limits)
+    _validate_complex_lowerings(real, imag, stage, node)
+    preparation_s = time.perf_counter() - started
+    started = time.perf_counter()
+    dtype = np.complex128 if packed else np.complex64
+    encoded_left = encode_complex_tensor(
+        _complex_canonical_planes(real, imag, left=True, dtype=dtype), numeric_policy)
+    encoded_right = encode_complex_tensor(
+        _complex_canonical_planes(real, imag, left=False, dtype=dtype), numeric_policy)
+    if packed:
+        if max((chunk.k_size for chunk in real.k_chunks), default=0) > MAX_INT32_SAFE_K:
+            raise ValueError("packed int8 K chunk exceeds full-component int32 accumulation safety bound")
+        if 2 * real.canonical.k * INT8_MAX_PRODUCT > _INT64_MAX:
+            raise ValueError("packed int8 aggregate exceeds int64 full-component accumulation safety bound")
+    return real, encoded_left, encoded_right, preparation_s, time.perf_counter() - started
+
+
 def _raw_lane_fact(
     node_id: str, tile_id: str, lane: str, value: np.ndarray
 ) -> dict[str, JsonValue]:
@@ -710,12 +746,13 @@ class _RankSession:
 
 
 def _native_identity(
-    event: Mapping[str, Any], *, source: str, execution_target: str
+    event: Mapping[str, Any], *, source: str, execution_target: str,
+    request_transport: str = PACKED_OPERATION_TRANSPORT,
 ) -> dict[str, str]:
     """Read the identity emitted by native v4 code, never Python provenance."""
 
     observed: dict[str, str] = {}
-    for field, expected in native_execution_identity(execution_target).items():
+    for field, expected in native_execution_identity(execution_target, request_transport).items():
         value = event.get(field)
         if not isinstance(value, str) or not value:
             raise RuntimeError(f"{source} is missing native identity {field}")
@@ -732,13 +769,15 @@ def _agreed_native_identity(
     observations: tuple[tuple[str, Mapping[str, Any]], ...],
     *,
     execution_target: str,
+    request_transport: str = PACKED_OPERATION_TRANSPORT,
 ) -> dict[str, str]:
     """Return one identity only when every rank/event reported the same contract."""
 
     if not observations:
         raise RuntimeError("no native identity observations were recorded")
     identities = [
-        _native_identity(event, source=source, execution_target=execution_target)
+        _native_identity(event, source=source, execution_target=execution_target,
+                         request_transport=request_transport)
         for source, event in observations
     ]
     first = identities[0]
@@ -790,6 +829,8 @@ class UpmemV4Executor:
         timeout_s: float = 60.0,
         execution_target: str = EXECUTION_TARGET_PHYSICAL,
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
+        prepared_waves: bool = False,
+        fuse_complex: bool = False,
     ) -> None:
         self.session_root = Path(session_root)
         self.host_binary = Path(host_binary)
@@ -800,7 +841,13 @@ class UpmemV4Executor:
         self.tasklets_per_dpu = int(tasklets_per_dpu)
         self.timeout_s = float(timeout_s)
         self.execution_target = execution_target
-        self.request_transport = PACKED_OPERATION_TRANSPORT
+        if type(prepared_waves) is not bool or type(fuse_complex) is not bool:
+            raise ValueError("wave execution controls must be boolean")
+        if fuse_complex and not prepared_waves:
+            raise ValueError("complex launch fusion requires prepared waves")
+        self.fuse_complex = fuse_complex
+        self.request_transport = (REQUEST_TRANSPORT_PACKED_WAVE
+                                  if prepared_waves else PACKED_OPERATION_TRANSPORT)
         self.session_factory = session_factory
         self._binary_provenance = {
             **_validated_binary_provenance(
@@ -834,7 +881,7 @@ class UpmemV4Executor:
                 raise ValueError(
                     "dpu_count must be positive and divisible by rank count"
                 )
-            if self.request_transport == PACKED_OPERATION_TRANSPORT and len(self.rank_paths) != 1:
+            if len(self.rank_paths) != 1:
                 raise ValueError("packed operation transport currently requires one rank")
         elif self.rank_paths or not 1 <= self.dpu_count <= 64:
             raise ValueError(
@@ -848,11 +895,24 @@ class UpmemV4Executor:
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
-        return json.loads(json.dumps(_ACTIVE_STRATEGY_IDENTITY))
+        identity = json.loads(json.dumps(_ACTIVE_STRATEGY_IDENTITY))
+        if self.request_transport == REQUEST_TRANSPORT_PACKED_WAVE:
+            identity.update(request_transport=self.request_transport,
+                            kernel_identity="dpu_panel_dispatch_v5_v1",
+                            complex_launch_policy=("fused_when_admitted_v1" if self.fuse_complex
+                                                   else "four_real_launches_v1"))
+            kernel = next(item for item in identity["strategies"] if item["role"] == "kernel")
+            kernel.update(implementation_id="dpu_panel_dispatch_v5_v1", provider="raw_upmem_sdk",
+                          config={"abi": "wave_control_v5", "kernel": "dpu_panel_dispatch_v5_v1",
+                                  "complex_launch_policy": identity["complex_launch_policy"]})
+        return identity
 
     @property
     def strategy_config_hash(self) -> str:
-        return _ACTIVE_STRATEGY_CONFIG_HASH
+        if self.request_transport == PACKED_OPERATION_TRANSPORT:
+            return _ACTIVE_STRATEGY_CONFIG_HASH
+        return hashlib.sha256(json.dumps(self.strategy_identity, sort_keys=True,
+                                         separators=(",", ":")).encode("ascii")).hexdigest()
 
     def open_session(
         self,
@@ -900,6 +960,7 @@ class UpmemV4Executor:
                     rank_path=rank_path,
                     execution_target=self.execution_target,
                     timeout_s=remaining,
+                    request_transport=self.request_transport,
                 )
                 command_parts: list[str] = [
                     str(self.host_binary),
@@ -931,6 +992,7 @@ class UpmemV4Executor:
                     session.startup,
                     source=f"READY rank {index}",
                     execution_target=self.execution_target,
+                    request_transport=self.request_transport,
                 )
                 if time.monotonic() >= deadline:
                     raise V4ProtocolError(
@@ -983,6 +1045,7 @@ class UpmemV4Session:
         self._failed = False
         self._failure_stage: str | None = None
         self._sequence = 0
+        self._cohort_sequence = 0
         self._successful_request_count = 0
         self._active_rank_indices: set[int] = set()
         self._active_dpu_ids: set[tuple[int, int]] = set()
@@ -992,6 +1055,7 @@ class UpmemV4Session:
                 for rank in self.ranks
             ),
             execution_target=self.engine.execution_target,
+            request_transport=self.engine.request_transport,
         )
         self._response_native_identity_events: list[tuple[str, Mapping[str, Any]]] = []
         self._test_double_execution = any(
@@ -1012,11 +1076,11 @@ class UpmemV4Session:
 
     @property
     def strategy_identity(self) -> dict[str, Any]:
-        return json.loads(json.dumps(_ACTIVE_STRATEGY_IDENTITY))
+        return self.engine.strategy_identity
 
     @property
     def strategy_config_hash(self) -> str:
-        return _ACTIVE_STRATEGY_CONFIG_HASH
+        return self.engine.strategy_config_hash
 
     def execute_real(
         self,
@@ -1327,73 +1391,10 @@ class UpmemV4Session:
             raise ValueError("UPMEM session numeric mode does not match final policy")
 
         packed = policy == _NUMERIC_POLICY_INT8
-        limits = M5TileLimits.host_packed_int8() if packed else M5TileLimits.float32()
-        materialized_left = np.array(left, copy=True, order="C")
-        materialized_right = np.array(right, copy=True, order="C")
-        if materialized_left.shape != node.left.shape:
-            raise ValueError("left operand shape does not match contract node")
-        if materialized_right.shape != node.right.shape:
-            raise ValueError("right operand shape does not match contract node")
-        if not np.issubdtype(materialized_left.dtype, np.number) or not np.issubdtype(
-            materialized_right.dtype, np.number
-        ):
-            raise ValueError("complex execution requires numeric operands")
-
         started = time.perf_counter()
-        preparation_started = time.perf_counter()
-        real_lowering = lower_binary_contraction(
-            node,
-            np.asarray(
-                materialized_left.real,
-                dtype=np.float64 if packed else np.float32,
-            ),
-            np.asarray(
-                materialized_right.real,
-                dtype=np.float64 if packed else np.float32,
-            ),
-            limits=limits,
+        real_lowering, encoded_left, encoded_right, preparation_s, encode_s = (
+            _prepare_complex_operation(node, left, right, stage, numeric_policy)
         )
-        imag_lowering = lower_binary_contraction(
-            node,
-            np.asarray(
-                materialized_left.imag,
-                dtype=np.float64 if packed else np.float32,
-            ),
-            np.asarray(
-                materialized_right.imag,
-                dtype=np.float64 if packed else np.float32,
-            ),
-            limits=limits,
-        )
-        _validate_complex_lowerings(real_lowering, imag_lowering, stage, node)
-        preparation_s = time.perf_counter() - preparation_started
-
-        encode_started = time.perf_counter()
-        canonical_left = _complex_canonical_planes(
-            real_lowering,
-            imag_lowering,
-            left=True,
-            dtype=np.complex128 if packed else np.complex64,
-        )
-        canonical_right = _complex_canonical_planes(
-            real_lowering,
-            imag_lowering,
-            left=False,
-            dtype=np.complex128 if packed else np.complex64,
-        )
-        encoded_left = encode_complex_tensor(canonical_left, numeric_policy)
-        encoded_right = encode_complex_tensor(canonical_right, numeric_policy)
-        if packed:
-            max_chunk = max((chunk.k_size for chunk in real_lowering.k_chunks), default=0)
-            if max_chunk > MAX_INT32_SAFE_K:
-                raise ValueError(
-                    "packed int8 K chunk exceeds full-component int32 accumulation safety bound"
-                )
-            if 2 * real_lowering.canonical.k * INT8_MAX_PRODUCT > _INT64_MAX:
-                raise ValueError(
-                    "packed int8 aggregate exceeds int64 full-component accumulation safety bound"
-                )
-        encode_s = time.perf_counter() - encode_started
 
         waves, planned_requests = self._requests_from_work_units(
             node, real_lowering, stage.work_units
@@ -1778,6 +1779,165 @@ class UpmemV4Session:
             ),
         }
         return output, metadata, raw_lane_values, (encoded_left, encoded_right)
+
+    def _execute_cohort(self, nodes_and_inputs, *, stage, plan_sha256):
+        """Run a ready cohort, then reconstruct all its outputs before publication."""
+        self._enter_operation()
+        try:
+            if self._closed or self._failed:
+                raise V4Error("session_closed", "UPMEM session is closed or failed")
+            if self.engine.request_transport != REQUEST_TRANSPORT_PACKED_WAVE or len(self.ranks) != 1:
+                raise ValueError("cohort execution requires one prepared-wave rank")
+            if tuple(node.node_id for node, _, _ in nodes_and_inputs) != stage.node_ids:
+                raise ValueError("cohort nodes differ from its planned order")
+            started = time.perf_counter()
+            packed = self.numeric_policy == _NUMERIC_POLICY_INT8
+            lowerings, operands, preparation, operations = {}, {}, {}, []
+            for node, left, right in nodes_and_inputs:
+                node_stage = UpmemStage(stage_id=stage.stage_id, kind="contract_batch",
+                                       node_ids=(node.node_id,), work_units=tuple(
+                                           u for u in stage.work_units if u.node_id == node.node_id))
+                lowering, a, b, prep_s, enc_s = _prepare_complex_operation(
+                    node, left, right, node_stage, self.numeric_policy)
+                lowerings[node.node_id] = lowering
+                operands[node.node_id] = (a, b)
+                preparation[node.node_id] = (prep_s, enc_s)
+                canonical = lowering.canonical
+                operations.append(WaveOperation(
+                    hashlib.sha256(node.node_id.encode()).digest(),
+                    bytes.fromhex(_task_structure_hash(node)), canonical.b, canonical.m,
+                    canonical.n, canonical.k, float(a.scale), float(b.scale)))
+            build_started = time.perf_counter()
+            waves, generic_lanes = build_cohort_waves(
+                stage, lowerings, operands, dpu_count=self.engine.dpu_count,
+                tasklets=self.engine.tasklets_per_dpu, numeric_mode=int(packed),
+                request_start=self._sequence, fuse=self.engine.fuse_complex)
+            build_s = time.perf_counter() - build_started
+            self._cohort_sequence += 1
+            response = self.ranks[0].session.submit_waves(
+                plan_sha256=plan_sha256,
+                dpu_binary_sha256=bytes.fromhex(self.engine._binary_provenance["dpu_binary_sha256"]),
+                sequence=self._cohort_sequence, operations=tuple(operations), waves=waves,
+                timeout_s=self._remaining_timeout())
+            self._sequence += len(waves)
+            lane_names = ("rr", "ii", "ri", "ir")
+            partials = {node_id: {lane: {} for lane in lane_names} for node_id in stage.node_ids}
+            raw = {node_id: {} for node_id in stage.node_ids}
+            transfers = {node_id: [0, 0] for node_id in stage.node_ids}
+            idle_h2d = idle_d2h = 0
+            active = {node_id: set() for node_id in stage.node_ids}
+            fused_tiles = {node_id: 0 for node_id in stage.node_ids}
+            generic_tiles = {node_id: 0 for node_id in stage.node_ids}
+            tile_ids = {node_id: {f"{node_id}:{t.id}": t.id for t in lowering.tiles}
+                        for node_id, lowering in lowerings.items()}
+            for wave_index, (wave, results) in enumerate(zip(waves, response["results"], strict=True)):
+                for tile, products in zip(wave, results, strict=True):
+                    c = tile.control
+                    if c.flags == IDLE:
+                        idle_h2d += CONTROL.size
+                        idle_d2h += COMPLETION.size
+                        transfers[stage.node_ids[0]][0] += CONTROL.size
+                        transfers[stage.node_ids[0]][1] += COMPLETION.size
+                        continue
+                    unit = stage.work_units[c.tile_id]
+                    node_id = unit.node_id
+                    if stage.node_ids[c.operation_index] != node_id:
+                        raise ValueError("cohort result operation does not bind its planned tile")
+                    active[node_id].add((0, c.dpu_id))
+                    transfers[node_id][0] += CONTROL.size + sum(n for _, n in c.planes[:4])
+                    transfers[node_id][1] += COMPLETION.size + sum(n for _, n in c.planes[4:])
+                    lanes = lane_names if c.kernel == FOUR_PRODUCT_PANEL else (lane_names[generic_lanes[wave_index]],)
+                    if c.kernel == FOUR_PRODUCT_PANEL:
+                        fused_tiles[node_id] += 1
+                    elif generic_lanes[wave_index] == 0:
+                        generic_tiles[node_id] += 1
+                    for lane, payload in zip(lanes, products):
+                        value = np.frombuffer(payload, dtype="<i4" if packed else "<f4").reshape(c.m, c.n)
+                        local_id = tile_ids[node_id][unit.stable_tile_id]
+                        if local_id in partials[node_id][lane]:
+                            raise ValueError("cohort produced a duplicate lane/tile result")
+                        partials[node_id][lane][local_id] = value
+                        raw[node_id][f"{unit.stable_tile_id}/{lane}"] = (
+                            node_id, unit.stable_tile_id, lane, value)
+            if sum(v[0] for v in transfers.values()) != response["h2d_bytes"] or sum(
+                v[1] for v in transfers.values()) != response["d2h_bytes"]:
+                raise ValueError("cohort transfer accounting is not sample-paired")
+            outcomes = {}
+            for index, (node, _, _) in enumerate(nodes_and_inputs):
+                node_id = node.node_id
+                lowering = lowerings[node_id]
+                a, b = operands[node_id]
+                assembly_started = time.perf_counter()
+                # Assemble each complete lane in the original lowering's K order.
+                lanes = tuple(lowering.assemble(partials[node_id][lane],
+                              dtype=np.int64 if packed else np.float32) for lane in lane_names)
+                assembly_s = time.perf_counter() - assembly_started
+                decode_started = time.perf_counter()
+                output = np.array(decode_complex_products(lanes, a.scale, b.scale, self.numeric_policy),
+                                  dtype=np.complex64, copy=True, order="C")
+                output.setflags(write=False)
+                decode_s = time.perf_counter() - decode_started
+                owner = index == 0
+                h2d, d2h = transfers[node_id]
+                simulator = self.engine.execution_target == EXECUTION_TARGET_SIMULATOR
+                timing = {
+                    "preparation_s": preparation[node_id][0], "encode_s": preparation[node_id][1],
+                    "assembly_s": assembly_s, "decode_s": decode_s,
+                    "rank_response_h2d_max_sum_s": response["h2d_time_s"] if owner else 0.0,
+                    "rank_response_kernel_max_sum_s": response["kernel_time_s"] if owner else 0.0,
+                    "rank_response_d2h_max_sum_s": response["d2h_time_s"] if owner else 0.0,
+                    "rank_response_total_route_max_sum_s": response["total_route_time_s"] if owner else 0.0,
+                    "request_build_sum_s": build_s + response["host_submit_timing"]["preparation_s"] if owner else 0.0,
+                    "request_wave_wall_sum_s": response["host_submit_timing"]["total_submit_s"] if owner else 0.0,
+                }
+                metadata = {
+                    "numeric_policy": self.numeric_policy,
+                    "numeric_transport": "host_packed_int8_mram" if packed else "float32_mram",
+                    "left_scale": float(a.scale), "right_scale": float(b.scale),
+                    "saturation_real": a.saturation_real + b.saturation_real,
+                    "saturation_imag": a.saturation_imag + b.saturation_imag,
+                    "lane_order": lane_names, "lane_pass_count": 4,
+                    "active_rank_indices": (0,), "active_dpu_ids": tuple(sorted(active[node_id])),
+                    "active_rank_count": 1, "active_dpu_count": len(active[node_id]),
+                    "requested_dpu_count": self.engine.dpu_count, "allocated_dpu_count": self.engine.dpu_count,
+                    "rank_count": 1, "tasklets_per_dpu": self.engine.tasklets_per_dpu,
+                    "request_transport": self.engine.request_transport, "stage_id": stage.stage_id,
+                    "physical_stage_consumed": True, "bulk_set_launch_verified": True,
+                    "cpu_fallback_used": False, "hardware_kernel_executed": not simulator,
+                    "simulator_kernel_executed": simulator, "test_double_execution": False,
+                    "target_observed": self.engine.execution_target,
+                    "application_visible_h2d_bytes": h2d, "application_visible_d2h_bytes": d2h,
+                    "application_visible_transfer_bytes": h2d + d2h,
+                    "timing_scope": "cohort_counters_on_first_node_v1", "timing": timing,
+                    "cohort_id": stage.stage_id, "cohort_node_ids": stage.node_ids,
+                    "transfer_attribution_scope": "cohort_idle_overhead_on_first_node_v1",
+                    "cohort_idle_h2d_bytes": idle_h2d if owner else 0,
+                    "cohort_idle_d2h_bytes": idle_d2h if owner else 0,
+                    "cohort_native_launch_count": response["launch_count"] if owner else 0,
+                    "cohort_request_sha256": response["request_sha256"],
+                    "cohort_response_sha256": response["response_sha256"],
+                    "fused_tile_count": fused_tiles[node_id], "generic_tile_count": generic_tiles[node_id],
+                    "packed_operation_count": int(owner),
+                    "packed_operation_bytes": response["envelope_bytes"] if owner else 0,
+                    "packed_operation_request_count": len(waves) if owner else 0,
+                    "packed_operation_max_descriptor_count": response["control_count"] if owner else 0,
+                    "packed_operation_max_bytes": response["envelope_bytes"] if owner else 0,
+                    "packed_operation_max_payload_bytes": response["input_payload_bytes"] if owner else 0,
+                }
+                outcomes[node_id] = (output, metadata, raw[node_id], (a, b))
+            self._successful_request_count += len(waves)
+            self._active_rank_indices.add(0)
+            self._active_dpu_ids.update(slot for group in active.values() for slot in group)
+            for name in (response["request_path"], response["response_path"]):
+                (self.ranks[0].root / name).unlink()
+            outcomes[stage.node_ids[0]][1]["cohort_wall_s"] = time.perf_counter() - started
+            return outcomes
+        except BaseException as exc:
+            self._failed = True
+            self._failure_stage = str(getattr(exc, "failure_stage", "cohort_execution_failed"))
+            raise
+        finally:
+            self._leave_operation()
 
     def execute_complex(
         self,
@@ -2438,6 +2598,7 @@ class UpmemV4Session:
                 )
                 + tuple(self._response_native_identity_events),
                 execution_target=self.engine.execution_target,
+                request_transport=self.engine.request_transport,
             )
         except RuntimeError as exc:
             observed_native_identity = None
@@ -2497,7 +2658,9 @@ class UpmemV4Session:
             "strategy_config_hash": self.strategy_config_hash,
             "decomposition_strategy": _ACTIVE_MECHANISM_IDS["decomposition"],
             "placement_strategy": _ACTIVE_MECHANISM_IDS["placement"],
-            "kernel_provider": _ACTIVE_MECHANISM_IDS["kernel"],
+            "kernel_provider": ("dpu_panel_dispatch_v5_v1"
+                                if self.engine.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
+                                else _ACTIVE_MECHANISM_IDS["kernel"]),
             "reduction_provider": _ACTIVE_MECHANISM_IDS["reduction"],
             "reduction_strategy": _ACTIVE_MECHANISM_IDS["reduction"],
             "target_observed": (
@@ -2666,6 +2829,47 @@ class UpmemSession:
         finally:
             self._leave_operation()
 
+    def _session_operations(self, working, nodes):
+        engine = getattr(self._low_level, "engine", None)
+        if getattr(engine, "request_transport", None) != REQUEST_TRANSPORT_PACKED_WAVE:
+            for stage, declared in _session_stage_nodes(self._plan, nodes):
+                yield stage, declared, None
+            return
+        # The physical plan already contains the exact admitted schedule; do not remap here.
+        stages = (tuple((stage, stage.stage_id) for stage in self._plan.stages)
+                  if self._plan.schedule_policy == "static_dag_waves_v1"
+                  else tuple(_session_stage_nodes(self._plan, nodes)))
+        plan_digest = bytes.fromhex(physical_plan_id(self._plan))
+        for stage, declared in stages:
+            if stage.kind == "host_reduce":
+                yield stage, declared, None
+                continue
+            try:
+                results = self._low_level._execute_cohort(
+                    tuple((nodes[node_id], _resolve_view(nodes[node_id].left, working),
+                           _resolve_view(nodes[node_id].right, working)) for node_id in stage.node_ids),
+                    stage=stage, plan_sha256=plan_digest)
+            except Exception as exc:
+                facts = dict(self._failure_facts(set(), set()))
+                native_facts = getattr(exc, "backend_facts", None)
+                if isinstance(native_facts, Mapping):
+                    facts.update(native_facts)
+                failed_index = facts.get("failed_operation_index")
+                failed_node = (stage.node_ids[failed_index]
+                               if type(failed_index) is int and 0 <= failed_index < len(stage.node_ids)
+                               else None)
+                facts.update(plan_stage_id=declared, branch_stage_id=stage.stage_id,
+                             branch_node_id=failed_node, cohort_node_ids=stage.node_ids)
+                raise ExecutionFailed(
+                    stage=getattr(exc, "failure_stage", None) or stage.stage_id,
+                    reason=str(exc).strip() or type(exc).__name__, backend_facts=facts,
+                ) from exc
+            for node_id in stage.node_ids:
+                node_stage = UpmemStage(stage_id=f"{stage.stage_id}/{node_id}", kind="contract_batch",
+                                       node_ids=(node_id,), work_units=tuple(
+                                           u for u in stage.work_units if u.node_id == node_id))
+                yield node_stage, declared, results[node_id]
+
     def _run_once_unlocked(
         self, inputs: Mapping[str, np.ndarray]
     ) -> ExecutionSample:
@@ -2695,27 +2899,21 @@ class UpmemSession:
         declared_stage_id = "run"
         branch_node_id: str | None = None
         try:
-            for stage, declared_stage_id in _session_stage_nodes(self._plan, nodes):
+            for stage, declared_stage_id, prepared in self._session_operations(working, nodes):
                 stage_id = stage.stage_id
                 self._check_operation_deadline(started)
                 node = nodes[stage.node_ids[0]]
                 branch_node_id = node.node_id
                 if isinstance(node, ContractNode):
-                    left = _resolve_view(node.left, working)
-                    right = _resolve_view(node.right, working)
-                    core = getattr(self._low_level, "_execute_complex_core", None)
-                    if not callable(core):
-                        raise RuntimeError(
-                            "UPMEM session lacks the no-evidence complex core"
-                        )
-                    output, metadata, raw_values, encoded = core(
-                        node,
-                        left,
-                        right,
-                        stage=stage,
-                        numeric_policy=self._plan.numeric_policy,
-                        include_evidence=False,
-                    )
+                    if prepared is None:
+                        left = _resolve_view(node.left, working)
+                        right = _resolve_view(node.right, working)
+                        core = getattr(self._low_level, "_execute_complex_core", None)
+                        if not callable(core):
+                            raise RuntimeError("UPMEM session lacks the no-evidence complex core")
+                        prepared = core(node, left, right, stage=stage,
+                                        numeric_policy=self._plan.numeric_policy, include_evidence=False)
+                    output, metadata, raw_values, encoded = prepared
                     if not isinstance(metadata, Mapping):
                         raise ValueError(
                             "UPMEM operation returned non-mapping metadata"
@@ -2803,13 +3001,9 @@ class UpmemSession:
             self._check_operation_deadline(started)
         except ExecutionFailed as exc:
             failure_facts = dict(exc.backend_facts)
-            failure_facts.update(
-                {
-                    "plan_stage_id": declared_stage_id,
-                    "branch_stage_id": stage_id,
-                    "branch_node_id": branch_node_id,
-                }
-            )
+            failure_facts.setdefault("plan_stage_id", declared_stage_id)
+            failure_facts.setdefault("branch_stage_id", stage_id)
+            failure_facts.setdefault("branch_node_id", branch_node_id)
             raise ExecutionFailed(
                 stage=exc.stage,
                 reason=exc.reason,
@@ -2974,6 +3168,7 @@ class UpmemSession:
             self._terminal_facts = {
                 **terminal_facts,
                 **self._startup_resource_admission,
+                **self._execution_policy_facts(),
             }
             return self._terminal_facts
         except Exception as exc:
@@ -2996,6 +3191,17 @@ class UpmemSession:
         if time.perf_counter() - started >= self._timeout_s:
             raise TimeoutError("UPMEM operation deadline expired")
 
+    def _execution_policy_facts(self):
+        engine = getattr(self._low_level, "engine", None)
+        transport = getattr(engine, "request_transport", PACKED_OPERATION_TRANSPORT)
+        wave = transport == REQUEST_TRANSPORT_PACKED_WAVE
+        return {
+            "request_transport": transport, "schedule_policy": self._plan.schedule_policy,
+            "kernel_implementation_id": "dpu_panel_dispatch_v5_v1" if wave else _ACTIVE_MECHANISM_IDS["kernel"],
+            "complex_launch_policy": ("fused_when_admitted_v1"
+                                      if wave and engine.fuse_complex else "four_real_launches_v1"),
+        }
+
     def _failure_facts(
         self,
         active_rank_indices: set[int],
@@ -3012,6 +3218,7 @@ class UpmemSession:
             "rank_count": self._plan.topology.rank_count,
             "tasklets_per_dpu": self._plan.topology.tasklets_per_dpu,
             **self._startup_resource_admission,
+            **self._execution_policy_facts(),
         }
 
     def _backend_facts(
@@ -3094,8 +3301,11 @@ class UpmemSession:
                     else {}
                 ),
                 "rank_response_timing_scope": (
-                    "sum_of_per_request_max_rank_response_counters_v1"
+                    "cohort_counters_on_first_node_v1"
+                    if self._execution_policy_facts()["request_transport"] == REQUEST_TRANSPORT_PACKED_WAVE
+                    else "sum_of_per_request_max_rank_response_counters_v1"
                 ),
+                **self._execution_policy_facts(),
             }
         )
 
@@ -3229,6 +3439,10 @@ def _derive_operation_observations(
 
 def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
     fields = (
+        "cohort_id", "cohort_node_ids", "cohort_native_launch_count",
+        "cohort_request_sha256", "cohort_response_sha256", "fused_tile_count", "generic_tile_count",
+        "transfer_attribution_scope", "cohort_idle_h2d_bytes", "cohort_idle_d2h_bytes",
+        "cohort_wall_s",
         "stage_id",
         "declared_stage_id",
         "node_id",
@@ -3562,6 +3776,7 @@ def open_upmem(
     resources: UpmemResources,
     *,
     timeout_s: float = 120.0,
+    fuse_complex: bool = False,
 ) -> UpmemSession:
     """Open one persistent session for a validated final UPMEM plan."""
 
@@ -3571,6 +3786,7 @@ def open_upmem(
         raise ValueError("open_upmem requires the final UpmemPlan record")
     if not isinstance(resources, UpmemResources):
         raise ValueError("open_upmem requires the final UpmemResources record")
+    prepared_waves = resources.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise ValueError("timeout_s must be finite and positive")
     timeout_s = float(timeout_s)
@@ -3581,6 +3797,10 @@ def open_upmem(
     if plan.logical_plan_id != contraction_dag_hash(dag):
         raise ValueError("UPMEM physical plan does not match supplied DAG")
     validate_upmem_plan(dag, plan)
+    if plan.schedule_policy != "serial_nodes_v1" and not prepared_waves:
+        raise ValueError("static DAG plans require prepared-wave execution")
+    if resources.session_opener is not None and prepared_waves:
+        raise ValueError("prepared waves require the native session lifecycle")
     if len(resources.rank_paths) != plan.topology.rank_count:
         raise UnsupportedExecution(
             stage="preflight",
@@ -3613,6 +3833,8 @@ def open_upmem(
                 dpu_count=plan.topology.dpu_count,
                 tasklets_per_dpu=plan.topology.tasklets_per_dpu,
                 timeout_s=timeout_s,
+                prepared_waves=prepared_waves,
+                fuse_complex=fuse_complex,
             )
             low_level = engine.open_session(
                 plan.numeric_policy,
@@ -3662,6 +3884,7 @@ def open_upmem_simulator(
     resources: UpmemResources,
     *,
     timeout_s: float = 120.0,
+    fuse_complex: bool = False,
 ) -> UpmemSession:
     """Open the active ABI-v4 route through the SDK simulator only.
 
@@ -3678,6 +3901,7 @@ def open_upmem_simulator(
         raise ValueError(
             "open_upmem_simulator requires the final UpmemResources record"
         )
+    prepared_waves = resources.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise ValueError("timeout_s must be finite and positive")
     timeout_s = float(timeout_s)
@@ -3687,6 +3911,8 @@ def open_upmem_simulator(
     if plan.logical_plan_id != contraction_dag_hash(dag):
         raise ValueError("UPMEM physical plan does not match supplied DAG")
     validate_upmem_plan(dag, plan)
+    if plan.schedule_policy != "serial_nodes_v1" and not prepared_waves:
+        raise ValueError("static DAG plans require prepared-wave execution")
     if not 1 <= plan.topology.dpu_count <= 64 or plan.topology.rank_count != 1:
         raise UnsupportedExecution(
             stage="preflight",
@@ -3717,6 +3943,8 @@ def open_upmem_simulator(
             tasklets_per_dpu=plan.topology.tasklets_per_dpu,
             timeout_s=timeout_s,
             execution_target=EXECUTION_TARGET_SIMULATOR,
+            prepared_waves=prepared_waves,
+            fuse_complex=fuse_complex,
         )
         low_level = engine.open_session(plan.numeric_policy, plan.topology)
     except UnsupportedExecution:

@@ -1194,7 +1194,7 @@ def test_resources_are_immutable_and_callback_is_not_identity() -> None:
         )
 
 
-def test_resources_fix_request_transport_to_packed_operation() -> None:
+def test_resources_admit_only_declared_packed_transports() -> None:
     resources = UpmemResources(
         session_root="session",
         host_binary="host",
@@ -1202,8 +1202,9 @@ def test_resources_fix_request_transport_to_packed_operation() -> None:
         initialization_binary="init",
     )
     assert resources.request_transport == "packed_operation_v1"
+    assert replace(resources, request_transport="packed_wave_v1").request_transport == "packed_wave_v1"
 
-    with pytest.raises(ValueError, match="fixed to packed_operation_v1"):
+    with pytest.raises(ValueError, match="supported packed protocol"):
         UpmemResources(
             session_root="session",
             host_binary="host",

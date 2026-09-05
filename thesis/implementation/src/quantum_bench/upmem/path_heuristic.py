@@ -357,6 +357,8 @@ def extract_plan_features(plan: UpmemPlan) -> PlanFeatureFacts:
 
     if not isinstance(plan, UpmemPlan):
         raise TypeError("extract_plan_features requires an UpmemPlan")
+    if plan.schedule_policy != "serial_nodes_v1":
+        raise ValueError("upmem_slr_cost_v1 requires serial_nodes_v1; wave cost extraction is not qualified")
 
     h2d_bytes = 0
     d2h_bytes = 0

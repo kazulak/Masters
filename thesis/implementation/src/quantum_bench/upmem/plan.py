@@ -163,6 +163,7 @@ class UpmemPlan:
     stages: tuple[UpmemStage, ...]
     intermediate_policy: Literal["host_roundtrip_v1"] = "host_roundtrip_v1"
     kernel_policy: str = "dpu_real_tile_v4_wram_panel_v1"
+    schedule_policy: Literal["serial_nodes_v1", "static_dag_waves_v1"] = "serial_nodes_v1"
 
     def __post_init__(self) -> None:
         if not isinstance(self.logical_plan_id, str) or not re.fullmatch(
@@ -193,6 +194,8 @@ class UpmemPlan:
         if self.intermediate_policy != "host_roundtrip_v1":
             raise ValueError("unsupported intermediate policy")
         _require_nonempty_string("kernel_policy", self.kernel_policy)
+        if self.schedule_policy not in {"serial_nodes_v1", "static_dag_waves_v1"}:
+            raise ValueError("unsupported UPMEM schedule policy")
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -202,7 +205,7 @@ class UpmemResources:
     dpu_binary: str
     initialization_binary: str
     rank_paths: tuple[str, ...] = ()
-    request_transport: Literal["packed_operation_v1"] = "packed_operation_v1"
+    request_transport: Literal["packed_operation_v1", "packed_wave_v1"] = "packed_operation_v1"
     session_opener: Callable[..., object] | None = field(
         default=None,
         repr=False,
@@ -223,8 +226,8 @@ class UpmemResources:
             raise TypeError("rank_paths must be a tuple")
         if any(not isinstance(path, str) or not path for path in self.rank_paths):
             raise ValueError("rank_paths must contain nonempty strings")
-        if self.request_transport != "packed_operation_v1":
-            raise ValueError("request_transport is fixed to packed_operation_v1")
+        if self.request_transport not in {"packed_operation_v1", "packed_wave_v1"}:
+            raise ValueError("request_transport must be a supported packed protocol")
         if self.session_opener is not None and not callable(self.session_opener):
             raise TypeError("session_opener must be callable or None")
 
@@ -241,11 +244,21 @@ def plan_upmem(
     *,
     numeric_policy: NumericPolicy,
     topology: UpmemTopology,
+    schedule_policy: str = "serial_nodes_v1",
 ) -> UpmemPlan:
     """Create the pure T4C physical plan for an already lowered DAG."""
 
     validate_contraction_dag(dag)
-    return _build_upmem_plan(dag, numeric_policy=numeric_policy, topology=topology)
+    plan = _build_upmem_plan(dag, numeric_policy=numeric_policy, topology=topology)
+    if schedule_policy == "serial_nodes_v1":
+        return plan
+    if schedule_policy != "static_dag_waves_v1":
+        raise ValueError("unsupported UPMEM schedule policy")
+    from dataclasses import replace
+    from quantum_bench.upmem.scheduling import schedule_dag_waves
+
+    return replace(plan, stages=schedule_dag_waves(dag, plan),
+                   schedule_policy="static_dag_waves_v1")
 
 
 def validate_upmem_plan(dag: ContractionDAG, plan: UpmemPlan) -> None:
@@ -254,10 +267,11 @@ def validate_upmem_plan(dag: ContractionDAG, plan: UpmemPlan) -> None:
     if not isinstance(plan, UpmemPlan):
         raise TypeError("validate_upmem_plan requires the final UpmemPlan record")
     validate_contraction_dag(dag)
-    expected = _build_upmem_plan(
+    expected = plan_upmem(
         dag,
         numeric_policy=plan.numeric_policy,
         topology=plan.topology,
+        schedule_policy=plan.schedule_policy,
     )
     if plan != expected:
         raise ValueError("UPMEM physical plan differs from pure recomputation")
@@ -289,6 +303,9 @@ def physical_plan_id(plan: UpmemPlan) -> str:
         "intermediate_policy": plan.intermediate_policy,
         "kernel_policy": plan.kernel_policy,
     }
+    # Preserve the frozen serial identity; new scheduling is explicit and hashed.
+    if plan.schedule_policy != "serial_nodes_v1":
+        payload["schedule_policy"] = plan.schedule_policy
     encoded = json.dumps(
         payload,
         ensure_ascii=True,
