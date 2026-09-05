@@ -50,7 +50,7 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
 | P1 census | Retained preparation reused; frontier extension in progress | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Not implemented | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
-| P3 DAG waves | Not implemented | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
+| P3 DAG waves | Pure scheduler implemented/tested; native execution not wired | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
@@ -101,6 +101,12 @@ passes DPU-compiler syntax checks. This is not yet an executable v5 runtime:
 operation tables, envelope digests, completion handling, kernel dispatch and
 native host integration remain required.
 
+The 59 focused control tests include Python/C layout, native corruption
+rejection, idle controls, explicit non-contiguous spans, and the existing int8
+component accumulation bound. Kernels must dereference validated spans rather
+than assume canonical offsets. Whole-wave operation tables, payload hashes and
+completion correlation remain integration gates, not claims made by this codec.
+
 The independent source audit confirmed that fusion needs `2A + 2B + 4C`
 aligned MRAM bytes. A current legal float32 tile `(M,N,K)=(128,256,256)`
 uses 512 KiB for one product but 1,310,720 bytes for all four products. That
@@ -115,6 +121,14 @@ memory-only resident candidates are not residency-qualified; and a DAG cohort
 must not coalesce a node's existing K-wave boundaries and thereby change the
 serial control even when the frontier has width one. These are software review
 corrections, not failed physical experiments.
+
+The pure `schedule_dag_waves` implementation has 15 focused tests. It preserves
+each node's original wave boundaries, splitting but never merging them when a
+node receives fewer DPUs. Useful group size is capped by the original maximum
+wave width, not by the total number of work units across sequential K chunks.
+It preserves within-node unit ordering, uses deterministic critical-path/group
+assignment and emits host-reduction stages. No public route selects this
+scheduler yet, and it is not evidence of physical DAG concurrency.
 
 ## Budget and Preregistration
 
