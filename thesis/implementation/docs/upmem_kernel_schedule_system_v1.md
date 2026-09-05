@@ -48,7 +48,7 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | Phase | Current state | Required exit evidence |
 | --- | --- | --- |
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
-| P1 census | Retained preparation reused; frontier extension in progress | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
+| P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Not implemented | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Pure scheduler implemented/tested; native execution not wired | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
@@ -129,6 +129,26 @@ wave width, not by the total number of work units across sequential K chunks.
 It preserves within-node unit ordering, uses deterministic critical-path/group
 assignment and emits host-reduction stages. No public route selects this
 scheduler yet, and it is not evidence of physical DAG concurrency.
+
+The census extension reuses all 40 frozen cells and rejects the four missing-
+identity selections before reconstruction. Each eligible cell runs under the
+existing 60-second subprocess timeout. It reports critical-path MACs, frontier
+width, original wave occupancy, fused tile admission and geometry categories.
+All measured timing fields remain null. Liveness is explicitly partial logical
+tensor payload accounting, not RSS or whole-host admission: raw lane arrays,
+encoded operands, transport copies and object overhead are not included, and
+alias storage is not deduplicated. Resident pairs are memory candidates only;
+all remain `admitted=false` pending locality/layout/reconstruction/scale proofs.
+
+Reproduce from a clean committed head with:
+
+```bash
+PYTHONPATH=src /home/tom/repos/Masters/thesis/.venv/bin/python \
+  scripts/characterize_upmem_frontiers.py --output-dir <new-ignored-run-directory>
+```
+
+Do not treat the worker's earlier dirty-worktree output as final source-bound
+evidence. The integrated census must be regenerated and checked after commit.
 
 ## Budget and Preregistration
 
