@@ -113,7 +113,8 @@ def operation_facts(node: ContractNode, units: tuple, policy: str, topology: Upm
         "k_chunk_count": len({(u.k_start, u.k_size) for u in units}),
         "wave_count": len(waves), "request_count": requests,
         "lane_envelope_submissions": 4, "batched_envelope_submissions": 1,
-        "dpu_launch_count": requests, "descriptor_count": requests * topology.dpu_count,
+        "dpu_launch_count": requests, "descriptor_count": requests,
+        "dpu_record_count": requests * topology.dpu_count,
         "output_file_count": 4 * len(units),
         "idle_dpu_slots": sum(topology.dpu_count - occupied[w] for w in waves),
         "partial_wave_count": sum(occupied[w] < topology.dpu_count for w in waves),
@@ -139,8 +140,11 @@ def characterize_cell(cell: dict, *, memory_limit: int = MEMORY_LIMIT,
     circuit = builtin_circuit(cell["circuit"]["name"], cell["circuit"]["parameters"])
     network, inputs = lower_tensor_network(make_simulation_job(circuit))
     dag = build_contraction_dag(network, tuple(tuple(pair) for pair in cell["path"]))
-    if contraction_dag_hash(dag) != cell["logical_plan_id"]:
-        raise ValueError("retained logical plan identity mismatch")
+    observed_identity = contraction_dag_hash(dag)
+    if observed_identity != cell["logical_plan_id"]:
+        result["observed_logical_plan_id"] = observed_identity
+        result["rejection_reasons"] = ["logical_plan_identity_mismatch"]
+        return result
     # Preserve the preregistered conservative retained-tensor/transport estimate.
     input_bytes = sum(int(value.nbytes) for value in inputs.values())
     output_bytes = sum(prod(node.output.shape) * 16 for node in dag.nodes)
@@ -158,6 +162,7 @@ def characterize_cell(cell: dict, *, memory_limit: int = MEMORY_LIMIT,
         return result
     result["physical_plan_id"] = physical_plan_id(plan)
     result["resource_admission"] = collection_resource_admission(plan)
+    result["eligibility_scope"] = "host_only_preparation_not_scaling_admission"
     result["host_reduce_stage_count"] = sum(s.kind == "host_reduce" for s in plan.stages)
     for node in dag.nodes:
         if isinstance(node, ContractNode):
@@ -169,7 +174,7 @@ def characterize_cell(cell: dict, *, memory_limit: int = MEMORY_LIMIT,
     result["totals"] = {
         key: sum(op[key] for op in result["operations"])
         for key in ("work_unit_count", "wave_count", "request_count", "lane_envelope_submissions",
-                    "batched_envelope_submissions", "dpu_launch_count", "descriptor_count",
+                    "batched_envelope_submissions", "dpu_launch_count", "descriptor_count", "dpu_record_count",
                     "output_file_count", "idle_dpu_slots", "partial_wave_count",
                     "planned_h2d_operand_bytes_estimate", "planned_d2h_output_bytes_estimate",
                     "h2d_control_bytes", "d2h_completion_bytes")
@@ -236,6 +241,8 @@ def write_census(output: Path) -> dict:
         "The persistent C host owns sequential embedded-request SDK transfers/launches.\n"
         "There are four lane envelopes per contract node and four launches per wave.\n"
         "Idle DPU descriptors are retained but do not create output files.\n"
+        "Envelope descriptor_count counts requests; dpu_record_count includes idle output paths.\n"
+        "Scaling admission is reported separately; legal underfilled waves remain in this host-only census.\n"
         "MRAM/WRAM traffic and host-memory figures are algorithmic estimates.\n"
         "The historical heuristic packed_operation_count aliases waves, not submissions.\n"
         "Rejected cells are retained; paths are never replaced.\n", encoding="utf-8")

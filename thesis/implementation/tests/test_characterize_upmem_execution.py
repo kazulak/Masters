@@ -71,11 +71,15 @@ def test_both_policy_plans_keep_partial_waves_and_correct_counters(policy, dpus)
     assert result == census.characterize_cell(cell(policy, dpus))
     assert result["totals"]["lane_envelope_submissions"] == 4 * len(result["operations"])
     assert result["totals"]["dpu_launch_count"] == 4 * result["totals"]["wave_count"]
-    assert result["totals"]["descriptor_count"] == dpus * result["totals"]["request_count"]
+    assert result["totals"]["descriptor_count"] == result["totals"]["request_count"]
+    assert result["totals"]["dpu_record_count"] == dpus * result["totals"]["request_count"]
     assert result["totals"]["output_file_count"] == 4 * result["totals"]["work_unit_count"]
     assert all(op["measured_timing"] is None for op in result["operations"])
     if dpus == 4:
         assert result["totals"]["idle_dpu_slots"] > 0
+        assert result["resource_admission"]["collection_resource_admission_passed"] is False
+        assert result["totals"]["dpu_record_count"] > result["totals"]["output_file_count"]
+        assert result["eligibility_scope"] == "host_only_preparation_not_scaling_admission"
 
 
 def test_explicit_limits_and_identity_fail_closed():
@@ -89,8 +93,9 @@ def test_explicit_limits_and_identity_fail_closed():
     assert census.characterize_cell(fixture, work_limit=0)["rejection_reasons"] == ["planned_work_unit_limit"]
     corrupt = deepcopy(fixture)
     corrupt["logical_plan_id"] = "0" * 64
-    with pytest.raises(ValueError, match="identity mismatch"):
-        census.characterize_cell(corrupt)
+    rejected = census.characterize_cell(corrupt)
+    assert rejected["rejection_reasons"] == ["logical_plan_identity_mismatch"]
+    assert rejected["observed_logical_plan_id"] == fixture["logical_plan_id"]
 
 
 def test_odd_geometry_split_k_counts_launches_not_envelopes():

@@ -35,6 +35,14 @@ memory estimates are not hardware counters. The older heuristic feature named
 Report actual lane-envelope submissions separately without changing that frozen
 feature definition.
 
+Eligibility here means bounded host-only preparation, not physical scaling
+admission. Keep legal underfilled waves and report their scaling-admission facts
+separately. Envelope descriptors count requests; DPU records include idle output
+paths, whereas actual output files count active work only. The retained BV18
+minimum-peak selection has no logical identity and is already excluded in its
+source pool for semantic-identity expansion. Preserve that exclusion without
+substituting a path. All sixteen greedy cells remain available for the probe.
+
 ## One Prototype
 
 The baseline constructs and writes four lane envelopes, in RR, II, RI, IR order.
