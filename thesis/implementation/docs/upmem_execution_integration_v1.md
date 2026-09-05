@@ -3,25 +3,27 @@
 ## Objective and Sequence
 
 The governing plan is `thesis/upmem-system-and-path-optimization-plan.md`.
-The full objective remains integration, fixed-path host/shape attribution,
-bounded GO/NO-GO gates for complex batching, explicit CPU placement and one
-further measured improvement in a shared float32/int8 system, useful
-tasklet/DPU scaling, execution-profile freeze, bounded physical-feedback
-path search, independent confirmation,
-untouched testing, and archived release. Optional residency and multi-rank
-probes are independently gated, not prerequisites for the final path study.
-The revised execution-phase effort cap is ten focused days excluding hardware
-queues. This document does not redefine completion as software integration alone.
+The bounded objective is to qualify the existing integrated UPMEM executor,
+complete the software census, measure bounded one-rank tasklet/DPU scaling, and
+evaluate frozen candidates with offline fitting and held-out timing. The
+sequence ends with reporting and stop. CPU/DPU placement is removed entirely
+from this roadmap, not deferred; new kernels, fused kernels, residency,
+multi-rank execution and ATiM integration are not deliverables. Preparation
+remains capped at three focused days, excluding hardware queues. This document
+does not redefine completion as software integration alone.
 
 | Phase | Current state | Acceptance evidence still required |
 | --- | --- | --- |
-| A: integrate numerics and path infrastructure | `b921b88`: published; 1,088 strict-SDK tests, Ruff, exact-head CI and corrected 14-cell ETH SDK gate passed | Seven-cell physical correctness matrix, verified evidence retention and adoption |
-| B: shared execution system | Not started | Fixed development paths, host/shape census, separate batching/placement/improvement decisions, both-policy qualification for retained mechanisms, useful scaling and system freeze |
-| Optional ATiM probe | Primary-source boundary review complete; no code executed | At most one day within the shared optional allowance and 32 configurations; emitted-code and full-route qualification, or a documented no-go |
-| Optional residency or multi-rank probe | Not started; off the critical path | A distinct measured bottleneck, both-policy correctness, bounded independent evidence and no duplicate runtime |
-| C: final-system path study | Not started | Frozen system, named split, round manifests, fixed query/time budget, paired controls, fitting and profile freeze |
-| Confirmation and untouched tests | Not started | Separate confirmation and final-test raw evidence without retuning |
-| Closure | Not started | Main adoption after gates, tags, two verified evidence copies, release verification and standalone export |
+| A: qualify existing executor | `b921b88`: published; 1,088 strict-SDK tests, Ruff, exact-head CI and corrected 14-cell ETH SDK gate passed | Unchanged seven-cell physical correctness matrix, verified evidence retention and adoption |
+| B: software characterization | Required census and optional probe finished at `56b159dc7e8cd945265a6e02dfb5e7c74edf381a`; not physical adoption | Host-only stage complete; raw evidence and two verified copies retained |
+| C: bounded one-rank scaling | Not started | Correctness and admission, matched fixed paths, paired measurements and resource-scaling analysis |
+| D: frozen-candidate path study | Not started | Frozen candidates, finite physical calibration, offline fitting, frozen profile and held-out evaluation |
+| E: report and stop | Not started | Complete raw evidence, checksums, claim boundaries and thesis tables |
+
+The census completes the software characterization task. The separately
+completed batching probe at `56b159dc7e8cd945265a6e02dfb5e7c74edf381a` remains
+optional preparation evidence. Neither establishes physical adoption nor
+replaces the pending seven-cell gate. No additional optimization is required.
 
 ## Integrated Lineage
 
@@ -91,14 +93,16 @@ final-system study. Its configurations, candidate pools, split and checksum
 files remain byte-for-byte historical preregistration. The separate record is
 `thesis_results/upmem_execution_integration_v1/prior_calibration_supersession.json`.
 Do not launch it from this branch or relabel its old profiles as calibrated
-for integrated int8 execution or future kernel dispatch.
+for integrated int8 execution or the frozen-candidate path study.
 
 ## Numerical and Experimental Boundaries
 
 Float32 is the primary equal-quality profile. Shared-scale int8 remains a
 distinct numerical policy with its own replay and accuracy facts, not a claim
-of float32-equivalent quality. Future dispatch changes invalidate existing
-execution-cost fits; approximation error is not an execution-cost feature.
+of float32-equivalent quality. The frozen existing execution policy is the basis
+for the path-study fit; any later execution-policy change would invalidate
+existing execution-cost fits. Approximation error is not an execution-cost
+feature.
 
 Phase A qualification is correctness-only, with no speedup inference. Partial
 waves and idle resources are valid correctness cases, not collection-occupancy
@@ -173,16 +177,20 @@ The initializer binary identity changes and therefore requires fresh builds
 and qualification. This is not an import of the separate hardening branch's
 provider replacement, validation optimization or kernel barrier changes.
 
-Candidate-sidecar admission belongs to the final-system executable-choice
-preflight in Phase C. Phase A uses a fixed greedy matrix without external
+Candidate-sidecar admission belongs to the frozen-candidate executable-choice
+preflight in Phase D. Phase A uses a fixed greedy matrix without external
 candidate handoff; no legacy 192-attempt path calibration is launched here.
 
-No Phase B kernel choice, ATiM import, physical path-training round, held-out
-timing, main merge or release is accepted by this software integration alone.
+This software integration alone does not establish the pending seven-cell
+physical gate, bounded one-rank scaling, frozen-candidate calibration, offline
+fitting, held-out timing, main merge or release. New kernels, fused kernels,
+residency, multi-rank execution and ATiM integration are future research outside
+this milestone, not replacement deliverables. CPU/DPU placement remains excluded.
 
-## External Research
+## Research Boundary
 
-The bounded ATiM review and primary-source ledger are retained under
-`thesis_results/upmem_execution_integration_v1/research/`. They establish a
-possible generated-C boundary, not SDK compatibility or an optimization win.
-No new runtime dependency or system SDK installation follows from that review.
+The retained ATiM review and primary-source ledger under
+`thesis_results/upmem_execution_integration_v1/research/` are background only,
+not a current deliverable. They do not establish SDK compatibility or an
+optimization win, and no follow-up, runtime dependency or system SDK
+installation follows from that review.
