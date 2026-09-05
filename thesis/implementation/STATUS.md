@@ -3,6 +3,17 @@
 This status applies to the active post-reset code only. It is not a summary of
 historical experiments or a performance claim.
 
+## Current Execution-System Work
+
+The active v2 milestone is described in
+[Kernel and DAG Execution System v1](docs/upmem_kernel_schedule_system_v1.md).
+It requires kernel candidates and genuine static DAG concurrency before final
+path calibration. The previous narrowed integration roadmap is historical,
+not the current work queue. Source-only preparation does not establish physical
+adoption; the unchanged seven-session integration gate remains pending.
+The approved hardware ceiling is 1,051 attempts, including qualification and
+confirmation. The older milestone entries below retain their historical scope.
+
 ## Software Qualification State
 
 Sequential UPMEM baseline v1 now has software conformance plus exact-head

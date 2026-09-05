@@ -1,0 +1,41 @@
+{
+  "milestone": "upmem_kernel_schedule_system_v1",
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md",
+  "base_source_sha": "18556c3c9b6fb7c5db13c93fb0e253f22eeb3337",
+  "baseline_execution_sha": "b921b8804e324da75222354ee2f4df41e770b75c",
+  "primary_numeric_policy": "split_complex_float32_v1",
+  "secondary_numeric_policy_scope": "complex_int8_shared_scale_v1_correctness_and_accuracy",
+  "total_attempt_ceiling": 1051,
+  "physical_rank_count": 1,
+  "core_review_engineering_day": 7,
+  "resident_slice_engineering_day_cap": 3,
+  "packets": [
+    {"id": "integration_smoke", "attempt_ceiling": 7},
+    {"id": "kernel_micro_exploration", "attempt_ceiling": 96},
+    {"id": "complex_fusion_ab", "attempt_ceiling": 72},
+    {"id": "geometry_kernel_ab", "attempt_ceiling": 72},
+    {"id": "dag_wave_ab", "attempt_ceiling": 72},
+    {"id": "resident_slice_exploration", "attempt_ceiling": 48},
+    {"id": "resident_slice_confirmation", "attempt_ceiling": 48},
+    {"id": "changed_checkpoint_correctness", "attempt_ceiling": 28},
+    {"id": "principal_mechanism_confirmation", "attempt_ceiling": 36},
+    {"id": "final_hierarchical_scaling", "attempt_ceiling": 24},
+    {"id": "scalar_wram_ablation", "attempt_ceiling": 8},
+    {"id": "path_initial", "attempt_ceiling": 144},
+    {"id": "path_adaptive", "attempt_ceiling": 216},
+    {"id": "path_development_confirmation", "attempt_ceiling": 72},
+    {"id": "path_validation", "attempt_ceiling": 36},
+    {"id": "path_untouched_test", "attempt_ceiling": 72}
+  ],
+  "rules": {
+    "warmups_controls_failures_and_confirmation_count": true,
+    "replace_failed_samples": false,
+    "reuse_unspent_deduplication_slots": false,
+    "hardware_per_weight_vector": false,
+    "maximum_adaptive_rounds": 3,
+    "maximum_implementation_repair_cycles_per_packet": 1,
+    "maximum_infrastructure_reruns_with_incident_evidence": 1,
+    "physical_acceptance_requires_two_verified_copies": true,
+    "physical_runs_require_frozen_packet_manifest": true
+  }
+}
