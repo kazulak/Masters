@@ -21,6 +21,8 @@
 #define UPMEM_WAVE_KERNEL_NONE 0u
 #define UPMEM_WAVE_KERNEL_REAL_PANEL 1u
 #define UPMEM_WAVE_KERNEL_FOUR_PRODUCT_PANEL 2u
+#define UPMEM_WAVE_KERNEL_REAL_OUTER 3u
+#define UPMEM_WAVE_KERNEL_FOUR_PRODUCT_OUTER 4u
 #define UPMEM_WAVE_FLOAT32 0u
 #define UPMEM_WAVE_INT8 1u
 #define UPMEM_WAVE_PENDING 0u
@@ -85,10 +87,20 @@ typedef struct __attribute__((packed)) {
     uint32_t failing_product;
 } upmem_wave_completion_t;
 
+static inline uint32_t upmem_wave_kernel_products(uint32_t kernel) {
+    switch (kernel) {
+        case UPMEM_WAVE_KERNEL_REAL_PANEL:
+        case UPMEM_WAVE_KERNEL_REAL_OUTER: return 1u;
+        case UPMEM_WAVE_KERNEL_FOUR_PRODUCT_PANEL:
+        case UPMEM_WAVE_KERNEL_FOUR_PRODUCT_OUTER: return 4u;
+        default: return 0u;
+    }
+}
+
 static inline int upmem_wave_completion_success(const upmem_wave_completion_t *r,
         const upmem_wave_control_t *c) {
     const uint32_t products = c->flags == UPMEM_WAVE_IDLE ? 0u :
-        (c->kernel == UPMEM_WAVE_KERNEL_REAL_PANEL ? 1u : 4u);
+        upmem_wave_kernel_products(c->kernel);
     return r->magic == UPMEM_WAVE_COMPLETION_MAGIC && r->version == UPMEM_WAVE_VERSION &&
         r->status == UPMEM_WAVE_COMPLETED && r->dpu_id == c->dpu_id &&
         r->operation_index == c->operation_index && r->wave_id == c->wave_id &&
@@ -126,8 +138,9 @@ static inline int upmem_wave_control_valid(const upmem_wave_control_t *c,
         return 1;
     }
     if (c->operation_index >= UPMEM_WAVE_MAX_DPUS ||
-            (c->kernel != UPMEM_WAVE_KERNEL_REAL_PANEL &&
-             c->kernel != UPMEM_WAVE_KERNEL_FOUR_PRODUCT_PANEL) ||
+            upmem_wave_kernel_products(c->kernel) == 0u ||
+            ((c->kernel == UPMEM_WAVE_KERNEL_REAL_OUTER ||
+              c->kernel == UPMEM_WAVE_KERNEL_FOUR_PRODUCT_OUTER) && c->k != 1u) ||
             c->m == 0u || c->m > 256u || c->n == 0u || c->n > 256u ||
             c->k == 0u || c->k > UPMEM_WAVE_MAX_K ||
             (uint64_t)c->k * UPMEM_WAVE_INT8_COMPONENT_PRODUCT > INT32_MAX ||
@@ -136,13 +149,13 @@ static inline int upmem_wave_control_valid(const upmem_wave_control_t *c,
     const uint64_t a = ((uint64_t)c->m * c->k * e + 7u) & ~UINT64_C(7);
     const uint64_t b = ((uint64_t)c->k * c->n * e + 7u) & ~UINT64_C(7);
     const uint64_t out = ((uint64_t)c->m * c->n * 4u + 7u) & ~UINT64_C(7);
-    const uint64_t total = c->kernel == UPMEM_WAVE_KERNEL_FOUR_PRODUCT_PANEL
+    const uint64_t total = upmem_wave_kernel_products(c->kernel) == 4u
         ? 2u * a + 2u * b + 4u * out : a + b + out;
     if (total > UPMEM_WAVE_MRAM_BYTES) return 0;
     sizes[UPMEM_WAVE_A_REAL] = (uint32_t)a;
     sizes[UPMEM_WAVE_B_REAL] = (uint32_t)b;
     sizes[UPMEM_WAVE_RR] = (uint32_t)out;
-    if (c->kernel == UPMEM_WAVE_KERNEL_FOUR_PRODUCT_PANEL) {
+    if (upmem_wave_kernel_products(c->kernel) == 4u) {
         sizes[UPMEM_WAVE_A_IMAG] = (uint32_t)a;
         sizes[UPMEM_WAVE_B_IMAG] = (uint32_t)b;
         sizes[UPMEM_WAVE_II] = sizes[UPMEM_WAVE_RI] = sizes[UPMEM_WAVE_IR] = (uint32_t)out;

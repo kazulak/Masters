@@ -29,7 +29,7 @@ bin/dpu_gemm_tile_v4_t%: dpu.c panel_compute.h protocol.h | bin
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu.c
 
 # Experimental launch target; not selected by the active v4 host.
-bin/dpu_wave_v5_t%: dpu_wave.c panel_compute.h wave_protocol.h protocol.h | bin
+bin/dpu_wave_v5_t%: dpu_wave.c panel_compute.h outer_compute.h wave_protocol.h protocol.h | bin
 	@test "$*" -ge 1 -a "$*" -le $(MAX_TASKLETS) || { echo "wave DPU binary requires tasklets in [1,24]" >&2; exit 1; }
 	$(DPU_CC) -O2 -DNR_TASKLETS=$* -o $@ dpu_wave.c
 

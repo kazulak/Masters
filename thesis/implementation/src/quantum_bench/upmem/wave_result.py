@@ -19,9 +19,9 @@ import numpy as np
 from quantum_bench.upmem.packed_wave import WaveTile
 from quantum_bench.upmem.wave_protocol import (
     COMPLETION_BYTES,
-    FOUR_PRODUCT_PANEL,
+    FOUR_PRODUCT_KERNELS,
     IDLE,
-    REAL_PANEL,
+    REAL_KERNELS,
     WaveCompletion,
 )
 
@@ -34,9 +34,9 @@ def _product_count(tile: WaveTile) -> int:
     control = tile.control
     if control.flags == IDLE:
         return 0
-    if control.kernel == REAL_PANEL:
+    if control.kernel in REAL_KERNELS:
         return 1
-    if control.kernel == FOUR_PRODUCT_PANEL:
+    if control.kernel in FOUR_PRODUCT_KERNELS:
         return 4
     # WaveCompletion.from_bytes() validates the control before this point.
     raise ValueError("wave control has an unsupported product kernel")

@@ -49,7 +49,7 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | --- | --- | --- |
 | P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Experimental fusion kernel connected to whole-DAG SDK execution; geometry specialization and physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P2 kernels | Experimental fusion and K=1 outer-product dispatch connected; software/SDK checkpoint below, physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -192,6 +192,68 @@ in this experimental target. Physical DPU-index ownership is deliberately a host
 gate: the kernel checks range and echoes the supplied index but cannot establish
 the host's enumeration mapping. Production dispatch must call admission with the
 actual selected DPU index and correlate every completion before publishing data.
+
+### Census-Selected Outer-Product Prototype
+
+The frozen `de78305` census selects the plan's `K=1` alternative rather than a
+GEMV kernel. Across its repeated circuit/path/topology/numeric entries, outer
+products account for 136 of 2,304 operation entries, 42,102,784 of 54,284,992 real
+MACs, and 1,325,264 of 1,500,592 operand-read helper calls. These are source-derived
+counts, not pooled physical timings. GEMV entries are numerous but mostly tiny;
+counting operations alone would select a different target. Freeze this target
+for one bounded experiment; do not switch kernels after noisy physical results.
+
+`outer_compute.h` implements a real `K=1` product using existing WRAM storage.
+Tasklets cooperatively read the two padded operand vectors once into disjoint
+shared regions, synchronize, and own cyclic contiguous 32-element output blocks.
+The arithmetic keeps the existing positive-zero accumulator followed by the one
+multiply/add; no K reduction, requantization or complex-output fusion is added.
+Output block boundaries are 8-byte aligned, and only the last block may need a
+short unaligned write. No two tasklets own the same output word. A final barrier
+protects shared-buffer reuse for the next product.
+
+The private v5 selectors `REAL_OUTER=3` and `FOUR_PRODUCT_OUTER=4` have exactly the
+existing real/four-product plane layout and completion semantics. Python and C
+reject these selectors for `K != 1`. The accepted ABI-v4 kernel and panel body are
+unchanged. Native executable hashes change because v5 dispatch and validation
+admit new selectors; old binaries are not equivalent evidence for this source.
+
+`geometry_policy="outer_k1_v1"` opts in through the prepared-wave runtime.
+`panel_only_v1` remains the control/default. The rule considers each existing
+work unit's local K, including a one-element tail of a larger reduction; it never
+changes tile geometry or the host's K-chunk order. Fusion admission is independent:
+a fused tile that exceeds MRAM uses four real launches with the same geometry.
+Geometry policy enters the execution-strategy hash and sample/operation facts;
+the same scientific physical tiling retains its plan identity. Per-operation
+`outer_product_tile_count` counts unique work units, not four repeated products.
+`real_product_tile_launch_count` counts unfused active tile launches, independently
+of panel/outer geometry. It replaces the ambiguous experimental
+`generic_tile_count` label; `fused_tile_count` counts fused active tile launches.
+
+This is a prototype, not an accepted kernel optimization. Compare panel and outer
+policies at fixed paths, resources, launch policy and schedule. Then perform
+composition tests. Do not reuse old panel-only path-cost calibration for this
+executor; schedule/kernel-aware cost extraction remains a P5 gate. No physical
+benefit or change in numerical accuracy is inferred from source counts or SDK
+execution. No second geometry kernel is authorized in this core milestone.
+
+The independent T8 disassembly audit under local SDK 2025.1.0 found native
+`mul_sl_sl` with sign-extending byte loads in both the accepted panel and new
+outer int8 product loops. This multiplies the low signed bytes into a 32-bit
+result, not arbitrary full-width 32-bit operands. Neither product loop calls
+`__mulsi3`; surrounding address arithmetic can. The outer float path retains
+`__mulsf3` followed by `__addsf3`. One division remains per output block, not per
+MAC. No arithmetic-helper replacement is justified by this inspection.
+The bounded review found no remaining numerical, ownership, dispatch or codegen
+blocker; it did not inspect all tasklet instruction streams or physical timing.
+
+Local T1-T24 builds include host, accepted v4 DPU, experimental v5 DPU and init
+binaries (96 hashes). In the inspected T24 v5 link, `.text` is 13,480 bytes and
+the WRAM data/stack/cache end is 50,096 bytes. These are linked image facts, not
+peak host-memory measurements or ETH SDK 2023.1.0 qualification. Isolated SDK
+tests cover signed zero, int8 extrema, padding, maximal admitted geometry,
+repeated mixed kernels and corrupt K. Full-DAG tests also cover an outer K1
+tail of K257, preserving original reduction order. Physical gates remain open.
 
 ### Prepared-Cohort Native Dispatch
 
@@ -407,8 +469,10 @@ source identities separate. Never reconstruct missing raw observations.
 At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
 Prepared-cohort encoding, native host dispatch, session lifecycle and whole-DAG
-execution are connected with SDK correctness coverage. Next: finish the bounded
-geometry specialization and independent review, then physical fusion/DAG gates
-after P0 access. The residency/slicing probe and composition gates remain open.
+execution are connected with SDK correctness coverage. The outer-product
+prototype completes the named geometry implementation, subject to its
+qualification and physical decision. Next: physical fusion/outer/DAG gates
+after P0 access, and the bounded residency/slicing probe. Composition admission,
+schedule-aware cost extraction and all physical acceptance gates remain open.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.

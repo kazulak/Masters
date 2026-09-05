@@ -13,6 +13,11 @@ NO_PRODUCT = (1 << 32) - 1
 IDLE = 1
 REAL_PANEL = 1
 FOUR_PRODUCT_PANEL = 2
+REAL_OUTER = 3
+FOUR_PRODUCT_OUTER = 4
+REAL_KERNELS = (REAL_PANEL, REAL_OUTER)
+FOUR_PRODUCT_KERNELS = (FOUR_PRODUCT_PANEL, FOUR_PRODUCT_OUTER)
+OUTER_KERNELS = (REAL_OUTER, FOUR_PRODUCT_OUTER)
 MAX_K = 65536
 INT8_COMPONENT_PRODUCT = 2 * 127 * 127
 CONTROL = Struct("<8I3Q6I16I")
@@ -61,14 +66,16 @@ def product_layout(m: int, n: int, k: int, *, numeric_mode: int,
             raise ValueError(f"{name} exceeds the admitted tile geometry")
     if type(numeric_mode) is not int or numeric_mode not in (0, 1):
         raise ValueError("unknown numeric mode")
-    if type(kernel) is not int or kernel not in (REAL_PANEL, FOUR_PRODUCT_PANEL):
+    if type(kernel) is not int or kernel not in (*REAL_KERNELS, *FOUR_PRODUCT_KERNELS):
         raise ValueError("unknown kernel")
+    if kernel in OUTER_KERNELS and k != 1:
+        raise ValueError("outer-product kernel requires K=1")
     if k * INT8_COMPONENT_PRODUCT > (1 << 31) - 1:
         raise ValueError("int8 component accumulation exceeds int32")
     element_bytes = 4 if numeric_mode == 0 else 1
     a, b, c = (aligned_bytes(size) for size in
                (m * k * element_bytes, k * n * element_bytes, m * n * 4))
-    sizes = (a, a, b, b, c, c, c, c) if kernel == FOUR_PRODUCT_PANEL else (
+    sizes = (a, a, b, b, c, c, c, c) if kernel in FOUR_PRODUCT_KERNELS else (
         a, 0, b, 0, c, 0, 0, 0)
     cursor = 0
     spans = []
@@ -248,7 +255,7 @@ class WaveCompletion:
 
         if control.flags == IDLE:
             product_count = PRODUCT_COUNT_IDLE
-        elif control.kernel == REAL_PANEL:
+        elif control.kernel in REAL_KERNELS:
             product_count = PRODUCT_COUNT_REAL
         else:
             product_count = PRODUCT_COUNT_FUSED

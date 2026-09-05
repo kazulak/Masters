@@ -54,7 +54,7 @@ from quantum_bench.upmem.plan import (
 )
 from quantum_bench.upmem.native_session import V4Session
 from quantum_bench.upmem.packed_wave import WaveOperation
-from quantum_bench.upmem.wave_protocol import CONTROL, COMPLETION, IDLE, FOUR_PRODUCT_PANEL
+from quantum_bench.upmem.wave_protocol import CONTROL, COMPLETION, IDLE, FOUR_PRODUCT_KERNELS, OUTER_KERNELS
 from quantum_bench.upmem.wave_work import build_cohort_waves
 from quantum_bench.upmem.packed_operation import (
     PACKED_OPERATION_TRANSPORT,
@@ -831,6 +831,7 @@ class UpmemV4Executor:
         session_factory: Callable[..., _V4SessionLike] = V4Session.start,
         prepared_waves: bool = False,
         fuse_complex: bool = False,
+        geometry_policy: str = "panel_only_v1",
     ) -> None:
         self.session_root = Path(session_root)
         self.host_binary = Path(host_binary)
@@ -846,6 +847,11 @@ class UpmemV4Executor:
         if fuse_complex and not prepared_waves:
             raise ValueError("complex launch fusion requires prepared waves")
         self.fuse_complex = fuse_complex
+        if geometry_policy not in ("panel_only_v1", "outer_k1_v1"):
+            raise ValueError("unsupported geometry kernel policy")
+        if geometry_policy != "panel_only_v1" and not prepared_waves:
+            raise ValueError("geometry specialization requires prepared waves")
+        self.geometry_policy = geometry_policy
         self.request_transport = (REQUEST_TRANSPORT_PACKED_WAVE
                                   if prepared_waves else PACKED_OPERATION_TRANSPORT)
         self.session_factory = session_factory
@@ -905,6 +911,8 @@ class UpmemV4Executor:
             kernel.update(implementation_id="dpu_panel_dispatch_v5_v1", provider="raw_upmem_sdk",
                           config={"abi": "wave_control_v5", "kernel": "dpu_panel_dispatch_v5_v1",
                                   "complex_launch_policy": identity["complex_launch_policy"]})
+            identity["geometry_kernel_policy"] = self.geometry_policy
+            kernel["config"]["geometry_kernel_policy"] = self.geometry_policy
         return identity
 
     @property
@@ -1811,7 +1819,8 @@ class UpmemV4Session:
             waves, generic_lanes = build_cohort_waves(
                 stage, lowerings, operands, dpu_count=self.engine.dpu_count,
                 tasklets=self.engine.tasklets_per_dpu, numeric_mode=int(packed),
-                request_start=self._sequence, fuse=self.engine.fuse_complex)
+                request_start=self._sequence, fuse=self.engine.fuse_complex,
+                geometry_policy=self.engine.geometry_policy)
             build_s = time.perf_counter() - build_started
             self._cohort_sequence += 1
             response = self.ranks[0].session.submit_waves(
@@ -1827,7 +1836,8 @@ class UpmemV4Session:
             idle_h2d = idle_d2h = 0
             active = {node_id: set() for node_id in stage.node_ids}
             fused_tiles = {node_id: 0 for node_id in stage.node_ids}
-            generic_tiles = {node_id: 0 for node_id in stage.node_ids}
+            real_product_launches = {node_id: 0 for node_id in stage.node_ids}
+            outer_tiles = {node_id: set() for node_id in stage.node_ids}
             tile_ids = {node_id: {f"{node_id}:{t.id}": t.id for t in lowering.tiles}
                         for node_id, lowering in lowerings.items()}
             for wave_index, (wave, results) in enumerate(zip(waves, response["results"], strict=True)):
@@ -1846,11 +1856,13 @@ class UpmemV4Session:
                     active[node_id].add((0, c.dpu_id))
                     transfers[node_id][0] += CONTROL.size + sum(n for _, n in c.planes[:4])
                     transfers[node_id][1] += COMPLETION.size + sum(n for _, n in c.planes[4:])
-                    lanes = lane_names if c.kernel == FOUR_PRODUCT_PANEL else (lane_names[generic_lanes[wave_index]],)
-                    if c.kernel == FOUR_PRODUCT_PANEL:
+                    if c.kernel in OUTER_KERNELS:
+                        outer_tiles[node_id].add(c.tile_id)
+                    lanes = lane_names if c.kernel in FOUR_PRODUCT_KERNELS else (lane_names[generic_lanes[wave_index]],)
+                    if c.kernel in FOUR_PRODUCT_KERNELS:
                         fused_tiles[node_id] += 1
-                    elif generic_lanes[wave_index] == 0:
-                        generic_tiles[node_id] += 1
+                    else:
+                        real_product_launches[node_id] += 1
                     for lane, payload in zip(lanes, products):
                         value = np.frombuffer(payload, dtype="<i4" if packed else "<f4").reshape(c.m, c.n)
                         local_id = tile_ids[node_id][unit.stable_tile_id]
@@ -1916,7 +1928,10 @@ class UpmemV4Session:
                     "cohort_native_launch_count": response["launch_count"] if owner else 0,
                     "cohort_request_sha256": response["request_sha256"],
                     "cohort_response_sha256": response["response_sha256"],
-                    "fused_tile_count": fused_tiles[node_id], "generic_tile_count": generic_tiles[node_id],
+                    "fused_tile_count": fused_tiles[node_id],
+                    "real_product_tile_launch_count": real_product_launches[node_id],
+                    "outer_product_tile_count": len(outer_tiles[node_id]),
+                    "geometry_kernel_policy": self.engine.geometry_policy,
                     "packed_operation_count": int(owner),
                     "packed_operation_bytes": response["envelope_bytes"] if owner else 0,
                     "packed_operation_request_count": len(waves) if owner else 0,
@@ -3197,6 +3212,7 @@ class UpmemSession:
         wave = transport == REQUEST_TRANSPORT_PACKED_WAVE
         return {
             "request_transport": transport, "schedule_policy": self._plan.schedule_policy,
+            "geometry_kernel_policy": getattr(engine, "geometry_policy", "panel_only_v1"),
             "kernel_implementation_id": "dpu_panel_dispatch_v5_v1" if wave else _ACTIVE_MECHANISM_IDS["kernel"],
             "complex_launch_policy": ("fused_when_admitted_v1"
                                       if wave and engine.fuse_complex else "four_real_launches_v1"),
@@ -3440,8 +3456,9 @@ def _derive_operation_observations(
 def _operation_summary(metadata: Mapping[str, Any]) -> Mapping[str, JsonValue]:
     fields = (
         "cohort_id", "cohort_node_ids", "cohort_native_launch_count",
-        "cohort_request_sha256", "cohort_response_sha256", "fused_tile_count", "generic_tile_count",
+        "cohort_request_sha256", "cohort_response_sha256", "fused_tile_count", "real_product_tile_launch_count",
         "transfer_attribution_scope", "cohort_idle_h2d_bytes", "cohort_idle_d2h_bytes",
+        "outer_product_tile_count", "geometry_kernel_policy",
         "cohort_wall_s",
         "stage_id",
         "declared_stage_id",
@@ -3777,6 +3794,7 @@ def open_upmem(
     *,
     timeout_s: float = 120.0,
     fuse_complex: bool = False,
+    geometry_policy: str = "panel_only_v1",
 ) -> UpmemSession:
     """Open one persistent session for a validated final UPMEM plan."""
 
@@ -3787,6 +3805,10 @@ def open_upmem(
     if not isinstance(resources, UpmemResources):
         raise ValueError("open_upmem requires the final UpmemResources record")
     prepared_waves = resources.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
+    if geometry_policy not in ("panel_only_v1", "outer_k1_v1"):
+        raise ValueError("unsupported geometry kernel policy")
+    if geometry_policy != "panel_only_v1" and not prepared_waves:
+        raise ValueError("geometry specialization requires prepared waves")
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise ValueError("timeout_s must be finite and positive")
     timeout_s = float(timeout_s)
@@ -3835,6 +3857,7 @@ def open_upmem(
                 timeout_s=timeout_s,
                 prepared_waves=prepared_waves,
                 fuse_complex=fuse_complex,
+                geometry_policy=geometry_policy,
             )
             low_level = engine.open_session(
                 plan.numeric_policy,
@@ -3885,6 +3908,7 @@ def open_upmem_simulator(
     *,
     timeout_s: float = 120.0,
     fuse_complex: bool = False,
+    geometry_policy: str = "panel_only_v1",
 ) -> UpmemSession:
     """Open the active ABI-v4 route through the SDK simulator only.
 
@@ -3902,6 +3926,10 @@ def open_upmem_simulator(
             "open_upmem_simulator requires the final UpmemResources record"
         )
     prepared_waves = resources.request_transport == REQUEST_TRANSPORT_PACKED_WAVE
+    if geometry_policy not in ("panel_only_v1", "outer_k1_v1"):
+        raise ValueError("unsupported geometry kernel policy")
+    if geometry_policy != "panel_only_v1" and not prepared_waves:
+        raise ValueError("geometry specialization requires prepared waves")
     if isinstance(timeout_s, bool) or not isinstance(timeout_s, (int, float)):
         raise ValueError("timeout_s must be finite and positive")
     timeout_s = float(timeout_s)
@@ -3945,6 +3973,7 @@ def open_upmem_simulator(
             execution_target=EXECUTION_TARGET_SIMULATOR,
             prepared_waves=prepared_waves,
             fuse_complex=fuse_complex,
+            geometry_policy=geometry_policy,
         )
         low_level = engine.open_session(plan.numeric_policy, plan.topology)
     except UnsupportedExecution:

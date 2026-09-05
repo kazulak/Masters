@@ -10,7 +10,7 @@ import pytest
 
 from quantum_bench.upmem.wave_protocol import (
     CONTROL, FOUR_PRODUCT_PANEL, IDLE, INT8_COMPONENT_PRODUCT, MAX_K,
-    MRAM_BYTES, NO_OPERATION, REAL_PANEL,
+    MRAM_BYTES, NO_OPERATION, REAL_PANEL, REAL_OUTER, FOUR_PRODUCT_OUTER,
     WaveControl, aligned_bytes, product_layout,
 )
 
@@ -179,6 +179,23 @@ def test_native_accepts_each_numeric_and_product_mode(c_inspector, kernel, mode)
 
 def test_explicit_int8_component_bound():
     assert MAX_K * INT8_COMPONENT_PRODUCT <= (1 << 31) - 1
+
+
+@pytest.mark.parametrize("kernel,panel", [(REAL_OUTER, REAL_PANEL),
+                                         (FOUR_PRODUCT_OUTER, FOUR_PRODUCT_PANEL)])
+@pytest.mark.parametrize("mode", [0, 1])
+def test_outer_selectors_preserve_layout_and_require_k_one(c_inspector, kernel, panel, mode):
+    item = control(kernel=kernel, numeric_mode=mode, m=13, n=35, k=1)
+    assert item.planes == control(kernel=panel, numeric_mode=mode, m=13, n=35, k=1).planes
+    assert WaveControl.from_bytes(item.to_bytes()) == item
+    result = subprocess.run([str(c_inspector)], input=item.to_bytes(), capture_output=True)
+    assert result.returncode == 0 and result.stdout.decode().split()[-1] == "1"
+    with pytest.raises(ValueError, match="requires K=1"):
+        product_layout(13, 35, 2, numeric_mode=mode, kernel=kernel)
+    fields = list(CONTROL.unpack(item.to_bytes()))
+    fields[14] = 2
+    result = subprocess.run([str(c_inspector)], input=CONTROL.pack(*fields), capture_output=True)
+    assert result.returncode == 0 and result.stdout.decode().split()[-1] == "0"
 
 
 def test_offsets_are_explicit_not_implicitly_contiguous(c_inspector):

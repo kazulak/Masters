@@ -16,6 +16,7 @@
 #endif
 
 #include "panel_compute.h"
+#include "outer_compute.h"
 
 __mram_noinit uint8_t WAVE_MRAM[UPMEM_WAVE_MRAM_BYTES];
 __host upmem_wave_control_t WAVE_CONTROL;
@@ -56,15 +57,20 @@ int main(void) {
             UPMEM_WAVE_A_REAL, UPMEM_WAVE_A_IMAG};
         const uint32_t b_planes[4] = {UPMEM_WAVE_B_REAL, UPMEM_WAVE_B_IMAG,
             UPMEM_WAVE_B_IMAG, UPMEM_WAVE_B_REAL};
-        const uint32_t count = WAVE_CONTROL.kernel == UPMEM_WAVE_KERNEL_REAL_PANEL
-            ? 1u : 4u;
+        const uint32_t count = upmem_wave_kernel_products(WAVE_CONTROL.kernel);
         for (uint32_t product = 0u; product < count; ++product) {
-            panel_compute(WAVE_MRAM, WAVE_CONTROL.m, WAVE_CONTROL.n,
-                WAVE_CONTROL.k, WAVE_CONTROL.numeric_mode == UPMEM_WAVE_INT8,
-                WAVE_CONTROL.planes[a_planes[product]].offset,
-                WAVE_CONTROL.planes[b_planes[product]].offset,
-                WAVE_CONTROL.planes[UPMEM_WAVE_RR + product].offset);
-            /* The helper's final panel barrier also bounds each product's lifetime. */
+            const uint32_t a = WAVE_CONTROL.planes[a_planes[product]].offset;
+            const uint32_t b = WAVE_CONTROL.planes[b_planes[product]].offset;
+            const uint32_t c = WAVE_CONTROL.planes[UPMEM_WAVE_RR + product].offset;
+            if (WAVE_CONTROL.kernel == UPMEM_WAVE_KERNEL_REAL_OUTER ||
+                    WAVE_CONTROL.kernel == UPMEM_WAVE_KERNEL_FOUR_PRODUCT_OUTER) {
+                outer_compute(WAVE_MRAM, WAVE_CONTROL.m, WAVE_CONTROL.n,
+                    WAVE_CONTROL.numeric_mode == UPMEM_WAVE_INT8, a, b, c);
+            } else {
+                panel_compute(WAVE_MRAM, WAVE_CONTROL.m, WAVE_CONTROL.n,
+                    WAVE_CONTROL.k, WAVE_CONTROL.numeric_mode == UPMEM_WAVE_INT8, a, b, c);
+            }
+            /* Each helper's final barrier bounds the product's shared-buffer lifetime. */
             if (tid == 0u) {
                 WAVE_COMPLETION.completed_product_mask |= 1u << product;
                 WAVE_COMPLETION.processed_elements +=

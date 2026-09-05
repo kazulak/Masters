@@ -13,9 +13,13 @@ from quantum_bench.upmem.plan import UpmemStage, UpmemWorkUnit
 from quantum_bench.upmem.tiling import M5Tile, M5TileLowering
 from quantum_bench.upmem.wave_protocol import (
     FOUR_PRODUCT_PANEL,
+    FOUR_PRODUCT_OUTER,
+    FOUR_PRODUCT_KERNELS,
     IDLE,
     NO_OPERATION,
     REAL_PANEL,
+    REAL_OUTER,
+    REAL_KERNELS,
     WaveControl,
     product_layout,
 )
@@ -38,6 +42,7 @@ def build_cohort_waves(
     numeric_mode: int,
     request_start: int,
     fuse: bool,
+    geometry_policy: str = "panel_only_v1",
 ) -> tuple[tuple[tuple[WaveTile, ...], ...], tuple[int, ...]]:
     """Build dense prepared waves for one already-scheduled contract cohort.
 
@@ -53,6 +58,8 @@ def build_cohort_waves(
     produce all four products.
     """
 
+    if geometry_policy not in ("panel_only_v1", "outer_k1_v1"):
+        raise ValueError("unsupported geometry kernel policy")
     _validate_call_arguments(
         stage,
         lowerings,
@@ -273,6 +280,8 @@ def build_cohort_waves(
                 node_id = unit.node_id
                 left, right = operands_by_node[node_id]
                 kernel = FOUR_PRODUCT_PANEL if fused else REAL_PANEL
+                if geometry_policy == "outer_k1_v1" and unit.k_size == 1:
+                    kernel = FOUR_PRODUCT_OUTER if fused else REAL_OUTER
                 inputs = _tile_inputs(
                     left,
                     right,
@@ -430,7 +439,7 @@ def _tile_inputs(
     lane: int,
 ) -> tuple[bytes, bytes, bytes, bytes]:
     dtype = np.dtype("<f4") if numeric_mode == 0 else np.dtype("<i1")
-    if kernel == FOUR_PRODUCT_PANEL:
+    if kernel in FOUR_PRODUCT_KERNELS:
         return (
             _encoded_slice(
                 left.real,
@@ -473,7 +482,7 @@ def _tile_inputs(
                 dtype,
             ),
         )
-    if kernel != REAL_PANEL or lane not in range(4):
+    if kernel not in REAL_KERNELS or lane not in range(4):
         raise ValueError("invalid real-panel lane")
     lane_operands = (
         (left.real, right.real),

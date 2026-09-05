@@ -93,6 +93,19 @@ def test_schedule_is_a_distinct_recomputed_physical_plan():
         validate_upmem_plan(dag, replace(waves, stages=(replace(first, work_units=(bad, *first.work_units[1:])), *waves.stages[1:])))
 
 
+@pytest.mark.parametrize("policy,error", [("unknown", "unsupported geometry"),
+                                          ("outer_k1_v1", "requires prepared waves")])
+def test_geometry_policy_is_rejected_before_legacy_allocation(tmp_path, policy, error):
+    dag, _ = fork_join(k=1)
+    plan = plan_upmem(dag, numeric_policy="split_complex_float32_v1",
+                      topology=UpmemTopology(dpu_count=1, tasklets_per_dpu=8, rank_count=1))
+    resources = UpmemResources(session_root=str(tmp_path / "must-not-exist"),
+                               host_binary="unused", dpu_binary="unused", initialization_binary="unused")
+    with pytest.raises(ValueError, match=error):
+        open_upmem_simulator(dag, plan, resources, geometry_policy=policy)
+    assert not (tmp_path / "must-not-exist").exists()
+
+
 @pytest.mark.parametrize("dpus,tasklets", [(1, 8), (3, 8), (4, 8), (1, 3), (1, 7), (1, 12), (1, 24)])
 @pytest.mark.parametrize("numeric_policy", ["split_complex_float32_v1", "complex_int8_shared_scale_v1"])
 @pytest.mark.parametrize("fuse", [False, True])
@@ -180,7 +193,45 @@ def test_failed_cohort_preserves_context_and_never_submits_consumer(tmp_path, bi
 
 
 @pytest.mark.parametrize("numeric_policy", ["split_complex_float32_v1", "complex_int8_shared_scale_v1"])
-def test_wave_runtime_preserves_split_k_order_and_serial_control(tmp_path, binaries, numeric_policy):
+@pytest.mark.parametrize("fuse", [False, True])
+@pytest.mark.parametrize("dpus", [1, 3, 4])
+def test_outer_dispatch_composes_with_dag_and_generic_consumer(tmp_path, binaries, numeric_policy, fuse, dpus):
+    dag, inputs = fork_join(k=1)
+    plan = plan_upmem(dag, numeric_policy=numeric_policy,
+                      topology=UpmemTopology(dpu_count=dpus, tasklets_per_dpu=8, rank_count=1),
+                      schedule_policy="static_dag_waves_v1")
+    expected = replay_upmem_plan_once(dag, plan, inputs)
+    host, dpu, init = binaries[8]
+    results, identities = [], []
+    for geometry_policy in ("panel_only_v1", "outer_k1_v1"):
+        resources = UpmemResources(session_root=str(tmp_path / geometry_policy), host_binary=host,
+                                   dpu_binary=dpu, initialization_binary=init,
+                                   request_transport="packed_wave_v1")
+        with open_upmem_simulator(dag, plan, resources, fuse_complex=fuse,
+                                  geometry_policy=geometry_policy) as session:
+            identities.append(session._low_level.engine.strategy_config_hash)
+            sample = session.run_once(inputs)
+            repeated = session.run_once(inputs)
+        for result in (sample, repeated):
+            np.testing.assert_array_equal(result.output, expected.output)
+            assert result.numeric_facts["raw_lane_records"] == expected.numeric_facts["raw_lane_records"]
+            facts = result.backend_facts
+            assert facts["geometry_kernel_policy"] == geometry_policy
+            assert facts["physical_plan_id"] == physical_plan_id(plan)
+            counts = {op["node_id"]: op["outer_product_tile_count"] for op in facts["operation_facts"]}
+            assert sum(op["real_product_tile_launch_count"] for op in facts["operation_facts"]) == (0 if fuse else 12)
+            assert sum(op["fused_tile_count"] for op in facts["operation_facts"]) == (3 if fuse else 0)
+            assert counts == {"a": int(geometry_policy == "outer_k1_v1"),
+                              "b": int(geometry_policy == "outer_k1_v1"), "join": 0}
+        results.append(sample)
+    assert len(set(identities)) == 2
+    assert results[0].measurement.h2d_bytes == results[1].measurement.h2d_bytes
+    assert results[0].measurement.d2h_bytes == results[1].measurement.d2h_bytes
+
+
+@pytest.mark.parametrize("numeric_policy", ["split_complex_float32_v1", "complex_int8_shared_scale_v1"])
+@pytest.mark.parametrize("geometry_policy", ["panel_only_v1", "outer_k1_v1"])
+def test_wave_runtime_preserves_split_k_order_and_serial_control(tmp_path, binaries, numeric_policy, geometry_policy):
     dag, inputs = fork_join(k=257)
     host, dpu, init = binaries[8]
     outputs = []
@@ -192,8 +243,11 @@ def test_wave_runtime_preserves_split_k_order_and_serial_control(tmp_path, binar
         resources = UpmemResources(session_root=str(tmp_path / schedule), host_binary=host,
                                    dpu_binary=dpu, initialization_binary=init,
                                    request_transport="packed_wave_v1")
-        with open_upmem_simulator(dag, plan, resources, fuse_complex=True) as session:
+        with open_upmem_simulator(dag, plan, resources, fuse_complex=True,
+                                  geometry_policy=geometry_policy) as session:
             sample = session.run_once(inputs)
+        if geometry_policy == "outer_k1_v1":
+            assert sum(op["outer_product_tile_count"] for op in sample.backend_facts["operation_facts"]) == 2
         np.testing.assert_array_equal(sample.output, expected.output)
         outputs.append(sample.output)
     np.testing.assert_array_equal(*outputs)
@@ -221,7 +275,8 @@ def test_sliced_wave_cohorts_finish_before_host_reduction_and_consumer(tmp_path,
 
 @pytest.mark.parametrize("name,params", [("bell_2q", {}), ("ghz_4q", {}),
                                          ("quantization_stress", {"n_qubits": 4})])
-def test_quantum_full_statevector_uses_frozen_path_and_dag_waves(tmp_path, binaries, name, params):
+@pytest.mark.parametrize("geometry_policy", ["panel_only_v1", "outer_k1_v1"])
+def test_quantum_full_statevector_uses_frozen_path_and_dag_waves(tmp_path, binaries, name, params, geometry_policy):
     network, inputs = lower_tensor_network(make_simulation_job(builtin_circuit(name, params)))
     path, _ = plan_opt_einsum(network, optimize="greedy")
     dag = build_contraction_dag(network, path)
@@ -234,7 +289,8 @@ def test_quantum_full_statevector_uses_frozen_path_and_dag_waves(tmp_path, binar
     resources = UpmemResources(session_root=str(tmp_path / name), host_binary=host,
                                dpu_binary=dpu, initialization_binary=init,
                                request_transport="packed_wave_v1")
-    with open_upmem_simulator(dag, plan, resources, fuse_complex=True) as session:
+    with open_upmem_simulator(dag, plan, resources, fuse_complex=True,
+                              geometry_policy=geometry_policy) as session:
         sample = session.run_once(inputs)
     np.testing.assert_array_equal(sample.output, expected.output)
     np.testing.assert_allclose(sample.output, reference, atol=2e-6, rtol=2e-6)

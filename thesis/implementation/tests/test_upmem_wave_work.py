@@ -20,8 +20,10 @@ from quantum_bench.upmem.tiling import (
 )
 from quantum_bench.upmem.wave_protocol import (
     FOUR_PRODUCT_PANEL,
+    FOUR_PRODUCT_OUTER,
     IDLE,
     REAL_PANEL,
+    REAL_OUTER,
     product_layout,
 )
 from quantum_bench.upmem.wave_work import build_cohort_waves
@@ -29,6 +31,30 @@ from quantum_bench.upmem.wave_work import build_cohort_waves
 
 FLOAT_POLICY = "split_complex_float32_v1"
 INT8_POLICY = "complex_int8_shared_scale_v1"
+
+
+@pytest.mark.parametrize("numeric_mode", [0, 1])
+@pytest.mark.parametrize("fuse", [False, True])
+def test_outer_dispatch_changes_only_selector_for_existing_k1_work(numeric_mode, fuse):
+    lowering = _lower(_node("outer", 3, 5, 1), numeric_mode)
+    stage = UpmemStage(stage_id="outer", kind="contract_batch", node_ids=("outer",),
+                       work_units=(_unit("outer", lowering.tiles[0], wave=0, dpu=0),))
+    args = dict(dpu_count=3, tasklets=7, numeric_mode=numeric_mode, request_start=17, fuse=fuse)
+    panels, panel_lanes = build_cohort_waves(stage, {"outer": lowering},
+                                           {"outer": _operands(lowering, numeric_mode)}, **args)
+    outers, outer_lanes = build_cohort_waves(stage, {"outer": lowering},
+                                           {"outer": _operands(lowering, numeric_mode)},
+                                           geometry_policy="outer_k1_v1", **args)
+    assert panel_lanes == outer_lanes
+    for panel_wave, outer_wave in zip(panels, outers, strict=True):
+        assert panel_wave[1:] == outer_wave[1:]
+        panel, outer = panel_wave[0], outer_wave[0]
+        assert outer.control.kernel == (FOUR_PRODUCT_OUTER if fuse else REAL_OUTER)
+        assert replace(outer.control, kernel=panel.control.kernel) == panel.control
+        assert outer.inputs == panel.inputs
+    with pytest.raises(ValueError, match="geometry kernel policy"):
+        build_cohort_waves(stage, {"outer": lowering}, {"outer": _operands(lowering, numeric_mode)},
+                           geometry_policy="unknown", **args)
 
 
 def _node(node_id: str, m: int, n: int, k: int) -> ContractNode:
