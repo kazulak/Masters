@@ -70,6 +70,34 @@ The same source audit confirms serial per-DPU copies in `host.c`, host split-K a
 
 The integration branch exists; the remaining branch names are proposed. A failed bounded probe is a valid completed gate, not a reason to keep extending the phase.
 
+### Software-only work while hardware is occupied
+
+Phase A physical qualification remains mandatory, but it does not block isolated
+software preparation. `feature/upmem-execution-preparation-v1`, based on reporting
+source `5b93f87c1a034944859348c99e2fe263961a2114`, may perform B0 and one host-only
+complex-envelope batching probe before integration adoption. The qualified
+execution source remains `b921b8804e324da75222354ee2f4df41e770b75c`.
+
+This exception permits only analysis/prototype scripts, focused tests and
+documentation. Production runtime, native code, ABI, frozen candidate pools,
+physical configuration and fitted profiles remain unchanged. It consumes at most
+three focused days of the existing ten-day budget. Neither a successful host-only
+probe nor green software tests waive the seven-session physical gate.
+
+Freeze greedy, minimum-FLOP and minimum-peak paths from retained development
+candidate pools, breaking ties by candidate ID and deduplicating roles. Re-lower
+the selected paths under both policies at 1D/T8 and 4D/T8. Do not regenerate
+candidates or use held-out instances. The prototype compares four lane envelopes
+with one envelope of the identical ordered requests using the existing packer;
+four real-product launches per wave remain unchanged. No CPU-placement or fused
+kernel implementation is part of this exception.
+
+If hardware becomes available, complete or stop the current local measurement
+block and run the frozen Phase A gate first. A runtime correctness repair requires
+requalifying affected descendants, not assuming a pass or rewriting prior
+evidence. Failed prototypes remain isolated. See
+[the software-preparation protocol](implementation/docs/upmem_execution_preparation_v1.md).
+
 | Phase | Proposed branch | Contents and completion gate |
 | --- | --- | --- |
 | A. Integrate | `feature/upmem-execution-integration-v1` | Histories integrated; software/CI/SDK passed at `b921b88`. Complete the unchanged seven-cell physical gate before adoption. |
@@ -366,6 +394,6 @@ The execution-development cap is ten focused engineering days, excluding hardwar
 
 Do not make the thesis depend on every proposed mechanism. A successful bounded result is qualified integrated numerics in one executor, documented GO/NO-GO decisions, useful measured tasklet/DPU configurations, matched evidence for retained improvements, one frozen float32 path study and honest int8 error/performance results. Neither T16/64-DPU wins, fused output, residency, multi-rank nor a new specialized kernel is required to be positive. Optional integration that exceeds the remaining cap is deferred, not silently added to the critical path.
 
-The next execution task is the pending Phase A physical gate on clean `b921b88`, not another source merge or qualification rerun. Then proceed to B0 from adopted integration. Do not begin physical path annealing before the system freeze. Export the standalone repository after accepted milestones, with source and evidence provenance.
+The next physical execution task is the pending Phase A gate on clean `b921b88`, not another source merge or qualification rerun. The software-only exception above permits B0 and one isolated prototype while waiting; production integration and downstream physical experiments still require Phase A adoption. Do not begin physical path annealing before the system freeze. Export the standalone repository after accepted milestones, with source and evidence provenance.
 
 Use at most two implementation workers with disjoint file ownership, one bounded read-only auditor, and one exclusive hardware controller. Runtime/protocol/kernel changes are not independent when they share a wire contract; define that contract before dispatching workers. Stop at the milestone caps, including on neutral/negative results. No autonomous expansion to another optimizer, numeric format, scheduler, multi-rank mode or final 2+30 campaign.
