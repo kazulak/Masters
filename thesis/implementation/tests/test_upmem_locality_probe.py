@@ -50,7 +50,7 @@ def test_native_orders_and_explicit_joint_layout(side, transpose):
     dag = pair(side=side, transpose=transpose)
     result = layout(dag)
     assert result["eligible_for_native_probe"]
-    assert not result["runtime_admitted"] and not result["native_execution_implemented"]
+    assert not result["runtime_admitted"] and not result["production_native_execution_implemented"]
     assert result["rejection_reasons"] == []
     for i, name in enumerate(("first", "second")):
         node = dag.nodes[i]

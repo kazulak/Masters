@@ -43,7 +43,7 @@ remain allocated. Only the second operation's resident inputs alias that pair.
         "producer_id": producer_id, "consumer_id": consumer_id,
         "numeric_policy": plan.numeric_policy,
         "eligible_for_native_probe": False, "runtime_admitted": False,
-        "native_execution_implemented": False, "rejection_reasons": [],
+        "production_native_execution_implemented": False, "rejection_reasons": [],
         "live_mram_bytes": None, "eliminable_intermediate_payload_bytes": None,
     }
     reasons = result["rejection_reasons"]

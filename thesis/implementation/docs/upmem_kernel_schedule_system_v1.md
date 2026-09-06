@@ -430,7 +430,8 @@ no fanout, no fixed slices, no unary host reduction, and identical native label
 orders at the resident boundary. Shared-scale int8 is explicitly unsupported.
 Both product sets, both reconstructed float32 planes and the external operand
 remain live in one conservative joint MRAM layout; no recycling is assumed.
-WRAM/IRAM and a native reconstruction implementation still require qualification.
+Static admission alone does not qualify native reconstruction or WRAM/IRAM use;
+the test-only qualification below supplies that separate software check.
 
 The retained two-circuit census gives 40 statically eligible pairs. The maximum
 padded intermediate-traffic candidate is Stress16 `contract_121 -> contract_122`
@@ -440,7 +441,8 @@ fused four-product launches, retaining it could eliminate 24,576 padded payload
 bytes (four product readbacks plus two component uploads). It adds an estimated
 24,576 local payload bytes for reconstruction reads/writes. Neither estimate is
 a hardware counter or a runtime improvement. Control/completion traffic is
-excluded. Native residency remains unimplemented and unaccepted at this checkpoint.
+excluded. Production residency remains unimplemented and unaccepted; the
+test-only native qualification below does not change that execution policy.
 
 The slice probe keeps every Cartesian partial with its complete output indices
 and an explicit host sum. Stress16 selects `contract_124`, labels `(57,117)`;
@@ -463,13 +465,71 @@ SDK fixtures at four qubits qualify complete partial coverage, float32 policy
 replay, full-statevector shape/order, serial/static equivalence, disjoint sibling
 ownership, partial waves, repeated sessions and host reduction before dependent
 consumers. Simulator timing remains claim-ineligible. Development-sized physical
-slice timing and the one eligible native resident segment remain separate gates.
+slice timing and resident integration remain separate gates.
 
 CPU replay of all three development-sized arms at both topologies preserves
 65,536 Stress16 and 16,384 EDC14 amplitudes. Sliced serial/static outputs agree
 exactly; maximum absolute errors against the unsliced complex128 reference are
 `4.692546e-7` and `1.210162e-8`, respectively, within the `2e-6` absolute/relative
 qualification tolerance. This is numerical qualification, not execution timing.
+
+### Test-Only Native Resident Pair
+
+`tests/native/upmem_resident_probe_{host,dpu}.c` and its private header execute
+one fixed pair through the SDK simulator. The host hardcodes `backend=simulator`;
+there is no physical option, production command, general graph interpreter, or
+new public plan type. Existing production host/DPU sources and ABI-v4 are unchanged.
+The 320-byte little-endian test descriptor contains two existing v5 controls,
+two retained-plane spans, a version, operand side, and monotonically increasing
+pair ID. It is not a second semantic physical plan. Exact label compatibility
+remains the Python admission proof; equal element counts alone are insufficient.
+
+Both arms use **two launches** and the identical panel helper. Launch one creates
+four separate products. In the host-roundtrip control, host-decoded intermediate
+planes are uploaded before launch two. In the resident arm, launch two reads
+the products still in MRAM, applies positive-zero lane assembly, then float32
+`RR-II` and `RI+IR`, and consumes the retained planes. No launch-fusion benefit
+is attributed to residency. Every tasklet owns disjoint 16-element blocks;
+only the final block can write a four-byte tail. Existing per-tasklet A/output
+buffers are reused, with no additional numerical WRAM arena.
+
+The producer saves an immutable descriptor. A changed pair, stale pair ID,
+out-of-order command, bad bounds/layout or numerical reconstruction failure
+poisons the probe session. No consumer arithmetic follows a failed reconstruction.
+The failure uses the strict v5 execution-failure record with product index zero
+and an empty completed prefix. A reconstruction failure may have written partial
+retained data; there is no atomicity/rollback claim. Kernel completion still means
+that products executed, not numerical acceptance. As in the ordinary wave route,
+final readbacks must pass the host finite-value decoder and policy replay before
+qualification. An explicit finite-input/final-product-overflow fixture verifies
+that these two gates cannot be conflated.
+
+SDK cases exercise left/right resident operands, odd tails, idle tasklets,
+T1/T3/T7/T8/T12/T24, repeated pairs, corruption, stale/changed identities and
+failure poisoning. All T1-T24 probe binaries build. At T24, linked WRAM end is
+50,680 bytes, IRAM text is 15,056 bytes, and the main stack frame is 200 bytes.
+T8 disassembly retains the four positive-zero additions followed by subtraction
+and addition; native reconstruction also preserves signed-zero/subnormal cases
+and rejects nonfinite lanes or overflowed reconstructed components.
+
+The frozen Stress16 corpus test uses the exact greedy candidate and physical-plan
+IDs above, captures the accepted CPU replay's actual encoded operands, and checks
+resident/host arms against the same first/second product bytes. Both arms have
+identical final MRAM, including padding. Injecting the native consumer lanes into
+the unchanged reference DAG reproduces all 65,536 final amplitudes exactly and
+passes complex128 validation. This is a bounded native-pair plus reference-DAG
+proof, **not** a complete physical or SDK-native resident Stress16 simulation.
+
+The test harness reads back the full arena after every command for diagnostics.
+Its timing and traffic are therefore not production transport measurements.
+No physical gain, SDK timing speedup, production adoption, or two-copy physical
+evidence acceptance is claimed. A genuine integration experiment must remove the
+diagnostic readbacks and preserve the same-pair/two-launch control, whole-attempt
+accounting, finite-value gates and bounded memory before physical comparison.
+Production adoption would also need an explicit resident memory/execution-policy
+identity. It must not silently claim `host_roundtrip_v1` while omitting that
+roundtrip. The current corpus plan ID identifies the admission/reference plan,
+not an already qualified production resident route.
 
 ## Budget and Preregistration
 
@@ -529,8 +589,10 @@ runtime integration, one independent reader audits, and one controller owns ETH.
 Prepared-cohort encoding, native host dispatch, session lifecycle and whole-DAG
 execution are connected with SDK correctness coverage. The outer-product
 prototype completes the named geometry implementation, subject to its
-qualification and physical decision. Next: physical fusion/outer/DAG gates
-after P0 access, and the bounded residency/slicing probe. Composition admission,
+qualification and physical decision. The bounded resident pair and exact slice
+concurrency have SDK correctness coverage; resident production integration is
+not enabled. Next: physical fusion/outer/DAG gates after P0 access and the
+budgeted locality decision. Composition admission,
 schedule-aware cost extraction and all physical acceptance gates remain open.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.

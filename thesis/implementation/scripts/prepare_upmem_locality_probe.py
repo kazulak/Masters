@@ -154,7 +154,7 @@ def prepare(census_path, *, allow_dirty=False):
             "slice_kernel_policy": "panel_only_v1_unfused", "hardware_execution": False,
             "sdk_execution": False, "timing_claim_applicable": False, "circuits": rows,
             "resident_selected_pair": eligible[0] if eligible else None,
-            "resident_eligible_pair_count": len(eligible), "resident_native_implementation_pending": True,
+            "resident_eligible_pair_count": len(eligible), "resident_production_integration_pending": True,
             "physical_execution_authorized_by_this_artifact": False,
             "physical_gate": "P0_and_source_SDK_qualification_and_separate_budgeted_packet_required"}
 
