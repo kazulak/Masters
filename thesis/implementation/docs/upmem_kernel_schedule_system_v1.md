@@ -582,6 +582,29 @@ The full system freeze remains open. In particular, these facts do not prove a
 complete peak-live host-memory bound, qualify production residency, fit a new
 cost profile, replace the P0 physical gate, or authorize final path search.
 
+## Prepared Snapshot Admission
+
+Prepared-wave sessions derive input-envelope and logical result-snapshot sizes
+from the validated plan's control tables before constructing operand payloads or
+opening the native session. Both snapshots must satisfy the existing 512-MiB
+limit. The codec repeats admission before copying bytes-like payloads, and checks
+their buffer byte lengths before conversion. This preserves accepted wire bytes;
+it changes when oversized requests are rejected, not the transport format.
+
+Result sizes include completion records and logical, unpadded product planes.
+They must not be confused with padded DPU-to-host transfer spans. Admission
+covers serial and static DAG schedules, including per-node serial slice stages,
+both numerical policies, and the selected fusion/geometry policy. Control-table
+construction itself still allocates Python objects and adds session-opening work;
+no timing improvement is claimed.
+
+This is not whole-process host-memory admission. Whole-DAG input/intermediate
+arrays, encoded operands, raw response views retained for evidence, current-wave
+payloads, Python envelope assembly, and the native snapshot can overlap in
+lifetime. Caller-owned backing allocations and allocator overhead are also not
+bounded by tensor `nbytes`. The complete peak-live bound remains a composition
+gate; neither the snapshot limit nor known WRAM/MRAM spans close it.
+
 ## Budget and Preregistration
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.

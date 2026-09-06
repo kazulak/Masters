@@ -14,7 +14,7 @@ import re
 import struct
 from typing import TypeAlias
 
-from quantum_bench.upmem.wave_protocol import IDLE, CONTROL, WaveControl
+from quantum_bench.upmem.wave_protocol import IDLE, CONTROL, COMPLETION_BYTES, WaveControl
 
 
 MAGIC = b"UPWAVE1\0"
@@ -79,6 +79,8 @@ def _digest_bytes(value: object, field: str, *, nonzero: bool = True) -> bytes:
             raise ValueError(f"{field} must be a 64-character SHA-256 hex digest")
         result = bytes.fromhex(value)
     elif isinstance(value, (bytes, bytearray, memoryview)):
+        if memoryview(value).nbytes != 32:
+            raise ValueError(f"{field} must contain exactly 32 digest bytes")
         result = bytes(value)
     else:
         raise TypeError(f"{field} must be a 32-byte digest or SHA-256 hex string")
@@ -143,9 +145,11 @@ def _validate_operation(
     )
 
 
-def _input_bytes(value: object, field: str) -> bytes:
+def _input_bytes(value: object, field: str, expected: int) -> bytes:
     if not isinstance(value, (bytes, bytearray, memoryview)):
         raise TypeError(f"{field} must be bytes-like")
+    if memoryview(value).nbytes != expected:
+        raise ValueError(f"{field} length differs from control")
     if isinstance(value, bytes):
         return value
     return bytes(value)
@@ -156,10 +160,6 @@ def _validate_inputs(
 ) -> tuple[bytes, bytes, bytes, bytes]:
     if type(tile.inputs) is not tuple or len(tile.inputs) != 4:
         raise ValueError(f"tile {tile_index} must have exactly four input planes")
-    inputs = tuple(
-        _input_bytes(value, f"tile {tile_index} input plane {plane}")
-        for plane, value in enumerate(tile.inputs)
-    )
     control = tile.control
     if control.flags == IDLE:
         expected_lengths = (0, 0, 0, 0)
@@ -173,6 +173,10 @@ def _validate_inputs(
             control.k * control.n * element_bytes,
         )
         expected_lengths = tuple(length for _, length in control.planes[:4])
+    inputs = tuple(
+        _input_bytes(value, f"tile {tile_index} input plane {plane}", expected)
+        for plane, (value, expected) in enumerate(zip(tile.inputs, expected_lengths, strict=True))
+    )
     for plane, (payload, expected, logical) in enumerate(
         zip(inputs, expected_lengths, logical_lengths)
     ):
@@ -337,6 +341,41 @@ def _validate_cohort(
     return operation_values, tuple(payload_parts)
 
 
+def wave_snapshot_sizes(
+    operation_count: int, waves: tuple[tuple[WaveControl, ...], ...],
+) -> tuple[int, int]:
+    """Admit input/result snapshots from control geometry, before payload copies.
+
+    These are exact wire sizes, not process memory bounds. Full operation,
+    resource, ordering and payload validation remains the codec's responsibility.
+    """
+    _uint(operation_count, 32, "operation_count", positive=True)
+    if not isinstance(waves, tuple) or not waves or any(type(wave) is not tuple for wave in waves):
+        raise ValueError("snapshot admission requires nonempty control wave tuples")
+    dpus = len(waves[0])
+    if not 1 <= operation_count <= dpus <= MAX_DPUS:
+        raise ValueError("snapshot admission requires 1..64 DPUs and bounded operations")
+    _uint(len(waves), 32, "wave_count", positive=True)
+    envelope_bytes = HEADER_BYTES + operation_count * OPERATION_BYTES + len(waves) * dpus * TILE_BYTES
+    result_bytes = len(waves) * dpus * COMPLETION_BYTES
+    if envelope_bytes > MAX_ENVELOPE_BYTES:
+        raise ValueError("wave envelope exceeds the 512-MiB snapshot admission limit")
+    for wave in waves:
+        if len(wave) != dpus:
+            raise ValueError("snapshot admission requires dense DPU slots")
+        for control in wave:
+            if not isinstance(control, WaveControl):
+                raise TypeError("snapshot admission requires WaveControl records")
+            control.validate()
+            envelope_bytes += sum(length for _, length in control.planes[:4])
+            result_bytes += control.m * control.n * 4 * sum(bool(length) for _, length in control.planes[4:])
+            if envelope_bytes > MAX_ENVELOPE_BYTES:
+                raise ValueError("wave envelope exceeds the 512-MiB snapshot admission limit")
+            if result_bytes > MAX_ENVELOPE_BYTES:
+                raise ValueError("wave result exceeds the 512-MiB snapshot admission limit")
+    return envelope_bytes, result_bytes
+
+
 def pack_wave_envelope(
     *,
     plan_sha256: object,
@@ -375,6 +414,10 @@ def pack_wave_envelope(
     _uint(tasklets, 32, "tasklets", positive=True)
     if tasklets > MAX_TASKLETS:
         raise ValueError("tasklets must be in [1, 24]")
+    if any(not isinstance(tile, WaveTile) for wave in waves for tile in wave):
+        raise TypeError("waves must contain WaveTile controls")
+    expected_bytes, _ = wave_snapshot_sizes(len(operation_records), tuple(
+        tuple(tile.control for tile in wave) for wave in waves))
     operation_values, payload_parts = _validate_cohort(
         operation_records,
         waves,
@@ -392,6 +435,8 @@ def pack_wave_envelope(
     control_count = dpus * len(waves)
     payload_offset = HEADER_BYTES + len(operation_records) * OPERATION_BYTES + control_count * TILE_BYTES
     total_bytes = payload_offset + payload_bytes
+    if total_bytes != expected_bytes:
+        raise AssertionError("wave envelope admission size drift")
     if total_bytes > MAX_ENVELOPE_BYTES:
         raise ValueError("wave envelope exceeds the 512-MiB snapshot admission limit")
     header = HEADER.pack(

@@ -53,9 +53,9 @@ from quantum_bench.upmem.plan import (
     validate_upmem_plan,
 )
 from quantum_bench.upmem.native_session import V4Session
-from quantum_bench.upmem.packed_wave import WaveOperation
+from quantum_bench.upmem.packed_wave import WaveOperation, wave_snapshot_sizes
 from quantum_bench.upmem.wave_protocol import CONTROL, COMPLETION, IDLE, FOUR_PRODUCT_KERNELS, OUTER_KERNELS
-from quantum_bench.upmem.wave_work import build_cohort_waves
+from quantum_bench.upmem.wave_work import build_cohort_controls, build_cohort_waves
 from quantum_bench.upmem.packed_operation import (
     PACKED_OPERATION_TRANSPORT,
     PackedOperation,
@@ -3787,6 +3787,30 @@ def _execution_resource_admission(
     }
 
 
+def _admit_prepared_snapshots(dag, plan, *, fuse_complex, geometry_policy):
+    """Reject oversized transport snapshots before opening the native session."""
+    if plan.topology.rank_count != 1:
+        raise UnsupportedExecution(stage="preflight", reason="prepared waves require one rank",
+                                   capability="rank_topology")
+    nodes = {node.node_id: node for node in dag.nodes}
+    stages = (plan.stages if plan.schedule_policy == "static_dag_waves_v1" else
+              tuple(stage for stage, _ in _session_stage_nodes(plan, nodes)))
+    for stage in stages:
+        if stage.kind == "host_reduce":
+            continue
+        controls, _ = build_cohort_controls(
+            stage, dpu_count=plan.topology.dpu_count,
+            tasklets=plan.topology.tasklets_per_dpu,
+            numeric_mode=int(plan.numeric_policy == _NUMERIC_POLICY_INT8),
+            request_start=0, fuse=fuse_complex, geometry_policy=geometry_policy)
+        try:
+            wave_snapshot_sizes(len(stage.node_ids), controls)
+        except ValueError as exc:
+            raise UnsupportedExecution(stage="preflight",
+                                       reason=f"prepared cohort {stage.stage_id}: {exc}",
+                                       capability="prepared_wave_snapshot_limit") from exc
+
+
 def open_upmem(
     dag: ContractionDAG,
     plan: FinalUpmemPlan,
@@ -3836,7 +3860,8 @@ def open_upmem(
             capability="rank_paths",
         )
     _validate_final_resources(resources)
-
+    if prepared_waves:
+        _admit_prepared_snapshots(dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy)
     try:
         if resources.session_opener is not None:
             low_level = resources.session_opener(
@@ -3960,6 +3985,8 @@ def open_upmem_simulator(
             capability="simulator_target_boundary",
         )
     _validate_final_resources(resources)
+    if prepared_waves:
+        _admit_prepared_snapshots(dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy)
     try:
         engine = UpmemV4Executor(
             session_root=Path(resources.session_root),
