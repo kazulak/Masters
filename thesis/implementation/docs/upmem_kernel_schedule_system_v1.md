@@ -52,7 +52,7 @@ acceptance, not source-only census or speculative kernel/scheduler development.
 | P2 kernels | Experimental fusion and K=1 outer-product dispatch connected; software/SDK checkpoint below, physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
-| P5 composition | Not started | Joint qualification and frozen executor/source/binaries/policies/features |
+| P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
 
@@ -530,6 +530,57 @@ Production adoption would also need an explicit resident memory/execution-policy
 identity. It must not silently claim `host_roundtrip_v1` while omitting that
 roundtrip. The current corpus plan ID identifies the admission/reference plan,
 not an already qualified production resident route.
+
+## Prepared-Wave Execution Facts
+
+`execution_features.py` supplies a separate, deterministic description of the
+implemented prepared-wave executor. It is not the historical serial SLR profile
+and does not enable calibration or accept any kernel/scheduling policy physically.
+Its inputs are a validated DAG/physical plan plus explicit fusion and geometry
+policies. It requires no tensor payloads, native process, or timing observations.
+
+The description distinguishes logical work waves from physical micro-wave
+launches. A mixed fused/generic wave executes all admitted slots in its first
+launch, then only generic slots for the remaining three products. Completed
+fused slots still incur idle controls/completions and kernel entry barriers.
+Serial scheduling submits each node separately, including grouped slice stages;
+static scheduling submits a ready cohort on disjoint DPU groups.
+
+Count padded operand and product payloads separately from control/completion
+traffic. These are application-visible host/DPU bytes, not PCIe bus counters,
+filesystem traffic, or total host copies. Keep useful four-product MACs separate
+from `wave_critical_real_mac_sum`, the sum of each physical wave's maximum DPU
+MAC count. The latter describes arithmetic imbalance and available overlap; it
+is not elapsed time, an instruction counter, or a calibrated kernel predictor.
+Host preparation, SDK waiting, transfers, and reconstruction do not disappear
+when this arithmetic quantity falls.
+
+Local traffic counts follow `panel_compute.h` and `outer_compute.h`. Aligned
+spans are estimates, not a model of every transaction inside the SDK's unaligned
+helpers. In particular, they do not count hidden read/modify/write traffic or
+virtual-lock contention. All product-plane bases are eight-byte aligned, so
+their absolute placement does not change these span estimates. Barrier events
+count three wrapper barriers per allocated DPU/launch, plus two per panel/product
+or two per outer product. Tasklet call counts multiply those events by the
+compiled tasklet count. These are DPU-local barriers, not cross-DPU barriers;
+the final wrapper barrier is outside the kernel's cycle-counter interval.
+
+Known WRAM buffer bytes exclude stacks, globals, SDK runtime storage, and linked
+IRAM admission. The MRAM fact is the peak occupied span within one tile arena,
+not a complete host-memory or resident-segment admission result. Numerical
+representation overhead is explicitly not estimated, not presumed zero or
+non-discriminating.
+
+Composition tests compare the planned launch/transfer counts with actual
+persistent-host SDK facts across serial/static scheduling, fusion on/off,
+panel/outer dispatch, both numeric policies, and sliced reductions. They also
+require unchanged CPU policy replay and repeated-session results. A separate
+large/small mixed-wave fixture checks the real prepared control sequence without
+executing hardware. SDK timings are never fitting data.
+
+The full system freeze remains open. In particular, these facts do not prove a
+complete peak-live host-memory bound, qualify production residency, fit a new
+cost profile, replace the P0 physical gate, or authorize final path search.
 
 ## Budget and Preregistration
 

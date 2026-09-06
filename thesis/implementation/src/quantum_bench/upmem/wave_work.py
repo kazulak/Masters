@@ -30,6 +30,197 @@ _MRAM_ADMISSION_ERROR = "kernel working set exceeds the MRAM arena"
 _NUMERIC_MODE_NAMES = ("float32", "host_packed_int8")
 
 
+def build_cohort_controls(
+    stage: UpmemStage,
+    *,
+    dpu_count: int,
+    tasklets: int,
+    numeric_mode: int,
+    request_start: int,
+    fuse: bool,
+    geometry_policy: str = "panel_only_v1",
+) -> tuple[tuple[tuple[WaveControl, ...], ...], tuple[int, ...]]:
+    """Expand one validated cohort into the dense native control waves.
+
+    This is the operand-payload-free part of :func:`build_cohort_waves`. Keeping
+    fused admission, generic lane expansion, idle-slot placement, and kernel
+    selection here gives accounting callers the same micro-wave boundary as
+    the prepared-wave runtime without constructing operand payloads.
+    """
+
+    if geometry_policy not in ("panel_only_v1", "outer_k1_v1"):
+        raise ValueError("unsupported geometry kernel policy")
+    _validate_control_call_arguments(
+        stage,
+        dpu_count=dpu_count,
+        tasklets=tasklets,
+        numeric_mode=numeric_mode,
+        request_start=request_start,
+        fuse=fuse,
+    )
+    node_index = {node_id: index for index, node_id in enumerate(stage.node_ids)}
+    unit_by_index = dict(enumerate(stage.work_units))
+
+    units_by_node: dict[str, list[tuple[int, UpmemWorkUnit]]] = {
+        node_id: [] for node_id in stage.node_ids
+    }
+    unit_index_by_id: dict[str, int] = {}
+    for index, unit in enumerate(stage.work_units):
+        if not isinstance(unit, UpmemWorkUnit):
+            raise TypeError("stage work_units must contain UpmemWorkUnit records")
+        if unit.node_id not in units_by_node:
+            raise ValueError(
+                f"stage work unit {unit.stable_tile_id!r} references an unknown node"
+            )
+        if unit.logical_rank != 0:
+            raise ValueError("cohort wave encoding requires rank-zero work units")
+        if not 0 <= unit.logical_dpu < dpu_count:
+            raise ValueError(
+                f"stage work unit {unit.stable_tile_id!r} has an invalid DPU slot"
+            )
+        if unit.stable_tile_id in unit_index_by_id:
+            raise ValueError("stage work units contain duplicate stable tile IDs")
+        unit_index_by_id[unit.stable_tile_id] = index
+        units_by_node[unit.node_id].append((index, unit))
+
+    wave_numbers = sorted({unit.wave for unit in stage.work_units})
+    if wave_numbers != list(range(len(wave_numbers))):
+        raise ValueError("stage work-unit waves must be dense starting at zero")
+    for node_id, units in units_by_node.items():
+        node_wave_numbers = sorted({unit.wave for _, unit in units})
+        if node_wave_numbers != list(range(len(node_wave_numbers))):
+            raise ValueError(
+                f"stage work-unit waves for node {node_id!r} must be dense starting at zero"
+            )
+
+    units_by_wave: dict[int, list[tuple[int, UpmemWorkUnit]]] = {
+        wave: [] for wave in wave_numbers
+    }
+    owners: list[int | None] = [None] * dpu_count
+    for index, unit in unit_by_index.items():
+        slot = unit.logical_dpu
+        operation = node_index[unit.node_id]
+        previous_owner = owners[slot]
+        if previous_owner is not None and previous_owner != operation:
+            raise ValueError(
+                f"DPU {slot} changes cohort operation ownership across waves"
+            )
+        owners[slot] = operation
+        units_by_wave[unit.wave].append((index, unit))
+
+    for wave, units in units_by_wave.items():
+        seen_slots: set[int] = set()
+        for _, unit in units:
+            if unit.logical_dpu in seen_slots:
+                raise ValueError(f"cohort wave {wave} reuses a DPU slot")
+            seen_slots.add(unit.logical_dpu)
+        if not seen_slots:
+            raise ValueError(f"cohort wave {wave} has no active work unit")
+
+    layouts: dict[int, tuple[tuple[int, int], ...]] = {}
+    fused_by_index: dict[int, bool] = {}
+    for index, unit in unit_by_index.items():
+        real_layout = product_layout(
+            unit.m_size,
+            unit.n_size,
+            unit.k_size,
+            numeric_mode=numeric_mode,
+            kernel=REAL_PANEL,
+        )
+        if fuse:
+            try:
+                fused_layout = product_layout(
+                    unit.m_size,
+                    unit.n_size,
+                    unit.k_size,
+                    numeric_mode=numeric_mode,
+                    kernel=FOUR_PRODUCT_PANEL,
+                )
+            except ValueError as exc:
+                if str(exc) != _MRAM_ADMISSION_ERROR:
+                    raise
+                layouts[index] = real_layout
+                fused_by_index[index] = False
+                continue
+            layouts[index] = fused_layout
+            fused_by_index[index] = True
+        else:
+            layouts[index] = real_layout
+            fused_by_index[index] = False
+
+    waves: list[tuple[WaveControl, ...]] = []
+    generic_lanes: list[int] = []
+    for original_wave in wave_numbers:
+        active_by_dpu = {
+            unit.logical_dpu: (index, unit)
+            for index, unit in units_by_wave[original_wave]
+        }
+        has_generic = any(
+            not fused_by_index[index] for index, _ in active_by_dpu.values()
+        )
+        micro_lanes = range(4) if has_generic else range(1)
+        for lane in micro_lanes:
+            wave_id = len(waves)
+            request_sequence = request_start + wave_id
+            if request_sequence > _UINT64_MAX:
+                raise ValueError("wave request sequence exceeds uint64")
+            dense_controls: list[WaveControl] = []
+            for dpu_id in range(dpu_count):
+                active = active_by_dpu.get(dpu_id)
+                if active is None:
+                    dense_controls.append(
+                        _idle_control(
+                            dpu_id,
+                            tasklets,
+                            numeric_mode,
+                            wave_id,
+                            request_sequence,
+                        )
+                    )
+                    continue
+
+                index, unit = active
+                fused = fused_by_index[index]
+                if fused and lane != 0:
+                    dense_controls.append(
+                        _idle_control(
+                            dpu_id,
+                            tasklets,
+                            numeric_mode,
+                            wave_id,
+                            request_sequence,
+                        )
+                    )
+                    continue
+
+                kernel = FOUR_PRODUCT_PANEL if fused else REAL_PANEL
+                if geometry_policy == "outer_k1_v1" and unit.k_size == 1:
+                    kernel = FOUR_PRODUCT_OUTER if fused else REAL_OUTER
+                control = WaveControl(
+                    dpu_id=dpu_id,
+                    tasklets=tasklets,
+                    flags=0,
+                    numeric_mode=numeric_mode,
+                    kernel=kernel,
+                    operation_index=node_index[unit.node_id],
+                    wave_id=wave_id,
+                    request_sequence=request_sequence,
+                    tile_id=index,
+                    batch_index=unit.batch_start,
+                    m=unit.m_size,
+                    n=unit.n_size,
+                    k=unit.k_size,
+                    k_offset=unit.k_start,
+                    planes=layouts[index],
+                )
+                control.validate()
+                dense_controls.append(control)
+            waves.append(tuple(dense_controls))
+            generic_lanes.append(lane)
+
+    return tuple(waves), tuple(generic_lanes)
+
+
 def build_cohort_waves(
     stage: UpmemStage,
     lowerings: Mapping[str, M5TileLowering],
@@ -70,33 +261,16 @@ def build_cohort_waves(
         request_start=request_start,
         fuse=fuse,
     )
-
-    node_index = {node_id: index for index, node_id in enumerate(stage.node_ids)}
+    controls, generic_lanes = build_cohort_controls(
+        stage, dpu_count=dpu_count, tasklets=tasklets, numeric_mode=numeric_mode,
+        request_start=request_start, fuse=fuse, geometry_policy=geometry_policy,
+    )
     units_by_node: dict[str, list[tuple[int, UpmemWorkUnit]]] = {
         node_id: [] for node_id in stage.node_ids
     }
-    unit_by_index: dict[int, UpmemWorkUnit] = {}
-    unit_index_by_id: dict[str, int] = {}
     for index, unit in enumerate(stage.work_units):
-        if not isinstance(unit, UpmemWorkUnit):
-            raise TypeError("stage work_units must contain UpmemWorkUnit records")
-        if unit.node_id not in units_by_node:
-            raise ValueError(
-                f"stage work unit {unit.stable_tile_id!r} references an unknown node"
-            )
-        if unit.logical_rank != 0:
-            raise ValueError("cohort wave encoding requires rank-zero work units")
-        if not 0 <= unit.logical_dpu < dpu_count:
-            raise ValueError(
-                f"stage work unit {unit.stable_tile_id!r} has an invalid DPU slot"
-            )
-        if unit.stable_tile_id in unit_index_by_id:
-            raise ValueError("stage work units contain duplicate stable tile IDs")
-        unit_by_index[index] = unit
-        unit_index_by_id[unit.stable_tile_id] = index
         units_by_node[unit.node_id].append((index, unit))
 
-    tile_by_index: dict[int, M5Tile] = {}
     operands_by_node: dict[
         str, tuple[EncodedComplexTensor, EncodedComplexTensor]
     ] = {}
@@ -164,158 +338,34 @@ def build_cohort_waves(
                     f"stage work unit {unit.stable_tile_id!r} extents differ "
                     "from lowering"
                 )
-            tile_by_index[index] = tile
         operands_by_node[node_id] = operands[node_id]
 
-    wave_numbers = sorted({unit.wave for unit in stage.work_units})
-    if wave_numbers != list(range(len(wave_numbers))):
-        raise ValueError("stage work-unit waves must be dense starting at zero")
-    for node_id, units in units_by_node.items():
-        node_wave_numbers = sorted({unit.wave for _, unit in units})
-        if node_wave_numbers != list(range(len(node_wave_numbers))):
-            raise ValueError(
-                f"stage work-unit waves for node {node_id!r} must be dense starting at zero"
-            )
-
-    units_by_wave: dict[int, list[tuple[int, UpmemWorkUnit]]] = {
-        wave: [] for wave in wave_numbers
-    }
-    owners: list[int | None] = [None] * dpu_count
-    for index, unit in unit_by_index.items():
-        slot = unit.logical_dpu
-        operation = node_index[unit.node_id]
-        previous_owner = owners[slot]
-        if previous_owner is not None and previous_owner != operation:
-            raise ValueError(
-                f"DPU {slot} changes cohort operation ownership across waves"
-            )
-        owners[slot] = operation
-        units_by_wave[unit.wave].append((index, unit))
-
-    for wave, units in units_by_wave.items():
-        seen_slots: set[int] = set()
-        for _, unit in units:
-            if unit.logical_dpu in seen_slots:
-                raise ValueError(f"cohort wave {wave} reuses a DPU slot")
-            seen_slots.add(unit.logical_dpu)
-        if not seen_slots:
-            raise ValueError(f"cohort wave {wave} has no active work unit")
-
-    layouts: dict[int, tuple[tuple[int, int], ...]] = {}
-    fused_by_index: dict[int, bool] = {}
-    for index, tile in tile_by_index.items():
-        real_layout = product_layout(
-            tile.m_size,
-            tile.n_size,
-            tile.k_size,
-            numeric_mode=numeric_mode,
-            kernel=REAL_PANEL,
-        )
-        if fuse:
-            try:
-                fused_layout = product_layout(
-                    tile.m_size,
-                    tile.n_size,
-                    tile.k_size,
-                    numeric_mode=numeric_mode,
-                    kernel=FOUR_PRODUCT_PANEL,
-                )
-            except ValueError as exc:
-                if str(exc) != _MRAM_ADMISSION_ERROR:
-                    raise
-                layouts[index] = real_layout
-                fused_by_index[index] = False
-                continue
-            layouts[index] = fused_layout
-            fused_by_index[index] = True
-        else:
-            layouts[index] = real_layout
-            fused_by_index[index] = False
-
     waves: list[tuple[WaveTile, ...]] = []
-    generic_lanes: list[int] = []
-    for original_wave in wave_numbers:
-        active_by_dpu = {
-            unit.logical_dpu: (index, unit)
-            for index, unit in units_by_wave[original_wave]
-        }
-        has_generic = any(
-            not fused_by_index[index] for index, _ in active_by_dpu.values()
-        )
-        micro_lanes = range(4) if has_generic else range(1)
-        for lane in micro_lanes:
-            wave_id = len(waves)
-            request_sequence = request_start + wave_id
-            if request_sequence > _UINT64_MAX:
-                raise ValueError("wave request sequence exceeds uint64")
-            dense_slots: list[WaveTile] = []
-            for dpu_id in range(dpu_count):
-                active = active_by_dpu.get(dpu_id)
-                if active is None:
-                    dense_slots.append(
-                        _idle_tile(
-                            dpu_id,
-                            tasklets,
-                            numeric_mode,
-                            wave_id,
-                            request_sequence,
-                        )
-                    )
-                    continue
-
-                index, unit = active
-                fused = fused_by_index[index]
-                if fused and lane != 0:
-                    dense_slots.append(
-                        _idle_tile(
-                            dpu_id,
-                            tasklets,
-                            numeric_mode,
-                            wave_id,
-                            request_sequence,
-                        )
-                    )
-                    continue
-
-                node_id = unit.node_id
-                left, right = operands_by_node[node_id]
-                kernel = FOUR_PRODUCT_PANEL if fused else REAL_PANEL
-                if geometry_policy == "outer_k1_v1" and unit.k_size == 1:
-                    kernel = FOUR_PRODUCT_OUTER if fused else REAL_OUTER
-                inputs = _tile_inputs(
-                    left,
-                    right,
-                    unit,
-                    layouts[index],
-                    numeric_mode=numeric_mode,
-                    kernel=kernel,
-                    lane=lane,
-                )
-                control = WaveControl(
-                    dpu_id=dpu_id,
-                    tasklets=tasklets,
-                    flags=0,
-                    numeric_mode=numeric_mode,
-                    kernel=kernel,
-                    operation_index=node_index[node_id],
-                    wave_id=wave_id,
-                    request_sequence=request_sequence,
-                    tile_id=index,
-                    batch_index=unit.batch_start,
-                    m=unit.m_size,
-                    n=unit.n_size,
-                    k=unit.k_size,
-                    k_offset=unit.k_start,
-                    planes=layouts[index],
-                )
-                control.validate()
+    for control_wave, lane in zip(controls, generic_lanes, strict=True):
+        dense_slots: list[WaveTile] = []
+        for control in control_wave:
+            if control.flags == IDLE:
                 dense_slots.append(
-                    WaveTile(control, unit.m_start, unit.n_start, inputs)
+                    WaveTile(control, 0, 0, (b"", b"", b"", b""))
                 )
-            waves.append(tuple(dense_slots))
-            generic_lanes.append(lane)
+                continue
+            unit = stage.work_units[control.tile_id]
+            left, right = operands_by_node[unit.node_id]
+            inputs = _tile_inputs(
+                left,
+                right,
+                unit,
+                control.planes,
+                numeric_mode=numeric_mode,
+                kernel=control.kernel,
+                lane=lane,
+            )
+            dense_slots.append(
+                WaveTile(control, unit.m_start, unit.n_start, inputs)
+            )
+        waves.append(tuple(dense_slots))
 
-    return tuple(waves), tuple(generic_lanes)
+    return tuple(waves), generic_lanes
 
 
 def _validate_call_arguments(
@@ -329,16 +379,24 @@ def _validate_call_arguments(
     request_start: int,
     fuse: bool,
 ) -> None:
-    if not isinstance(stage, UpmemStage):
-        raise TypeError("stage must be an UpmemStage")
-    if stage.kind != "contract_batch":
-        raise ValueError("cohort wave encoding requires a contract_batch stage")
+    _validate_control_call_arguments(stage, dpu_count=dpu_count, tasklets=tasklets,
+                                     numeric_mode=numeric_mode, request_start=request_start, fuse=fuse)
     if not isinstance(lowerings, Mapping) or not isinstance(operands, Mapping):
         raise TypeError("lowerings and operands must be mappings")
     if set(lowerings) != set(stage.node_ids):
         raise ValueError("lowering keys must exactly match stage node_ids")
     if set(operands) != set(stage.node_ids):
         raise ValueError("operand keys must exactly match stage node_ids")
+
+
+def _validate_control_call_arguments(
+    stage: UpmemStage, *, dpu_count: int, tasklets: int, numeric_mode: int,
+    request_start: int, fuse: bool,
+) -> None:
+    if not isinstance(stage, UpmemStage):
+        raise TypeError("stage must be an UpmemStage")
+    if stage.kind != "contract_batch":
+        raise ValueError("cohort wave encoding requires a contract_batch stage")
     if type(dpu_count) is not int or not 1 <= dpu_count <= MAX_DPUS:
         raise ValueError(f"dpu_count must be an integer in [1, {MAX_DPUS}]")
     if len(stage.node_ids) > dpu_count:
@@ -544,13 +602,13 @@ def _encoded_slice(
     return payload + bytes(aligned_length - len(payload))
 
 
-def _idle_tile(
+def _idle_control(
     dpu_id: int,
     tasklets: int,
     numeric_mode: int,
     wave_id: int,
     request_sequence: int,
-) -> WaveTile:
+) -> WaveControl:
     control = WaveControl(
         dpu_id=dpu_id,
         tasklets=tasklets,
@@ -569,7 +627,7 @@ def _idle_tile(
         planes=((0, 0),) * 8,
     )
     control.validate()
-    return WaveTile(control, 0, 0, (b"", b"", b"", b""))
+    return control
 
 
-__all__ = ["build_cohort_waves"]
+__all__ = ["build_cohort_controls", "build_cohort_waves"]
