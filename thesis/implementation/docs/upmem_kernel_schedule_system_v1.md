@@ -605,6 +605,45 @@ lifetime. Caller-owned backing allocations and allocator overhead are also not
 bounded by tensor `nbytes`. The complete peak-live bound remains a composition
 gate; neither the snapshot limit nor known WRAM/MRAM spans close it.
 
+The execution-facts report now exposes `host_buffers`, an inventory of the bulk
+allocations deliberately retained through the end of steady execution:
+
+- Every graph output, including sliced host reductions, as a complex64 array.
+- Two encoded planes per logical canonical operand, once per contraction.
+- The full immutable result snapshot for every cohort, not merely its useful
+  output bytes. Raw lane views pin completion records and idle-slot bytes too.
+- The final C-contiguous complex64 output copy.
+
+Caller input descriptor bytes are reported separately without alias-storage
+deduplication. Input envelopes have a cohort lifetime; their maximum is reported
+separately and is not added to the retained sum. Neither a largest intermediate
+nor the largest response snapshot describes cumulative retained storage. Split-K
+partials and all slice branches count before their reconstruction/reduction.
+
+The inventory is checked against actual SDK response-buffer objects and encoded
+NumPy arrays for both numeric modes, schedules, fusion settings and sliced
+execution. It is not measured peak RSS, a complete workspace upper bound, or a
+performance result. Canonicalization, quantization, reconstruction, hashing,
+packing copies, native storage and Python/allocator/SDK overhead remain separate.
+No new memory-budget threshold, execution-policy change or fitted score term is
+introduced by this reporting-only addition.
+
+The native allocation audit found one envelope snapshot plus a fixed 262,144-byte
+output scratch allocation on the successful prepared path, at most 512.25 MiB
+of those explicit heap allocations. Per-wave control/completion arrays are
+bounded stack storage; result bytes stream to the output file. This excludes
+SDK/provider allocations, libc and allocator overhead and is not a native RSS
+bound. The output scratch bound depends on the existing validated 256-by-256
+maximum tile geometry.
+
+Applying the inventory to the existing frozen census (36 eligible cells, eight
+schedule/fusion/geometry combinations each) gives 288 rows. Retained executor
+bulk allocations range from 548,684 to 33,784,832 bytes. The largest input
+envelope is 289,016 bytes; the largest result snapshot is 16,781,824 bytes.
+Maximum cumulative retained response storage is 16,926,848 bytes. These values
+describe the frozen paths only, not arbitrary future candidates or measured
+RSS. No candidates were generated and no physical execution was used.
+
 ## Budget and Preregistration
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.

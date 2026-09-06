@@ -10,8 +10,12 @@ created here.
 from __future__ import annotations
 
 from collections.abc import Iterable
+from math import prod
 
-from quantum_bench.model import ContractionDAG
+import numpy as np
+
+from quantum_bench.model import ContractNode, ContractionDAG
+from quantum_bench.upmem.packed_wave import wave_snapshot_sizes
 from quantum_bench.upmem.plan import (
     UpmemPlan,
     UpmemStage,
@@ -35,6 +39,7 @@ from quantum_bench.upmem.wave_protocol import (
     WaveControl,
 )
 from quantum_bench.upmem.wave_work import build_cohort_controls
+from quantum_bench.upmem.tiling import canonical_label_geometry
 
 
 SCHEMA_VERSION = "upmem_execution_features_v1"
@@ -89,6 +94,7 @@ def extract_execution_features(
     totals = _new_totals()
     static_peak_mram = 0
     cohort_count = 0
+    cohort_snapshots: list[dict[str, object]] = []
 
     for declared_stage in plan.stages:
         if declared_stage.kind == "host_reduce":
@@ -107,6 +113,14 @@ def extract_execution_features(
                 fuse=fuse_complex,
                 geometry_policy=geometry_policy,
             )
+            envelope_bytes, result_bytes = wave_snapshot_sizes(len(cohort_stage.node_ids), controls)
+            cohort_snapshots.append({
+                "cohort_id": cohort_stage.stage_id,
+                "node_ids": cohort_stage.node_ids,
+                "input_envelope_bytes": envelope_bytes,
+                "response_snapshot_bytes": result_bytes,
+                "control_count": len(controls) * topology.dpu_count,
+            })
             for cohort_wave_index, (control_wave, lane) in enumerate(
                 zip(controls, generic_lanes, strict=True)
             ):
@@ -163,6 +177,57 @@ def extract_execution_features(
         "waves": waves,
         "totals": totals,
         "static_memory": static_memory,
+        "host_buffers": _retained_host_buffers(dag, numeric_mode, cohort_snapshots),
+    }
+
+
+def _retained_host_buffers(dag, numeric_mode, cohorts):
+    """Count bulk allocations retained until post-steady evidence construction.
+
+    Runtime keeps every produced tensor, encoded operand and raw lane view.
+    Each raw view pins its entire immutable cohort response, including idle
+    completion records. These are not peak RSS or temporary workspace bounds.
+    """
+    input_bytes = sum(prod(t.shape) * np.dtype(t.dtype).itemsize for t in dag.tensors)
+    output_bytes = sum(prod(node.output.shape) * 8 for node in dag.nodes)
+    encoded_bytes = 0
+    for node in dag.nodes:
+        if isinstance(node, ContractNode):
+            b, m, k, n = canonical_label_geometry(
+                node.left.labels, node.left.shape, node.right.labels,
+                node.right.shape, node.output_labels)
+            encoded_bytes += 2 * (1 if numeric_mode else 4) * b * k * (m + n)
+    response_bytes = sum(row["response_snapshot_bytes"] for row in cohorts)
+    final_bytes = prod(dag.output.shape) * 8
+    retained = output_bytes + encoded_bytes + response_bytes + final_bytes
+    return {
+        "scope": "post_steady_retained_bulk_allocations_v1",
+        "full_host_memory_bound": False,
+        "peak_rss_measured": False,
+        "caller_input_declared_bytes": input_bytes,
+        "caller_input_alias_storage_deduplicated": False,
+        "graph_output_array_bytes": output_bytes,
+        "encoded_operand_plane_bytes": encoded_bytes,
+        "retained_response_snapshot_bytes": response_bytes,
+        "final_output_copy_bytes": final_bytes,
+        "retained_executor_bulk_bytes": retained,
+        "max_input_envelope_bytes": max((row["input_envelope_bytes"] for row in cohorts), default=0),
+        "max_response_snapshot_bytes": max((row["response_snapshot_bytes"] for row in cohorts), default=0),
+        "cohorts": cohorts,
+        "excluded_from_retained_sum": [
+            "caller input backing allocations",
+            "materialization/canonicalization/quantization workspace",
+            "live cohort input payloads and envelope assembly copies",
+            "lane assembly, reduction and decode workspace",
+            "native envelope snapshot and output scratch",
+            "evidence hashing and serialization temporaries",
+            "Python objects, allocator overhead, SDK and process storage",
+        ],
+        "lifetime_sources": [
+            "runtime.py:UpmemSession._run_once_unlocked",
+            "runtime.py:UpmemV4Session._execute_cohort",
+            "native_session.py:V4Session._read_wave_snapshot",
+        ],
     }
 
 
