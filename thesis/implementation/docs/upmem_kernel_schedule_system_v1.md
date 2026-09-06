@@ -413,6 +413,64 @@ envelope buffers and result views
 can coexist in host memory. The existing per-envelope/result size caps are not
 a complete peak-live-host-memory bound; that remains a composition admission gate.
 
+## Bounded Locality Preparation
+
+`scripts/prepare_upmem_locality_probe.py` reads the checksummed P1 frontier census
+(`b26a20e821c1510c6975c4990b2224c42d3f656cf98c0e14c958d7cfe19c3095`).
+It reconstructs only retained greedy paths for Stress16 and EDC14, verifies
+their logical and physical identities, and never generates candidate paths or
+launches a simulator/device. Its JSON is a preparation artifact, not physical
+evidence or execution authorization. By default it requires clean source and
+verified ancestry from the census source. `--allow-dirty-preview` is an explicit
+development-only opt-in; its outputs are labelled previews and cannot freeze a packet.
+
+The static residency checker admits only consecutive single-node operations,
+one full unbatched tile each on the same DPU, exactly one use of the intermediate,
+no fanout, no fixed slices, no unary host reduction, and identical native label
+orders at the resident boundary. Shared-scale int8 is explicitly unsupported.
+Both product sets, both reconstructed float32 planes and the external operand
+remain live in one conservative joint MRAM layout; no recycling is assumed.
+WRAM/IRAM and a native reconstruction implementation still require qualification.
+
+The retained two-circuit census gives 40 statically eligible pairs. The maximum
+padded intermediate-traffic candidate is Stress16 `contract_121 -> contract_122`
+on one DPU: local `(M,N,K)` geometries `(16,64,4)` and `(16,256,4)`, 1,024
+intermediate complex elements, 93,184 bytes of joint live MRAM. Relative to two
+fused four-product launches, retaining it could eliminate 24,576 padded payload
+bytes (four product readbacks plus two component uploads). It adds an estimated
+24,576 local payload bytes for reconstruction reads/writes. Neither estimate is
+a hardware counter or a runtime improvement. Control/completion traffic is
+excluded. Native residency remains unimplemented and unaccepted at this checkpoint.
+
+The slice probe keeps every Cartesian partial with its complete output indices
+and an explicit host sum. Stress16 selects `contract_124`, labels `(57,117)`;
+EDC14 selects `contract_27`, label `(19,)`. Selection uses original arithmetic
+work, then slice count and stable IDs, with actual disjoint sibling cohorts
+required at both two/four DPUs. No timing enters the choice. The controls are
+unsliced serial, sliced serial, and the same sliced DAG with static waves,
+using unfused panel execution to isolate decomposition and scheduling.
+Static waves may also overlap other ready original nodes: this comparison
+measures whole-DAG scheduling of the sliced graph, not slice-only concurrency.
+
+Planned launch counts (two/four DPUs) are respectively 532/512, 628/560,
+392/208 for Stress16 and 144/124, 176/140, 136/72 for EDC14. Arithmetic MAC
+counts remain equal for these single-node decompositions, but full partial
+output traffic and host reduction increase. Lower launch counts do not establish
+faster execution. The preparation records padded payload, idle-slot, control,
+completion and host-reduction counts separately.
+
+SDK fixtures at four qubits qualify complete partial coverage, float32 policy
+replay, full-statevector shape/order, serial/static equivalence, disjoint sibling
+ownership, partial waves, repeated sessions and host reduction before dependent
+consumers. Simulator timing remains claim-ineligible. Development-sized physical
+slice timing and the one eligible native resident segment remain separate gates.
+
+CPU replay of all three development-sized arms at both topologies preserves
+65,536 Stress16 and 16,384 EDC14 amplitudes. Sliced serial/static outputs agree
+exactly; maximum absolute errors against the unsliced complex128 reference are
+`4.692546e-7` and `1.210162e-8`, respectively, within the `2e-6` absolute/relative
+qualification tolerance. This is numerical qualification, not execution timing.
+
 ## Budget and Preregistration
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
