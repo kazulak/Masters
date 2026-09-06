@@ -222,6 +222,25 @@ _ROUTE_OPTIONS = {
         }
     ),
 }
+_UPMEM_EXECUTION_POLICY_FIELDS = frozenset(
+    {
+        "request_transport",
+        "schedule_policy",
+        "fuse_complex",
+        "geometry_policy",
+    }
+)
+_UPMEM_EXECUTION_POLICY_DEFAULTS = {
+    "request_transport": "packed_operation_v1",
+    "schedule_policy": "serial_nodes_v1",
+    "fuse_complex": False,
+    "geometry_policy": "panel_only_v1",
+}
+_UPMEM_EXECUTION_POLICY_OPTION_FIELDS = frozenset(
+    _ROUTE_OPTIONS["upmem_sdk_simulator"]
+    | _ROUTE_OPTIONS["upmem_physical"]
+    | _UPMEM_EXECUTION_POLICY_FIELDS
+)
 _PATH_OPTIONS = {
     "runner",
     "verification_path",
@@ -284,6 +303,77 @@ def _config_id(value: object, field: str) -> str:
 
 def _config_string(value: object, field: str) -> str:
     return _config_id(value, field)
+
+
+def upmem_execution_policy(options: Mapping[str, object]) -> Mapping[str, object]:
+    """Return the effective, validated UPMEM execution policy."""
+
+    mapping = _config_mapping(options, "UPMEM route options")
+    unexpected = set(mapping) - _UPMEM_EXECUTION_POLICY_OPTION_FIELDS
+    if unexpected:
+        raise ValueError(
+            "UPMEM route option fields must be exact; "
+            f"unexpected={sorted(unexpected)}"
+        )
+
+    request_transport = _config_string(
+        mapping.get(
+            "request_transport",
+            _UPMEM_EXECUTION_POLICY_DEFAULTS["request_transport"],
+        ),
+        "UPMEM route options.request_transport",
+    )
+    if request_transport not in {"packed_operation_v1", "packed_wave_v1"}:
+        raise ValueError(
+            "UPMEM route options.request_transport has an unsupported value"
+        )
+
+    schedule_policy = _config_string(
+        mapping.get(
+            "schedule_policy",
+            _UPMEM_EXECUTION_POLICY_DEFAULTS["schedule_policy"],
+        ),
+        "UPMEM route options.schedule_policy",
+    )
+    if schedule_policy not in {"serial_nodes_v1", "static_dag_waves_v1"}:
+        raise ValueError(
+            "UPMEM route options.schedule_policy has an unsupported value"
+        )
+
+    fuse_complex = mapping.get(
+        "fuse_complex", _UPMEM_EXECUTION_POLICY_DEFAULTS["fuse_complex"]
+    )
+    if type(fuse_complex) is not bool:
+        raise TypeError("UPMEM route options.fuse_complex must be a bool")
+
+    geometry_policy = _config_string(
+        mapping.get(
+            "geometry_policy",
+            _UPMEM_EXECUTION_POLICY_DEFAULTS["geometry_policy"],
+        ),
+        "UPMEM route options.geometry_policy",
+    )
+    if geometry_policy not in {"panel_only_v1", "outer_k1_v1"}:
+        raise ValueError(
+            "UPMEM route options.geometry_policy has an unsupported value"
+        )
+
+    if request_transport != "packed_wave_v1" and (
+        schedule_policy != "serial_nodes_v1"
+        or fuse_complex
+        or geometry_policy != "panel_only_v1"
+    ):
+        raise ValueError(
+            "non-default UPMEM schedule, fusion, and geometry policies "
+            "require packed_wave_v1"
+        )
+
+    return {
+        "request_transport": request_transport,
+        "schedule_policy": schedule_policy,
+        "fuse_complex": fuse_complex,
+        "geometry_policy": geometry_policy,
+    }
 
 
 def _config_int(value: object, field: str, *, minimum: int = 0) -> int:
@@ -409,9 +499,23 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
         raise ValueError(f"{field}.numeric_policy must be null for {executor}")
     raw_options = _config_mapping(route["options"], f"{field}.options")
     expected_options = _ROUTE_OPTIONS[executor]
-    options = dict(
-        _config_fields(raw_options, expected_options, f"{field}.options")
-    )
+    if executor in _UPMEM_EXECUTORS:
+        actual_options = set(raw_options)
+        allowed_options = expected_options | _UPMEM_EXECUTION_POLICY_FIELDS
+        missing_options = expected_options - actual_options
+        unexpected_options = actual_options - allowed_options
+        if missing_options or unexpected_options:
+            raise ValueError(
+                f"{field}.options fields must be exact; "
+                f"missing={sorted(missing_options)}, "
+                f"unexpected={sorted(unexpected_options)}"
+            )
+        execution_policy = upmem_execution_policy(raw_options)
+        options = dict(raw_options)
+    else:
+        options = dict(
+            _config_fields(raw_options, expected_options, f"{field}.options")
+        )
     for option in _PATH_OPTIONS.intersection(options):
         options[option] = _absolute_config_path(
             options[option], root, f"{field}.options.{option}"
@@ -441,6 +545,13 @@ def _normalize_route(value: object, root: Path, field: str) -> dict[str, object]
         tasklets = int(options["tasklets_per_dpu"])
         if tasklets > 24:
             raise ValueError(f"{field}.options.tasklets_per_dpu must be <= 24")
+        if execution_policy["request_transport"] == "packed_wave_v1" and (
+            rank_count != 1 or dpu_count > 64
+        ):
+            raise ValueError(
+                f"{field}.options packed_wave_v1 requires exactly one rank "
+                "and at most 64 DPUs"
+            )
         if executor == "upmem_sdk_simulator":
             if dpu_count > 64 or rank_count != 1:
                 raise ValueError(

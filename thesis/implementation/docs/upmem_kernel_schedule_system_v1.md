@@ -644,6 +644,41 @@ Maximum cumulative retained response storage is 16,926,848 bytes. These values
 describe the frozen paths only, not arbitrary future candidates or measured
 RSS. No candidates were generated and no physical execution was used.
 
+## Canonical Experiment Integration
+
+The existing `plan` and `run` commands accept four optional UPMEM route options
+for both SDK simulator and explicitly authorized physical execution:
+
+```yaml
+request_transport: packed_wave_v1
+schedule_policy: static_dag_waves_v1
+fuse_complex: true
+geometry_policy: outer_k1_v1
+```
+
+These entries supplement the existing required route options; they are not a
+complete experiment configuration. Omitted options retain the accepted
+`packed_operation_v1`, `serial_nodes_v1`, unfused, `panel_only_v1` behavior.
+Defaults are not inserted into normalized legacy configurations, preserving
+their experiment identities. Non-default schedule, fusion or geometry requires
+explicit prepared-wave transport, one rank and at most 64 DPUs. Unsupported
+values and incompatible combinations are rejected before execution.
+
+Scheduling remains part of physical-plan identity. Prepared executable identity
+binds ABI-v5 transport and fusion/geometry dispatch in addition to binary hashes;
+legacy executable identity is unchanged. Prepared sessions declare
+`upmem_prepared_wave_abi_v5`. Existing sample/session schemas and canonical
+verification are reused, with selected policies and actual cohort/kernel facts
+in the existing backend-facts mapping. This is experimental route exposure,
+not default adoption or physical qualification.
+
+The integration tests exercise the normal CLI, planner, SDK session and canonical
+verifier in 16 sessions: float32/int8, serial/static DAG schedules, unfused panel
+versus fused outer dispatch, and unsliced/sliced Stress4 fixtures at 3 DPUs/T8.
+They check identities, actual multi-node cohorts, dispatch counts, numerical
+policy replay and absence of CPU fallback. Simulator timings are not performance
+evidence. Runtime, kernels, transport codecs and candidate pools are unchanged.
+
 ## Budget and Preregistration
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.

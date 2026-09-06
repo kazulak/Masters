@@ -483,7 +483,7 @@ def test_loader_enforces_circuit_name_path_union_and_exact_route_options(
         load_experiment_config(bad_options)
 
 
-def test_upmem_transport_is_fixed_and_public_override_is_rejected(
+def test_upmem_default_transport_is_preserved_and_directory_transport_is_rejected(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     config_path = tmp_path / "config.yml"
@@ -502,7 +502,7 @@ def test_upmem_transport_is_fixed_and_public_override_is_rejected(
             "      rank_paths: [/dev/dpu_rank0]",
         ),
     )
-    with pytest.raises(ValueError, match="fields must be exact"):
+    with pytest.raises(ValueError, match="request_transport"):
         load_experiment_config(legacy_path)
 
     monkeypatch.setattr(cli, "_sha256_file", lambda _path: "a" * 64)
@@ -522,9 +522,8 @@ def test_upmem_transport_is_fixed_and_public_override_is_rejected(
             "request_transport": "directory_v1",
         },
     }
-    assert cli._executable_identity(identity_route) == cli._executable_identity(
-        legacy_identity_route
-    )
+    with pytest.raises(ValueError, match="request_transport"):
+        cli._executable_identity(legacy_identity_route)
 
 
 def test_loader_allows_distinct_plan_occurrences_but_rejects_exact_duplicates(

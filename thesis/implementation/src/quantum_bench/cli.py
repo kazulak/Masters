@@ -46,6 +46,7 @@ from quantum_bench.experiment import (
     load_experiment_config,
     run_direct_samples,
     run_session_samples,
+    upmem_execution_policy,
 )
 from quantum_bench.lowering import (
     build_contraction_dag,
@@ -75,6 +76,7 @@ from quantum_bench.upmem.runtime import open_upmem, open_upmem_simulator
 
 _PLAN_SCHEMA = "tn_benchmark_plan_v1"
 _SESSION_PROTOCOL_ID = "upmem_real_tile_abi_v4"
+_WAVE_SESSION_PROTOCOL_ID = "upmem_prepared_wave_abi_v5"
 _UPMEM_EXECUTORS = frozenset({"upmem_sdk_simulator", "upmem_physical"})
 _PLAN_EXECUTORS = frozenset({"numpy_dag", *_UPMEM_EXECUTORS})
 _THREAD_ENVIRONMENT_VARIABLES = (
@@ -550,12 +552,14 @@ def _topology(route: Mapping[str, object]) -> UpmemTopology:
 
 def _resources(route: Mapping[str, object]) -> UpmemResources:
     options = route["options"]
+    policy = upmem_execution_policy(options)
     return UpmemResources(
         session_root=options["session_root"],
         host_binary=options["host_binary"],
         dpu_binary=options["dpu_binary"],
         initialization_binary=options["initialization_binary"],
         rank_paths=tuple(options.get("rank_paths", ())),
+        request_transport=policy["request_transport"],
     )
 
 
@@ -572,6 +576,8 @@ def _dependency_versions(names: tuple[str, ...]) -> Mapping[str, JsonValue]:
 def _executable_identity(route: Mapping[str, object]) -> str | None:
     executor = route["executor"]
     options = route["options"]
+    policy = upmem_execution_policy(options) if executor in _UPMEM_EXECUTORS else None
+    prepared = policy is not None and policy["request_transport"] == "packed_wave_v1"
     files: dict[str, str | None] = {}
     if executor == "quest_cpu":
         files["runner"] = _sha256_file(options["runner"])
@@ -584,12 +590,12 @@ def _executable_identity(route: Mapping[str, object]) -> str | None:
         digest is None for digest in files.values()
     ):
         return None
-    payload: Mapping[str, JsonValue] = {
+    payload: dict[str, JsonValue] = {
         "executor": executor,
-        "abi_version": 4 if executor in _UPMEM_EXECUTORS else None,
+        "abi_version": (5 if prepared else 4) if executor in _UPMEM_EXECUTORS else None,
         "static_file_sha256": files,
         "request_transport": (
-            "packed_operation_v1" if executor in _UPMEM_EXECUTORS else None
+            policy["request_transport"] if policy is not None else None
         ),
         "source_commit": _source_commit()
         if executor in {"numpy_dag", "quimb", "cotengra"}
@@ -602,6 +608,13 @@ def _executable_identity(route: Mapping[str, object]) -> str | None:
             }.get(executor, ())
         ),
     }
+    if prepared:
+        # Scheduling belongs to physical-plan identity; kernel choices also
+        # need binding when the same plan runs through different dispatch rules.
+        payload["execution_policy"] = {
+            "fuse_complex": policy["fuse_complex"],
+            "geometry_policy": policy["geometry_policy"],
+        }
     return executable_id(payload)
 
 
@@ -706,11 +719,13 @@ def _plan_document(config: Mapping[str, object]) -> Mapping[str, object]:
             if route["executor"] not in _UPMEM_EXECUTORS:
                 entries.append({**base, "route_id": route_id, "upmem": None})
                 continue
+            execution_policy = upmem_execution_policy(route["options"])
             try:
                 compiled = plan_upmem(
                     dag,
                     numeric_policy=route["numeric_policy"],
                     topology=_topology(route),
+                    schedule_policy=execution_policy["schedule_policy"],
                 )
                 entries.append(
                     {
@@ -725,6 +740,11 @@ def _plan_document(config: Mapping[str, object]) -> Mapping[str, object]:
                                 "tasklets_per_dpu": compiled.topology.tasklets_per_dpu,
                             },
                             "stages": _stage_summary(compiled),
+                            **(
+                                {"execution_policy": execution_policy}
+                                if execution_policy["request_transport"] == "packed_wave_v1"
+                                else {}
+                            ),
                         },
                     }
                 )
@@ -1153,6 +1173,9 @@ def _run_config(
                         dag,
                         numeric_policy=route["numeric_policy"],
                         topology=_topology(route),
+                        schedule_policy=upmem_execution_policy(route["options"])[
+                            "schedule_policy"
+                        ],
                     )
                     _require_collection_resource_admission(
                         upmem_plan,
@@ -1265,6 +1288,15 @@ def _run_config(
                     )
 
                 resources = _resources(route)
+                execution_policy = upmem_execution_policy(route["options"])
+                prepared_waves = resources.request_transport == "packed_wave_v1"
+                dispatch_options = (
+                    {
+                        "fuse_complex": execution_policy["fuse_complex"],
+                        "geometry_policy": execution_policy["geometry_policy"],
+                    }
+                    if prepared_waves else {}
+                )
                 opener = (
                     (
                         lambda: open_upmem_simulator(
@@ -1272,6 +1304,7 @@ def _run_config(
                             upmem_plan,
                             resources,
                             timeout_s=config["defaults"]["timeout_s"],
+                            **dispatch_options,
                         )
                     )
                     if route["executor"] == "upmem_sdk_simulator"
@@ -1281,6 +1314,7 @@ def _run_config(
                             upmem_plan,
                             resources,
                             timeout_s=config["defaults"]["timeout_s"],
+                            **dispatch_options,
                         )
                     )
                 )
@@ -1293,7 +1327,9 @@ def _run_config(
                     identities=identities,
                     warmups=0,
                     repetitions=0,
-                    session_protocol_id=_SESSION_PROTOCOL_ID,
+                    session_protocol_id=(
+                        _WAVE_SESSION_PROTOCOL_ID if prepared_waves else _SESSION_PROTOCOL_ID
+                    ),
                     open_session=opener,
                     inputs=inputs,
                     samples_path=target / "samples.jsonl",
