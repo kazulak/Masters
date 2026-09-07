@@ -95,7 +95,7 @@ competing-process, identity and environment admission is still mandatory.
 | --- | --- | --- |
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Fusion correctness/A-B/confirmation and seven-session K=1 physical correctness accepted at `3056090`; K=1 performance decision pending | Fixed-policy A/B and confirmation for specialization; compose retained mechanisms later |
+| P2 kernels | Fusion physically confirmed; K1 correctness passed but the fixed-path A/B rejected adoption at `3056090` | Preserve K1 negative evidence; retain panel geometry and admitted fusion for later composition |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -1076,6 +1076,69 @@ performance result, confirmation, production adoption or full-system freeze
 is asserted here. Failure requires preservation of the complete partial
 artifact, retrieval and stop without retry or replacement.
 
+### K1 Geometry A/B Result: No-Go
+
+The frozen packet executed exactly once on 2026-09-07 at clean source
+`30560900354b523b2a3a44971f81860a04888640`, SDK2023.1.0, CPU0, observed
+powersave and rank1. All **72 samples and sessions** passed physical, canonical
+and strict verification: 12 warmups and 60 measurements, float32 accuracy and
+policy replay throughout, no failed/unsupported/fallback attempts and no
+retries, replacements or splicing. Warmups are retained but excluded below.
+
+| Circuit | DPUs | Panel steady (s) | Outer steady (s) | Panel inclusive (s) | Outer inclusive (s) | Inclusive speedup |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Stress16, two layers | 1 | 1.366523 | 1.364052 | 1.686927 | 1.680240 | 1.00398x |
+| Stress16, two layers | 4 | 0.858342 | 0.878090 | 1.178273 | 1.205914 | 0.97708x |
+| HS20, depth one | 1 | 2.589612 | 2.572220 | 2.734322 | 2.721429 | 1.00474x |
+| HS20, depth one | 4 | 1.269760 | 1.317346 | 1.418998 | 1.467628 | 0.96687x |
+| EDC14 | 1 | 0.254276 | 0.254443 | 0.361162 | 0.362920 | 0.99516x |
+| EDC14 | 4 | 0.189480 | 0.192558 | 0.301718 | 0.299348 | 1.00792x |
+
+The preregistered HS20 target-region session-inclusive geometric-mean speedup
+is **0.985619x**, paired-bootstrap 95% interval **[0.942911, 1.033391]**.
+Its point estimate corresponds to 1.459% longer inclusive execution, not an
+established slowdown across arbitrary workloads. It fails both the 5% practical
+benefit gate and the lower-bound-above-one gate. All six cells stay within the
+5% median-regression bound; the largest observed regression is HS20/four-DPU
+at 3.427%. The all-six-cell inclusive aggregate is 0.992502x
+([0.971326, 1.013285]); it does not replace the predefined target region.
+
+HS20 kernel medians decrease from 1.785528 to 1.762418 seconds at one DPU and
+from 0.458615 to 0.453479 seconds at four DPUs. Its target-region kernel speedup
+is 1.012218x ([1.011490, 1.012531]), approximately a 1.207% time reduction.
+The small kernel saving does not propagate to a reliable complete-route gain.
+All output hashes, planned host-DPU bytes, work ordering and launch counts
+remain equivalent. The 24 unique HS20 K1 units dispatch as intended, including
+the four-real-product non-fitting cases; the zero-K1 controls remain in the
+analysis. These are diagnostic intervals from five blocks, not final-performance
+inference or proof that every possible K1 geometry is unhelpful.
+
+**Decision: do not adopt `outer_k1_v1`.** Keep the generic panel geometry and
+preserve the tested specialization as negative experimental evidence. No
+geometry confirmation, new target region, threshold adjustment or retuning run
+is authorized by this result. Its twelve reserved confirmation slots remain
+unused. The next physical work is the separately frozen DAG correctness and
+fixed-resource scheduling comparison, not another kernel optimization.
+
+- Run: `bc301c5f-0c10-4898-9f7c-50431ac9a76f`.
+- Analysis source: `d92e28767bd68a86d8598d90df09afd6b700ba1c`, exact-head
+  [CI passed](https://github.com/kazulak/Masters/actions/runs/34159279239).
+- Frozen packet SHA-256:
+  `6c38f9e1100cd985ff4813ca32c6f761fa0d236c232587a21c69bdd759bc113b`.
+- Raw archive SHA-256:
+  `1d19c4891493e452432bed598d996a0f19684bf0e6a9db230355d5e80bf499a8`.
+- Remote: `/home/tkazulak/evidence/kernel-schedule-geometry-ab-3056090-v1`.
+- Local: `runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/geometry-ab-v1/`.
+
+All 48 internal raw checksums and both verifiers passed on both hosts. Two
+verified copies remain retained; none was deleted. Normalized observations,
+per-cell medians/MADs/ranges, paired intervals, decision and analysis checksums
+are retained separately. Session-inclusive values are computed per sample;
+no old fusion or correctness timings enter this analysis. The whole collection
+command took 3:22.55 with peak RSS177,960KiB, including all arms, preparation
+and validation, not a per-arm memory comparison. Rank and private-lock release
+were independently checked. Total milestone use is now **177 attempts**.
+
 ### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
@@ -1133,12 +1196,15 @@ At most two disjoint implementation workers; one lead owns shared protocol and
 runtime integration, one independent reader audits, and one controller owns ETH.
 Prepared-cohort encoding, native host dispatch, session lifecycle and whole-DAG
 execution are connected with SDK correctness coverage. The outer-product
-prototype completes the named geometry implementation, subject to its
-qualification and physical decision. The bounded resident pair and exact slice
+prototype completes the named geometry experiment, with correctness qualified
+and performance adoption rejected. The bounded resident pair and exact slice
 concurrency have SDK correctness coverage; resident production integration is
 not enabled. Fusion is physically confirmed, and outer dispatch has passed its
-seven-session correctness gate. Next: separately preregistered outer performance
-and DAG gates, followed by the budgeted locality decision. Composition admission,
+seven-session correctness gate. Next: separately preregistered DAG gates,
+followed by the budgeted locality decision. Composition admission,
 schedule-aware cost extraction and the remaining physical acceptance gates remain open.
+The geometry A/B is now complete with a no-go: do not run its reserved
+confirmation or silently retune the specialization. Proceed with the declared
+generic-kernel DAG comparison before composing retained mechanisms.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
