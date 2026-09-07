@@ -772,8 +772,9 @@ The shared lock was held through archive finalization. There is no production
 adoption or session-inclusive speedup claim. Matched fusion A/B, geometry and
 DAG qualification are still separate gates.
 
-Physical budget used so far: 14 attempts, consisting of 7 P0 attempts and 7 of
-the 28 changed-checkpoint correctness slots. No performance slots have been used.
+At fusion-correctness closure, physical budget used was 14 attempts, consisting
+of 7 P0 attempts and 7 of the 28 changed-checkpoint correctness slots. No
+performance slots had yet been used; the later A/B consumption is recorded below.
 
 ### Fusion A/B Preparation
 
@@ -786,7 +787,7 @@ Only fusion and its execution-policy identity differ. Execution remains at
 not modify execution code or require another unchanged SDK qualification.
 
 The packet has 72 attempts: twelve arm-cells, one warmup and five measured
-complete blocks. It has not executed. Configuration SHA-256 is
+complete blocks. The executed outcome is recorded below. Configuration SHA-256 is
 `860d331cd43aff90a7fc08cd0c22a4e5e782f714f45555bb2eaa395e57513006` and experiment
 identity is `73c70f5df054fc8335c581cbf78ef0c20eaf5df56bd4492b4a3342d9161579be`.
 Frozen tables and admission controls live in ignored
@@ -813,6 +814,80 @@ rule and two-copy evidence gate apply independently of the observed outcome.
 The pure analyzer, synthetic corruption tests and controller deadline tests
 passed together: 43 tests, zero failures/errors/skips. These tests are software
 evidence only; they do not manufacture or replace physical observations.
+
+### Fusion Physical A/B Result (2026-09-07)
+
+The unchanged packet executed once at `30560900354b523b2a3a44971f81860a04888640`:
+72/72 successful samples and sessions, including 12 warmups and 60 measured
+attempts. All float32 accuracy and policy-replay gates passed, with no failures,
+unsupported attempts, CPU/simulator fallback, retries or replacements. Both
+arms retained the same paths, prepared-wave transport, serial scheduling,
+panel-only geometry and T8 host/DPU/init binaries. Per-node launch counts and
+output hashes matched the frozen controls. HS20 retained the planned generic
+UPMEM tiles; no post-timing retile or candidate change occurred.
+
+All times below are seconds and are medians of the five measured observations.
+Session-inclusive time is computed per sample before taking its median.
+
+| Circuit | DPUs | Unfused steady | Fused steady | Unfused inclusive | Fused inclusive | Inclusive speedup | Inclusive reduction |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| Stress16, two layers | 1 | 2.138216 | 1.354812 | 2.472895 | 1.675666 | 1.4758x | 32.24% |
+| Stress16, two layers | 4 | 1.963459 | 0.887273 | 2.325208 | 1.201514 | 1.9352x | 48.33% |
+| HS20, depth one | 1 | 2.823442 | 2.588956 | 2.970032 | 2.740228 | 1.0839x | 7.74% |
+| HS20, depth one | 4 | 1.772681 | 1.302855 | 1.943463 | 1.459210 | 1.3319x | 24.92% |
+| EDC14 | 1 | 0.475021 | 0.253601 | 0.586225 | 0.359565 | 1.6304x | 38.66% |
+| EDC14 | 4 | 0.453967 | 0.192750 | 0.576156 | 0.303242 | 1.9000x | 47.37% |
+
+The equal-cell geometric-mean session-inclusive speedup is **1.528869x**
+(34.59% reduction), with the frozen paired-block bootstrap interval
+**[1.504233, 1.559857]**. Steady speedup is 1.684688x
+([1.645091, 1.718739]); reported kernel speedup is 1.221193x
+([1.200894, 1.228775]). These are diagnostic intervals from five blocks,
+not final-performance inference. All six inclusive medians improved. The
+predeclared 5% aggregate reduction, lower bound above one, and 5% maximum
+cell-regression gates pass. Decision: **A/B pass, pending fresh confirmation**.
+No production default or adoption changed.
+
+Kernel time is not held constant in this intervention: the same four products
+execute with fewer physical launches and synchronization events. H2D, D2H,
+preparation and measured cohort wall medians also decreased in each cell.
+Session opening did not absorb the steady saving. The result supports this
+admitted fusion policy on the tested paths, not universal fusion eligibility
+or a claim that output byte volume halved. Whole-command peak RSS was 178,836
+KiB, including planning, validation and all arms; it is not a per-arm memory
+comparison. The command finished in 3:41.24 under its 7,200-second cap.
+
+The sole controller acquired the shared lock, verified all rank ownership
+checks and clean source, and ran on CPU 0 under powersave with SDK 2023.1.0.
+Rank1 was unowned at termination. The availability timer remained paused.
+
+- Run: `d6e1b1cc-db84-41dd-aadf-d4f0a3511a75`.
+- Raw archive: `kernel-schedule-fusion-ab-3056090-v1.tar.gz`.
+- Raw archive SHA-256:
+  `cb8631eb0ac010ef60ec1adfc0a78c9c07a7a36fc3a1c7f6499af03db241fc9d`.
+- Preregistration archive SHA-256:
+  `b8794f826f38f0a31ef5c0355131e8ae87ff3e7913a5dc2b6998b6f8be32000a`.
+- Analysis source: `e4655c849e9f6a1770594e0734ef074525c9c647`,
+  [exact-head CI passed](https://github.com/kazulak/Masters/actions/runs/34148456660).
+- The independent pre-run audit found three verifier gaps. Expected waves
+  are now recomputed/cross-checked, terminal binary hashes checked separately,
+  and integer counters distinguished from booleans. All 50 focused tests
+  passed after these packet-only repairs, before timing. Runtime was unchanged.
+
+All 38 internal raw-stage checksums, canonical verification and strict packet
+verification passed on both hosts. The complete archive remains on ETH under
+`/home/tkazulak/evidence/` and locally under
+`runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/fusion-ab-v1/`.
+No remote original was removed. Local `analysis.json`, `cell_summary.csv`,
+`normalized_rows.json`, `decision.json` and `ANALYSIS_SHA256SUMS` retain raw
+paired observations, medians, MADs, ranges, intervals, unavailable timer fields
+and the unchanged decision rules. The raw stage embeds the frozen analyzer
+and preregistration, so derived results can be regenerated.
+
+Total physical budget used is now **86 attempts**: seven P0, seven fusion
+correctness and 72 fusion A/B. The preregistered Stress16/four-DPU confirmation
+remains a separate twelve-attempt packet and has not run. Geometry, DAG,
+locality, composition, executor freeze and final path work remain open.
 
 ### Remaining Budget
 
