@@ -27,7 +27,7 @@ Remote heads were checked on 2026-09-05 before implementation:
 | Role | Exact source |
 | --- | --- |
 | Published main | `fa0dedf628a3612371daa4f6502da4d5465bbaff` |
-| Integrated execution and pending physical gate | `b921b8804e324da75222354ee2f4df41e770b75c` |
+| Integrated execution; physical gate accepted 2026-09-07 | `b921b8804e324da75222354ee2f4df41e770b75c` |
 | Integration reporting head | `5b93f87c1a034944859348c99e2fe263961a2114` |
 | Host-only preparation execution | `56b159dc7e8cd945265a6e02dfb5e7c74edf381a` |
 | Clean v2 branch predecessor | `18556c3c9b6fb7c5db13c93fb0e253f22eeb3337` |
@@ -40,18 +40,59 @@ Do not rerun the unchanged 14-cell SDK gate simply because this roadmap changed.
 
 At 2026-09-05T20:12:37Z a fresh read-only ETH check found all 40 ranks owned,
 including rank1, with another user's `gwfa_host` PID 5663 active. No lock,
-allocation, transfer or physical attempt was made. This blocks P0 physical
-acceptance, not source-only census or speculative kernel/scheduler development.
+allocation, transfer or physical attempt was made. That historical occupancy
+block was resolved by the separately recorded 2026-09-07 gate below.
+
+### Accepted P0 Physical Gate
+
+The unchanged seven-cell correctness gate executed once on safari-baguette1 at
+clean source `b921b8804e324da75222354ee2f4df41e770b75c`, SDK 2023.1.0,
+CPU 0, powersave governor and `/dev/dpu_rank1`. All six T1/T8 host, DPU and
+initialization binary hashes matched the previously qualified checkpoint. The
+frozen template SHA-256 remained
+`8c03fe6e8cefd67838bfb5ddbd199676b1933719fe21a0a3b7a0e7a09ba62a62`.
+The existing preparation helper resolved only execution/session paths into a
+new, identity-bound configuration; it did not change the matrix or policies.
+
+- Experiment: `e3d94c8fde216894fcff96c34c129f58b3f244aaa5e4f31ae14248848b01821e`.
+- Run: `abb9fe81-996e-44ad-8214-191a446cf14d`.
+- Results: 7 successful samples, 7 successful released sessions, zero failed
+  or unsupported attempts, no fallback, no retry or replacement.
+- All 7 passed exact numeric-policy replay. All 3 float32 attempts passed
+  full-precision accuracy qualification. The 4 int8 attempts report error and
+  remain full-precision accuracy-unqualified; this is not float32 equivalence.
+- The exact Bell2/Stress14, route, block, source, executable and physical-plan
+  identities passed both canonical and strict gate verification on both hosts.
+- Archive: `phase-a-physical-b921b88-20260907-v1.tar.gz`.
+- Archive SHA-256:
+  `bbe6c5c18247c167e5bb5cb40a6e84ca87f88438197ae95af14a9bcdf9b787a8`.
+- All 23 internal file checksums passed. Remote stage/archive and the safely
+  extracted local archive were retained and independently verified. No remote
+  original was deleted.
+
+Remote evidence is under `/home/tkazulak/evidence/`; local evidence is under
+`thesis/implementation/runs/eth/safari-baguette1/` followed by the full execution
+SHA and `execution-integration-v1/physical-20260907-v1/`. `acceptance.json`
+records verifier outputs and retention status. Historical SDK acceptance and
+blocked preflights remain unchanged. This is physical correctness evidence,
+not a timing campaign, production merge, final-system freeze or qualification
+of the experimental v5 mechanisms.
+
+All subsequent controllers use the agreed nonblocking exclusive flock at
+`/home/tkazulak/evidence/upmem-experiment.lock`. The lock was held through the
+gate and archive finalization, then released; rank1 was observed unowned after
+completion. The persistent file is not itself a reservation. Fresh ownership,
+competing-process, identity and environment admission is still mandatory.
 
 ## State and Dependencies
 
 | Phase | Current state | Required exit evidence |
 | --- | --- | --- |
-| P0 reconcile | Source lineage checked; physical gate pending | Existing seven-session gate at exact `b921b88`, verified and retrieved |
+| P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Experimental fusion and K=1 outer-product dispatch connected; software/SDK checkpoint below, physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
-| P4 resident/slice | Not started | Bounded exact slice and local segment decision, qualified or explicit no-go |
+| P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
@@ -739,7 +780,8 @@ execution are connected with SDK correctness coverage. The outer-product
 prototype completes the named geometry implementation, subject to its
 qualification and physical decision. The bounded resident pair and exact slice
 concurrency have SDK correctness coverage; resident production integration is
-not enabled. Next: physical fusion/outer/DAG gates after P0 access and the
+not enabled. Next: separately preregistered physical fusion/outer/DAG gates,
+now that P0 correctness is durably accepted, and the
 budgeted locality decision. Composition admission,
 schedule-aware cost extraction and all physical acceptance gates remain open.
 SDK concurrency does not establish physical speedup. No final path fitting starts
