@@ -20,6 +20,11 @@ resource correctness and honest accuracy reporting, not a duplicate performance
 campaign. Review unfinished core work at engineering day seven; do not silently
 remove deliverables. The resident/slice probe has a separate three-day cap.
 
+On 2026-09-07 the user explicitly reaffirmed this expanded v2 scope after P0
+acceptance. The narrower scheduled-continuation text is not the downstream
+roadmap. Kernel/DAG mechanisms remain required bounded experiments, not assumed
+speedups or prerequisites for indefinite runtime optimization.
+
 ## Reconciled Sources
 
 Remote heads were checked on 2026-09-05 before implementation:
@@ -90,7 +95,7 @@ competing-process, identity and environment admission is still mandatory.
 | --- | --- | --- |
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Experimental fusion and K=1 outer-product dispatch connected; software/SDK checkpoint below, physical qualification pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P2 kernels | Fusion seven-cell physical correctness accepted at `3056090`; K=1 physical correctness and both performance decisions pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -721,6 +726,56 @@ policy replay and absence of CPU fallback. Simulator timings are not performance
 evidence. Runtime, kernels, transport codecs and candidate pools are unchanged.
 
 ## Budget and Preregistration
+
+### Accepted Fusion Correctness Packet
+
+After P0 acceptance, the frozen fusion packet ran once on 2026-09-07 from clean
+execution source `30560900354b523b2a3a44971f81860a04888640`. No executable source,
+binary, candidate or configuration changed. It selects `packed_wave_v1`,
+`serial_nodes_v1`, `fuse_complex=true`, and `panel_only_v1`; no concurrent DAG
+nodes, outer-product specialization, slicing or residency is selected.
+
+The seven samples and seven released sessions passed canonical verification and
+the packet-specific v5 identity/dispatch inspector both remotely and locally.
+All seven passed policy replay; all three float32 cells passed full-precision
+accuracy. Four int8 cells remain accuracy-unqualified with descriptive errors.
+There were zero failures, unsupported attempts, retries or fallback launches.
+
+| Cell | Fused tiles | Native launches |
+| --- | ---: | ---: |
+| Bell2 float32, 1D/T1 | 3 | 3 |
+| Bell2 int8, 1D/T1 | 3 | 3 |
+| Stress14 float32, 1D/T8 | 112 | 112 |
+| Stress14 int8, 1D/T8 | 112 | 112 |
+| Stress14 float32, 4D/T8 | 112 | 109 |
+| Stress14 int8, 3D/T8 | 112 | 110 |
+| Stress14 int8, 4D/T8 | 112 | 109 |
+
+Every per-node count matched the frozen work-unit and wave tables. Outer-product
+tiles and separate real-product tile launches were zero. This confirms the
+tested physical fused path, not a timing improvement or general resource claim.
+
+- Experiment: `691d896fe623e97c83063fefd4f04ccd1b2022d671cc7e487a5e1e3974e00858`.
+- Run: `2d39313e-f8a4-4e16-97e2-7e2a2653d94b`.
+- Configuration SHA-256:
+  `ad6a77b6d9968657f6d069ee0ca3da926ac13a457e3e954e7612aa099b15dff9`.
+- Archive: `kernel-schedule-fusion-correctness-3056090-v1.tar.gz`.
+- Archive SHA-256:
+  `4bab79ce6eceac60b623b669ad66eaf6f08eabe3330f8e7826f45bb02de9a036`.
+- All 29 internal file checksums passed; two independently verified copies
+  remain on ETH and locally under `runs/eth/safari-baguette1/`, the full source
+  SHA, and `fusion-correctness-v1/`. No remote original was deleted.
+
+The original preregistration retains its historical prepared-only status;
+`acceptance.json` in the new result directory records the executed outcome.
+The shared lock was held through archive finalization. There is no production
+adoption or session-inclusive speedup claim. Matched fusion A/B, geometry and
+DAG qualification are still separate gates.
+
+Physical budget used so far: 14 attempts, consisting of 7 P0 attempts and 7 of
+the 28 changed-checkpoint correctness slots. No performance slots have been used.
+
+### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
 The adjacent [budget manifest](../configs/upmem_kernel_schedule_budget_v1.json)
