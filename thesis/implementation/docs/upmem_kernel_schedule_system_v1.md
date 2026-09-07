@@ -775,6 +775,45 @@ DAG qualification are still separate gates.
 Physical budget used so far: 14 attempts, consisting of 7 P0 attempts and 7 of
 the 28 changed-checkpoint correctness slots. No performance slots have been used.
 
+### Fusion A/B Preparation
+
+The next packet compares unfused and fused policies on the retained greedy
+Stress16 (two layers), HS20 (depth one), and EDC14 paths, at one/four DPUs with
+eight tasklets. Both arms use the same prepared-wave transport, binaries,
+serial-node scheduling, panel kernel, float32 policy and physical work mapping.
+Only fusion and its execution-policy identity differ. Execution remains at
+`30560900354b523b2a3a44971f81860a04888640`; this reporting/analysis change does
+not modify execution code or require another unchanged SDK qualification.
+
+The packet has 72 attempts: twelve arm-cells, one warmup and five measured
+complete blocks. It has not executed. Configuration SHA-256 is
+`860d331cd43aff90a7fc08cd0c22a4e5e782f714f45555bb2eaa395e57513006` and experiment
+identity is `73c70f5df054fc8335c581cbf78ef0c20eaf5df56bd4492b4a3342d9161579be`.
+Frozen tables and admission controls live in ignored
+`runs/kernel-schedule-system-v1/fusion-ab-preregistration-3056090/`.
+
+HS20 intentionally retains 64 generic real-product tile launches in either
+fused-policy topology because those tiles fail fusion-arena admission. That is
+UPMEM execution, not CPU/simulator fallback. No retile or exclusion is permitted.
+
+The primary estimand is the equal-cell geometric mean of unfused/fused arm
+median session-inclusive times. Session open, steady execution and close are
+summed per sample before aggregation. Ten thousand deterministic paired-block
+bootstrap resamples share block indices across all six cells. The separate
+median of paired speedup ratios is descriptive, not the primary estimand.
+Raw observations, MADs and setup differences are retained. Missing legacy
+request-build/request-wave timers remain null; measured cohort wall time is
+not labelled Python CPU time.
+
+The preregistered decision uses the existing 5% aggregate session-inclusive
+reduction, lower paired-bootstrap speedup bound above one, and no cell median
+regression beyond 5%. A passing result still requires the separately reserved
+Stress16/four-DPU fresh confirmation. The 7,200-second command cap, no-retry
+rule and two-copy evidence gate apply independently of the observed outcome.
+The pure analyzer, synthetic corruption tests and controller deadline tests
+passed together: 43 tests, zero failures/errors/skips. These tests are software
+evidence only; they do not manufacture or replace physical observations.
+
 ### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
