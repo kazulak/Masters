@@ -889,6 +889,33 @@ correctness and 72 fusion A/B. The preregistered Stress16/four-DPU confirmation
 remains a separate twelve-attempt packet and has not run. Geometry, DAG,
 locality, composition, executor freeze and final path work remain open.
 
+### Fresh Fusion Confirmation Preparation
+
+The next packet implements the confirmation selected before A/B timing:
+Stress16/two layers, four DPUs/T8, unfused and fused, one warmup plus five
+measurements per arm. The expected path/work/wave table is selected unchanged
+from the earlier packet and cross-checked against the configured physical plan.
+There is no new candidate search or execution-source change.
+
+The new configuration hash is
+`bba45438b4ec1b66e3cf41e6370c135583ba5100d38179188425a52832803e3d`, and experiment
+identity is `f2ec0d416a406e4d72853b2a817cd4a3d14555dd5b0ae2e3c7b8bde4bb8e1a19`.
+Block and bootstrap seed is 20260908. The same 5% practical benefit and paired
+uncertainty gate applies, using only the twelve fresh observations. The
+physical command cap is 1,800 seconds; native requests remain capped at 120
+seconds. No failed or inconclusive result authorizes a retry or another tuning
+round. This packet has not run. It uses twelve reserved confirmation slots,
+for a cumulative ceiling of 98 attempts after execution.
+
+The combined A/B-math regression, confirmation analysis, strict packet and
+controller suite passed 64 tests, with no failures/errors/skips; Ruff passed.
+The confirmation analyzer reuses existing paired-bootstrap and row-validation
+helpers. Independent static review confirmed the declared cell, no old-row
+pooling and unchanged execution policies. Its preparation-state and deadline
+metadata findings are resolved by the explicit freeze gate and documented
+1,800-second cleanup policy. This is software preparation, not another
+unchanged execution/SDK qualification or evidence of confirmation speedup.
+
 ### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
