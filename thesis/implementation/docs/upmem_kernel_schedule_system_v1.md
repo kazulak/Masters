@@ -95,7 +95,7 @@ competing-process, identity and environment admission is still mandatory.
 | --- | --- | --- |
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Fusion seven-cell physical correctness accepted at `3056090`; K=1 physical correctness and both performance decisions pending | Separate correctness, native audit, A/B and confirmation for fusion and specialization |
+| P2 kernels | Fusion correctness, 72-attempt A/B and fresh 12-attempt confirmation accepted at `3056090`; K=1 physical gates pending | Separate correctness, native audit, A/B and confirmation for specialization; compose retained mechanisms later |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -884,14 +884,14 @@ paired observations, medians, MADs, ranges, intervals, unavailable timer fields
 and the unchanged decision rules. The raw stage embeds the frozen analyzer
 and preregistration, so derived results can be regenerated.
 
-Total physical budget used is now **86 attempts**: seven P0, seven fusion
+Total physical budget used after that A/B was **86 attempts**: seven P0, seven fusion
 correctness and 72 fusion A/B. The preregistered Stress16/four-DPU confirmation
-remains a separate twelve-attempt packet and has not run. Geometry, DAG,
+was reserved as a separate twelve-attempt packet, completed below. Geometry, DAG,
 locality, composition, executor freeze and final path work remain open.
 
 ### Fresh Fusion Confirmation Preparation
 
-The next packet implements the confirmation selected before A/B timing:
+The separately frozen packet implements the confirmation selected before A/B timing:
 Stress16/two layers, four DPUs/T8, unfused and fused, one warmup plus five
 measurements per arm. The expected path/work/wave table is selected unchanged
 from the earlier packet and cross-checked against the configured physical plan.
@@ -904,8 +904,7 @@ Block and bootstrap seed is 20260908. The same 5% practical benefit and paired
 uncertainty gate applies, using only the twelve fresh observations. The
 physical command cap is 1,800 seconds; native requests remain capped at 120
 seconds. No failed or inconclusive result authorizes a retry or another tuning
-round. This packet has not run. It uses twelve reserved confirmation slots,
-for a cumulative ceiling of 98 attempts after execution.
+round. It used twelve reserved confirmation slots; its completed result follows.
 
 The combined A/B-math regression, confirmation analysis, strict packet and
 controller suite passed 64 tests, with no failures/errors/skips; Ruff passed.
@@ -915,6 +914,50 @@ pooling and unchanged execution policies. Its preparation-state and deadline
 metadata findings are resolved by the explicit freeze gate and documented
 1,800-second cleanup policy. This is software preparation, not another
 unchanged execution/SDK qualification or evidence of confirmation speedup.
+
+### Fresh Fusion Confirmation Result
+
+The frozen packet ran exactly once on 2026-09-07 at clean execution source
+`30560900354b523b2a3a44971f81860a04888640`. All **12 samples and sessions** passed
+physical, canonical and strict packet verification, including float32 accuracy,
+policy replay, output hashes, resource admission and binary identities. There
+were no failed, unsupported, fallback, retried or replacement observations.
+One warmup per arm is retained but excluded from these five-measurement medians.
+
+| Metric | Unfused median (s) | Fused median (s) | Speedup | Paired bootstrap 95% interval |
+| --- | ---: | ---: | ---: | --- |
+| Steady execution | 1.949019391 | 0.882959795 | 2.2074x | [1.8589, 2.2209] |
+| Session-inclusive execution | 2.318010724 | 1.217846132 | 1.9034x | [1.6617, 1.9361] |
+| Kernel | 0.362073661 | 0.292509492 | 1.2378x | [1.1532, 1.2474] |
+
+Session-inclusive time is computed per sample before summarization. Its raw
+MAD is 0.012155718 s unfused and 0.011244486 s fused; respective ranges are
+[2.005035647, 2.349175930] s and [1.199979374, 1.293748946] s. All observations,
+including the faster fifth unfused measurement, remain included. Bootstrap
+resamples common measured blocks 10,000 times with frozen seed 20260908; it does
+not pool observations from the preceding A/B. The **47.46% session-inclusive
+reduction** passes the preregistered 5% practical threshold, lower interval
+bound above one, and maximum 5% regression gate. Fusion therefore passes its
+bounded fresh confirmation; this is not whole-system production adoption.
+Kernel time is allowed to change because fusion changes launch/synchronization
+cost, while retaining four-product arithmetic and output equivalence.
+
+- Run ID: `528fa6ac-355b-45e2-b255-147ae85bd984`.
+- Analysis source: `fc4ba55a85b4b233751a46320b99e37fdab61ecd` (exact-head CI
+  [34153902908](https://github.com/kazulak/Masters/actions/runs/34153902908) passed).
+- Raw archive SHA-256:
+  `889d5a5c9372aa08831efd944f4c15840cfaaccb58a58be94bb7d569628fb22f`.
+- Remote stage: `/home/tkazulak/evidence/kernel-schedule-fusion-confirmation-3056090-v1`.
+- Local archive, extracted raw records, acceptance, normalized observations,
+  analysis, CSV summary and decision:
+  `runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/fusion-confirmation-v1/`.
+
+All 42 internal raw-stage checksums passed on both hosts. Two verified copies
+are retained; no remote original was deleted. The source remained clean and
+the rank was released. No unchanged execution/SDK qualification was rerun.
+Cumulative physical use is **98 attempts**. Next is the K=1 geometry correctness
+gate, to be separately frozen, then its fixed-policy performance comparison;
+DAG, locality, composition, executor freeze and path study remain open.
 
 ### Remaining Budget
 
