@@ -1031,6 +1031,51 @@ not adopted as a performance optimization. Next: the separately preregistered
 fixed-path panel-versus-outer A/B; DAG, locality, composition, final executor
 freeze and path optimization remain open.
 
+### K1 Geometry A/B Preparation
+
+The next packet keeps the previously retained Stress16/two-layer, HS20/depth-one
+and EDC14 greedy paths at one/four DPUs and T8. Both arms keep admitted complex
+fusion enabled, serial-node scheduling, float32 and `packed_wave_v1` at execution
+source `30560900354b523b2a3a44971f81860a04888640`. The sole intervention is
+`panel_only_v1` versus `outer_k1_v1`. There is no new candidate generation,
+retile, runtime edit, SDK rerun or held-out exposure.
+
+HS20 contains 24 K1 units per topology; the other two circuits contain none.
+The preregistered benefit region is therefore the two HS20 resource cells.
+Stress16 and EDC14 remain unchanged-work regression controls, not discarded
+observations. Plan checks preserve physical/logical identity, work ordering,
+DPU mapping, launch counts and planned host-DPU bytes. Geometry policy is
+explicit in executable identity. DPU-local traffic and synchronization may
+change with the specialized kernel.
+
+One warmup and five measurements for each arm/circuit/topology produces 72
+attempts. Complete blocks use seed 20260909. Session-inclusive time is computed
+per sample before medians. The HS20 equal-cell geometric-mean speedup must show
+at least 5% reduction and a lower paired-bootstrap 95% bound above one; every
+one of the six cells must satisfy the 5% median-regression bound. Report the
+all-six aggregate separately. These region and control rules follow the v2
+plan and are fixed before geometry candidate timing. The reserved fresh
+confirmation is HS20/four-DPU/T8, twelve new attempts, only after an A/B pass.
+
+The analysis uses explicit `panel`/`outer` labels and shares the existing
+paired-block statistics without relabeling rows as fusion observations.
+Historical fusion and correctness timings do not enter the new analysis.
+Missing component timers remain null. Packet software tests and read-only
+audit are separate from unchanged executor/SDK qualification.
+
+- Experiment: `09f40f0c445e14323aaae42e7613ecec758059929b3a333f1b514f1136e74a89`.
+- Configuration SHA-256:
+  `c2290b762dacf277a56c77c02279aa6d2355408f8085de58f2a8c976a5fe4bba`.
+- Local preparation: `runs/kernel-schedule-system-v1/geometry-ab-preregistration-3056090/`.
+- Physical budget: 72 reserved geometry A/B attempts, prior use 105 and maximum
+  cumulative use 177 after this packet. Preparation has used zero new attempts.
+
+The packet requires exact-head analysis CI, complete focused tests, independent
+audit and immutable checksums before fresh locked admission. No geometry
+performance result, confirmation, production adoption or full-system freeze
+is asserted here. Failure requires preservation of the complete partial
+artifact, retrieval and stop without retry or replacement.
+
 ### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.

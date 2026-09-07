@@ -55,6 +55,19 @@ DERIVED_INPUT_METRICS = set(ALL_DERIVED_METRICS)
 TIME_EPSILON_S = 1e-9
 
 
+def _validate_arm_labels(arm_labels: Sequence[str]) -> tuple[str, str]:
+    if isinstance(arm_labels, (str, bytes)):
+        raise ValueError("arm_labels must contain exactly two distinct strings")
+    labels = tuple(arm_labels)
+    if (
+        len(labels) != 2
+        or any(type(label) is not str or not label for label in labels)
+        or labels[0] == labels[1]
+    ):
+        raise ValueError("arm_labels must contain exactly two distinct strings")
+    return labels
+
+
 def _require_int(value: object, field: str) -> int:
     if type(value) is not int:
         raise ValueError(f"{field} must be an integer")
@@ -139,26 +152,26 @@ def _bootstrap_summary(
 
 
 def _bootstrap_ratio_of_medians(
-    unfused: Sequence[float],
-    fused: Sequence[float],
+    numerator: Sequence[float],
+    denominator: Sequence[float],
     *,
     seed: int,
     bootstrap_resamples: int,
 ) -> dict[str, Any]:
     """Bootstrap the primary ratio of arm medians using paired indexes."""
 
-    if len(unfused) != len(fused) or not unfused:
+    if len(numerator) != len(denominator) or not numerator:
         raise ValueError("paired A/B arrays must have equal non-zero length")
     rng = random.Random(seed)
     resampled_ratios: list[float] = []
-    size = len(unfused)
+    size = len(numerator)
     for _ in range(bootstrap_resamples):
         indexes = [rng.randrange(size) for _ in range(size)]
-        unfused_median = median(unfused[index] for index in indexes)
-        fused_median = median(fused[index] for index in indexes)
-        if fused_median <= 0.0:
+        numerator_median = median(numerator[index] for index in indexes)
+        denominator_median = median(denominator[index] for index in indexes)
+        if denominator_median <= 0.0:
             raise ValueError("paired speedup denominator must be positive")
-        ratio = float(unfused_median / fused_median)
+        ratio = float(numerator_median / denominator_median)
         if not math.isfinite(ratio) or ratio <= 0.0:
             raise ValueError("paired speedup is not finite and positive")
         resampled_ratios.append(ratio)
@@ -211,8 +224,12 @@ def _validate_optional_timing_fields(
 
 
 def _validate_row(
-    raw_row: Mapping[str, Any], index: int
+    raw_row: Mapping[str, Any],
+    index: int,
+    *,
+    arm_labels: Sequence[str] = EXPECTED_ARMS,
 ) -> tuple[tuple[str, int, str, str, int], dict[str, Any]]:
+    arm_labels = _validate_arm_labels(arm_labels)
     missing = [field for field in (*IDENTITY_FIELDS, *TIME_FIELDS) if field not in raw_row]
     if missing:
         raise ValueError(f"row {index} is missing {missing[0]}")
@@ -224,7 +241,7 @@ def _validate_row(
     if dpu_count not in EXPECTED_DPU_COUNTS:
         raise ValueError(f"row {index} has an unexpected dpu_count")
     arm = raw_row["arm"]
-    if arm not in EXPECTED_ARMS:
+    if arm not in arm_labels:
         raise ValueError(f"row {index} has an unknown arm: {arm!r}")
     attempt_kind = raw_row["attempt_kind"]
     if attempt_kind not in EXPECTED_ATTEMPTS:
@@ -283,38 +300,48 @@ def _validate_row(
 
 def _paired_comparison(
     block_ids: Sequence[int],
-    unfused: Sequence[float],
-    fused: Sequence[float],
+    numerator: Sequence[float],
+    denominator: Sequence[float],
     *,
     seed: int,
     bootstrap_resamples: int,
+    arm_labels: Sequence[str] = EXPECTED_ARMS,
 ) -> dict[str, Any]:
-    if len(block_ids) != len(unfused) or len(unfused) != len(fused) or not unfused:
+    _validate_arm_labels(arm_labels)
+    if (
+        len(block_ids) != len(numerator)
+        or len(numerator) != len(denominator)
+        or not numerator
+    ):
         raise ValueError("paired A/B arrays must have equal non-zero length")
-    if any(value <= 0.0 for value in fused):
+    if any(value <= 0.0 for value in denominator):
         raise ValueError("paired speedup denominator must be positive")
 
     speedups = [
-        float(unfused_value / fused_value)
-        for unfused_value, fused_value in zip(unfused, fused, strict=True)
+        float(numerator_value / denominator_value)
+        for numerator_value, denominator_value in zip(
+            numerator, denominator, strict=True
+        )
     ]
     saved_time = [
-        float(unfused_value - fused_value)
-        for unfused_value, fused_value in zip(unfused, fused, strict=True)
+        float(numerator_value - denominator_value)
+        for numerator_value, denominator_value in zip(
+            numerator, denominator, strict=True
+        )
     ]
     if any(not math.isfinite(value) or value <= 0.0 for value in speedups):
         raise ValueError("paired speedup is not finite and positive")
 
-    unfused_median = float(median(unfused))
-    fused_median = float(median(fused))
-    if fused_median <= 0.0:
+    numerator_median = float(median(numerator))
+    denominator_median = float(median(denominator))
+    if denominator_median <= 0.0:
         raise ValueError("paired speedup denominator must be positive")
-    ratio_of_medians = unfused_median / fused_median
+    ratio_of_medians = numerator_median / denominator_median
     if not math.isfinite(ratio_of_medians) or ratio_of_medians <= 0.0:
         raise ValueError("paired speedup is not finite and positive")
     primary_bootstrap = _bootstrap_ratio_of_medians(
-        unfused,
-        fused,
+        numerator,
+        denominator,
         seed=_seed_for(seed, "ratio_of_arm_medians"),
         bootstrap_resamples=bootstrap_resamples,
     )
@@ -337,7 +364,7 @@ def _paired_comparison(
         "ratio_of_medians": ratio_of_medians,
         "median_of_block_speedups": float(median(speedups)),
         "paired_saved_time_s": float(median(saved_time)),
-        "saved_time_from_medians_s": unfused_median - fused_median,
+        "saved_time_from_medians_s": numerator_median - denominator_median,
         "bootstrap_95_ci": primary_bootstrap["bootstrap_95_ci"],
         "median_of_block_speedups_bootstrap_95_ci": descriptive_bootstrap[
             "bootstrap_95_ci"
@@ -349,17 +376,19 @@ def _paired_comparison(
 
 def _paired_difference(
     block_ids: Sequence[int],
-    unfused: Sequence[float],
-    fused: Sequence[float],
+    first: Sequence[float],
+    second: Sequence[float],
     *,
     seed: int,
     bootstrap_resamples: int,
+    arm_labels: Sequence[str] = EXPECTED_ARMS,
 ) -> dict[str, Any]:
-    if len(block_ids) != len(unfused) or len(unfused) != len(fused) or not unfused:
+    _validate_arm_labels(arm_labels)
+    if len(block_ids) != len(first) or len(first) != len(second) or not first:
         raise ValueError("paired A/B arrays must have equal non-zero length")
     differences = [
-        float(unfused_value - fused_value)
-        for unfused_value, fused_value in zip(unfused, fused, strict=True)
+        float(first_value - second_value)
+        for first_value, second_value in zip(first, second, strict=True)
     ]
     bootstrap = _bootstrap_summary(
         differences,
@@ -370,7 +399,7 @@ def _paired_difference(
         "block_ids": [int(block_id) for block_id in block_ids],
         "differences_s": differences,
         "median_difference_s": float(median(differences)),
-        "difference_from_medians_s": float(median(unfused) - median(fused)),
+        "difference_from_medians_s": float(median(first) - median(second)),
         "bootstrap_95_ci_s": bootstrap["bootstrap_95_ci"],
         "bootstrap_resamples": bootstrap_resamples,
     }
@@ -388,7 +417,9 @@ def _aggregate_speedup(
     *,
     seed: int,
     bootstrap_resamples: int,
+    arm_labels: Sequence[str] = EXPECTED_ARMS,
 ) -> dict[str, Any]:
+    first_arm, second_arm = _validate_arm_labels(arm_labels)
     cell_values = [
         {
             "case_id": cell["case_id"],
@@ -404,15 +435,15 @@ def _aggregate_speedup(
     ]
     arm_values = [
         (
-            cell["arms"]["unfused"]["metrics"][metric]["raw"],
-            cell["arms"]["fused"]["metrics"][metric]["raw"],
+            cell["arms"][first_arm]["metrics"][metric]["raw"],
+            cell["arms"][second_arm]["metrics"][metric]["raw"],
         )
         for cell in cells
     ]
     if not arm_values or any(
-        len(unfused) != len(MEASUREMENT_BLOCKS)
-        or len(fused) != len(MEASUREMENT_BLOCKS)
-        for unfused, fused in arm_values
+        len(first) != len(MEASUREMENT_BLOCKS)
+        or len(second) != len(MEASUREMENT_BLOCKS)
+        for first, second in arm_values
     ):
         raise ValueError("aggregate requires complete measurement block pairing")
 
@@ -425,12 +456,12 @@ def _aggregate_speedup(
     for _ in range(bootstrap_resamples):
         indexes = [rng.randrange(block_count) for _ in range(block_count)]
         cell_ratios = []
-        for unfused, fused in arm_values:
-            unfused_median = median(unfused[index] for index in indexes)
-            fused_median = median(fused[index] for index in indexes)
-            if fused_median <= 0.0:
+        for first, second in arm_values:
+            first_median = median(first[index] for index in indexes)
+            second_median = median(second[index] for index in indexes)
+            if second_median <= 0.0:
                 raise ValueError("paired speedup denominator must be positive")
-            cell_ratios.append(float(unfused_median / fused_median))
+            cell_ratios.append(float(first_median / second_median))
         bootstrap_values.append(_geometric_mean(cell_ratios))
     return {
         "cell_speedups": cell_values,
@@ -452,14 +483,17 @@ def analyze_rows(
     *,
     seed: int = DEFAULT_SEED,
     bootstrap_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
+    arm_labels: Sequence[str] = EXPECTED_ARMS,
+    analysis_version: str = ANALYSIS_VERSION,
 ) -> dict[str, Any]:
-    """Validate and analyze the complete six-cell fusion A/B packet.
+    """Validate and analyze a complete six-cell, two-arm A/B packet.
 
     The five measurement blocks are paired by ``case_id``, ``dpu_count`` and
     ``block_id``.  Warmups are validated and retained in the result for audit,
     but are excluded from all measurement summaries and comparisons.
     """
 
+    arm_labels = _validate_arm_labels(arm_labels)
     if isinstance(rows, (str, bytes, Mapping)):
         raise TypeError("rows must be an iterable of row mappings")
     if type(seed) is not int:
@@ -471,7 +505,7 @@ def analyze_rows(
     expected_count = (
         len(EXPECTED_CASES)
         * len(EXPECTED_DPU_COUNTS)
-        * len(EXPECTED_ARMS)
+        * len(arm_labels)
         * (len(WARMUP_BLOCKS) + len(MEASUREMENT_BLOCKS))
     )
     if len(materialized) != expected_count:
@@ -488,7 +522,7 @@ def analyze_rows(
 
     records: dict[tuple[str, int, str, str, int], dict[str, Any]] = {}
     for index, row in enumerate(mappings):
-        key, normalized = _validate_row(row, index)
+        key, normalized = _validate_row(row, index, arm_labels=arm_labels)
         if key in records:
             raise ValueError(f"duplicate row for {key}")
         for field, state in optional_states.items():
@@ -499,7 +533,7 @@ def analyze_rows(
         (case_id, dpu_count, arm, attempt_kind, block_id)
         for case_id in EXPECTED_CASES
         for dpu_count in EXPECTED_DPU_COUNTS
-        for arm in EXPECTED_ARMS
+        for arm in arm_labels
         for attempt_kind in EXPECTED_ATTEMPTS
         for block_id in (
             WARMUP_BLOCKS if attempt_kind == "warmup" else MEASUREMENT_BLOCKS
@@ -528,7 +562,7 @@ def analyze_rows(
                 "paired_differences": {},
             }
             measurement_values: dict[str, dict[str, Any]] = {}
-            for arm in EXPECTED_ARMS:
+            for arm in arm_labels:
                 warmup = records[(case_id, dpu_count, arm, "warmup", 0)]
                 measurements = [
                     records[(case_id, dpu_count, arm, "measurement", block_id)]
@@ -566,21 +600,24 @@ def analyze_rows(
                     "metrics": metric_stats,
                 }
 
+            first_arm, second_arm = arm_labels
             for metric in REPORTED_METRICS:
                 cell["comparisons"][metric] = _paired_comparison(
                     MEASUREMENT_BLOCKS,
-                    measurement_values["unfused"][metric],
-                    measurement_values["fused"][metric],
+                    measurement_values[first_arm][metric],
+                    measurement_values[second_arm][metric],
                     seed=_seed_for(seed, case_id, dpu_count, metric),
                     bootstrap_resamples=bootstrap_resamples,
+                    arm_labels=arm_labels,
                 )
             for metric in SETUP_METRICS:
                 difference = _paired_difference(
                     MEASUREMENT_BLOCKS,
-                    measurement_values["unfused"][metric],
-                    measurement_values["fused"][metric],
+                    measurement_values[first_arm][metric],
+                    measurement_values[second_arm][metric],
                     seed=_seed_for(seed, case_id, dpu_count, metric),
                     bootstrap_resamples=bootstrap_resamples,
+                    arm_labels=arm_labels,
                 )
                 cell["setup_differences"][metric] = difference
                 cell["paired_differences"][metric] = difference
@@ -588,10 +625,11 @@ def analyze_rows(
                 if optional_states[metric] == "value":
                     cell["paired_differences"][metric] = _paired_difference(
                         MEASUREMENT_BLOCKS,
-                        measurement_values["unfused"][metric],
-                        measurement_values["fused"][metric],
+                        measurement_values[first_arm][metric],
+                        measurement_values[second_arm][metric],
                         seed=_seed_for(seed, case_id, dpu_count, metric),
                         bootstrap_resamples=bootstrap_resamples,
+                        arm_labels=arm_labels,
                     )
                 else:
                     cell["paired_differences"][metric] = None
@@ -605,17 +643,18 @@ def analyze_rows(
                 metric,
                 seed=seed,
                 bootstrap_resamples=bootstrap_resamples,
+                arm_labels=arm_labels,
             )
             for metric in REPORTED_METRICS
         },
     }
     return {
-        "analysis_version": ANALYSIS_VERSION,
+        "analysis_version": analysis_version,
         "seed": seed,
         "bootstrap_resamples": bootstrap_resamples,
         "cases": list(EXPECTED_CASES),
         "dpu_counts": list(EXPECTED_DPU_COUNTS),
-        "arms": list(EXPECTED_ARMS),
+        "arms": list(arm_labels),
         "attempts": {
             "warmup": {"count_per_arm_cell": len(WARMUP_BLOCKS), "block_ids": list(WARMUP_BLOCKS)},
             "measurement": {
@@ -633,10 +672,10 @@ def analyze_rows(
         "timing_semantics": {
             "session_inclusive_s": "session_open_s + steady_s + session_close_s per row before medians",
             "setup_s": "session_open_s + session_close_s per row before paired differences",
-            "primary_speedup": "median(unfused) divided by median(fused) within each cell",
+            "primary_speedup": f"median({arm_labels[0]}) divided by median({arm_labels[1]}) within each cell",
             "primary_bootstrap": "paired block indexes resampled before both arm medians",
-            "descriptive_speedup": "median of unfused/fused ratios for paired blocks",
-            "saved_time_s": "unfused minus fused for the same cell and measurement block",
+            "descriptive_speedup": f"median of {arm_labels[0]}/{arm_labels[1]} ratios for paired blocks",
+            "saved_time_s": f"{arm_labels[0]} minus {arm_labels[1]} for the same cell and measurement block",
             "aggregate": "equal-cell aggregation; raw runtimes are never pooled",
         },
         "cells": cells,
