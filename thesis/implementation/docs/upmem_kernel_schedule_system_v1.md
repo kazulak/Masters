@@ -25,6 +25,14 @@ acceptance. The narrower scheduled-continuation text is not the downstream
 roadmap. Kernel/DAG mechanisms remain required bounded experiments, not assumed
 speedups or prerequisites for indefinite runtime optimization.
 
+The user-approved autonomous execution model supersedes the older Phase A-only
+authorization. Continue between passed gates within the declared scope and
+budgets without phase-by-phase approval. Make bounded repairs and accept
+negative results; freeze identities for reproducibility, not as a user-input
+pause. Keep exclusive hardware admission, no replacement samples, untouched
+holdouts and two-copy archival. Tool-enforced permissions and safety limits
+still apply; do not bypass a rejection or expand budgets implicitly.
+
 ## Reconciled Sources
 
 Remote heads were checked on 2026-09-05 before implementation:
@@ -1169,6 +1177,70 @@ no unexplained regression beyond 5%; preregister adjustments from baseline
 variability, never the observed winner. Inconclusive results stop at the cap.
 Correctness, policy replay and full-precision accuracy are distinct gates.
 
+### Static DAG Correctness: Seven Physical Sessions
+
+The frozen generic-panel, unfused static-DAG correctness packet completed on
+the unchanged execution source `30560900354b523b2a3a44971f81860a04888640`.
+The earlier permission rejection launched no process and consumed no attempt;
+execution followed the user's explicit autonomous-execution approval.
+
+- Experiment: `902877a1241df71e1bcb8924faf2677f18ff7c8a755acbcfde7da60c40cd8c90`.
+- Run: `265166af-2373-4226-86f9-59bf626c598f`.
+- Configuration SHA-256: `a688d00fcd715b2f3d46cb03a266b3fd3e007ba399da2244cd5806d9d278eaab`.
+- Packet archive SHA-256: `eec8cb53024441ab0437076c2978baf30a8e972bfe9920deba0b3114fd8c1ea0`.
+- Raw archive SHA-256: `b05607cc3106b50104b312bf8645495bc2e7237e7477d30a388e11ae37f540dc`.
+- Seven measurements, zero warmups, seven fresh successful sessions; zero
+  failed/unsupported attempts, fallback, retries or replacements.
+- All seven policy replays pass. All three float32 accuracy checks pass;
+  four int8 observations remain separately error-reported, not full-precision
+  qualified.
+- Rank1, CPU0, powersave governor, SDK2023.1.0; preflight recorded exact clean
+  source, unchanged T1/T8 binaries, private lock and free rank ownership.
+- Remote and local canonical/strict verification pass; 51 relative raw-file
+  checksums and the outer archive checksum verified, with both copies retained.
+
+| Circuit | Numeric policy | DPUs / tasklets | Concurrent native waves |
+| --- | --- | --- | ---: |
+| Bell2 | float32 | 1 / T1 | 0 |
+| Bell2 | shared-scale int8 | 1 / T1 | 0 |
+| Stress14 | float32 | 1 / T8 | 0 |
+| Stress14 | shared-scale int8 | 1 / T8 | 0 |
+| Stress14 | float32 | 4 / T8 | 108 |
+| Stress14 | shared-scale int8 | 3 / T8 | 140 |
+| Stress14 | shared-scale int8 | 4 / T8 | 108 |
+
+Multi-node cohort summaries bind distinct DPU assignments, shared native
+request/response identities, owner-only launch accounting and later dependent
+joins. The source-audited synchronous submit/assembly/publication path and
+numerical replay support dependency correctness; there is no independent
+timestamp-level tensor-publication trace. One-DPU routes test degeneration.
+These one-shot observations do not establish a DAG speedup.
+
+Packet qualification passed 72 tests and Ruff. Independent preparation review
+caught a raw-array versus dtype/shape-framed output-hash mismatch in the new
+verifier before physical execution. A fresh CPU-only supplement reproduces the
+original raw hashes and supplies canonical hashes; the original observations
+remain preserved. Runtime, kernel, numeric policies and source were unchanged.
+
+Raw evidence is retained locally under
+`runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/dag-correctness-v1/`
+and remotely at
+`/home/tkazulak/evidence/kernel-schedule-dag-correctness-3056090-v1`.
+Cumulative milestone attempts are now 184. Geometry confirmation remains
+unused after its no-go. Next is the declared 72-attempt, equal-resource DAG
+A/B at two/four DPUs using generic kernels, not composition or path fitting.
+The requested independent post-run reader stopped on a service usage limit
+before producing findings. That review remains pending; do not describe the
+completed canonical/strict checks as an independent post-run audit.
+
+A source-only A/B draft retains all three development circuits and 12 arm/cell
+combinations (72 scheduled attempts). Four structural tests pass. EDC14's
+static-DAG routes at two/four DPUs fail the formal dominant-wave tasklet-row
+scaling criterion; the unchanged CLI permits these under `diagnostic_v1`.
+They remain included with their failed eligibility facts, not filtered out or
+promoted to formal scaling claims. The draft has not been qualified, frozen,
+admitted or physically executed.
+
 ## Qualification and Archival
 
 Changed executable checkpoints need full pinned pytest/Ruff/diff checks,
@@ -1200,7 +1272,9 @@ prototype completes the named geometry experiment, with correctness qualified
 and performance adoption rejected. The bounded resident pair and exact slice
 concurrency have SDK correctness coverage; resident production integration is
 not enabled. Fusion is physically confirmed, and outer dispatch has passed its
-seven-session correctness gate. Next: separately preregistered DAG gates,
+seven-session correctness gate. Static DAG correctness has now passed seven
+physical sessions and both local/remote verifiers. Next: separately
+preregistered fixed-resource DAG performance gates,
 followed by the budgeted locality decision. Composition admission,
 schedule-aware cost extraction and the remaining physical acceptance gates remain open.
 The geometry A/B is now complete with a no-go: do not run its reserved
