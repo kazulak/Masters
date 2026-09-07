@@ -95,7 +95,7 @@ competing-process, identity and environment admission is still mandatory.
 | --- | --- | --- |
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
-| P2 kernels | Fusion correctness, 72-attempt A/B and fresh 12-attempt confirmation accepted at `3056090`; K=1 physical gates pending | Separate correctness, native audit, A/B and confirmation for specialization; compose retained mechanisms later |
+| P2 kernels | Fusion correctness/A-B/confirmation and seven-session K=1 physical correctness accepted at `3056090`; K=1 performance decision pending | Fixed-policy A/B and confirmation for specialization; compose retained mechanisms later |
 | P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
 | P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
@@ -959,6 +959,78 @@ Cumulative physical use is **98 attempts**. Next is the K=1 geometry correctness
 gate, to be separately frozen, then its fixed-policy performance comparison;
 DAG, locality, composition, executor freeze and path study remain open.
 
+### K1 Geometry Physical Correctness
+
+The seven-session geometry gate completed exactly once on 2026-09-07 at clean
+execution source `30560900354b523b2a3a44971f81860a04888640`. It uses the same
+qualified ETH SDK 2023.1.0 binaries, one rank, CPU0 and observed powersave governor.
+No runtime, kernel, physical mapper or numerical-policy source changed.
+
+The original Bell2 and Stress14 gate plans contain zero K1 units, so a selector
+change alone would not test the specialization. Before execution the new packet
+retained their seven resource/numeric routes and budget, replacing the two T1
+cases with the existing SDK-qualified sliced Stress4 fixture (`contract_24`,
+minimum four slices), and the five T8 cases with the already observed greedy
+HS20/depth1 path. No candidate search or held-out instance was used. Every route
+holds fusion enabled and `serial_nodes_v1` fixed, selecting `outer_k1_v1` through
+the existing `packed_wave_v1` transport. This is a correctness gate, not an A/B.
+
+| Circuit | Policy | DPUs | Tasklets | Unique K1 units | Fused tile launches | Real-product tile launches | Native launches |
+| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Sliced Stress4 | float32 | 1 | 1 | 4 | 32 | 0 | 32 |
+| Sliced Stress4 | shared-scale int8 | 1 | 1 | 4 | 32 | 0 | 32 |
+| HS20 | float32 | 1 | 8 | 24 | 58 | 64 | 122 |
+| HS20 | shared-scale int8 | 1 | 8 | 24 | 58 | 64 | 122 |
+| HS20 | float32 | 4 | 8 | 24 | 58 | 64 | 74 |
+| HS20 | shared-scale int8 | 3 | 8 | 24 | 58 | 64 | 82 |
+| HS20 | shared-scale int8 | 4 | 8 | 24 | 58 | 64 | 74 |
+
+All **7/7 samples and sessions** passed physical, canonical and strict packet
+verification, with zero failures, unsupported attempts, CPU/simulator fallback,
+retries or replacements. Per-node kernel counts, complete work-unit sets,
+resource admission, executable identities and release facts match the frozen
+physical plans. All requested DPUs receive work; three/four-DPU HS20 includes
+partial waves. HS20's 24 outer units comprise eight fused units plus sixteen
+non-fitting units executed through 64 real-product launches, not 72 unique
+units. Its other fifty units retain the panel kernel.
+
+All three float32 samples pass the existing full-precision policy. Sliced
+Stress4's maximum absolute error is approximately `1.9592e-7`; HS20's is
+`5.8208e-10`. All four int8 samples pass exact policy replay, with maximum
+absolute errors `0.00638418` for sliced Stress4 and `5.8208e-10` for HS20.
+Int8 remains accuracy-unqualified under the existing reporting policy; these
+values do not establish general full-precision int8 accuracy. Complex inputs
+and host slice reduction are exercised by Stress4; this is not a slice
+concurrency or residency qualification.
+
+Packet preparation passed 39 focused tests and Ruff, with independent read-only
+review. Pre-freeze repairs corrected the remote interpreter path, the prior
+decision's `result` key and configuration-derived 3/4 accuracy counts. The
+unchanged 414-test strict SDK qualification and T1-T24 binaries were reused,
+not rebuilt or rerun. CPU fixture records are explicitly separate from physical
+evidence. The freeze gate checks named tests because out-of-tree JUnit records
+have empty `classname` attributes; it does not infer coverage from that field.
+
+- Experiment: `7c0aaa809682ea65401905c36ac27ef1025b4366b94da404ec8cb4bf0b2b6dbf`.
+- Run: `36bd228c-c634-4874-a803-0ccdcdcbf172`.
+- Configuration SHA-256:
+  `8da3b3d60a24b660c7da24d35bff788621fe126b26401148549cc00fad0433b7`.
+- Frozen packet archive SHA-256:
+  `7bec60990efa591005b8b3c91fca697c1a6fb5cc4a852cbd017e3f1025db74da`.
+- Raw archive SHA-256:
+  `90361cfbdbfa728175018a0c877bf6d2d27ea124700fc0338eb158232f4ee084`.
+- Preparation/reporting predecessor: `3002f78df68325fbc7c91c0f2a50b50dd22188d6`.
+- Remote: `/home/tkazulak/evidence/kernel-schedule-geometry-correctness-3056090-v1`.
+- Local: `runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/geometry-correctness-v1/`.
+
+All 43 raw-stage file checksums and both verifiers passed on both hosts. Two
+verified copies are retained; no original was deleted. The source stayed clean
+and rank release was verified. Cumulative physical use is **105 attempts**.
+The K1 implementation is now physically correctness-qualified for these routes,
+not adopted as a performance optimization. Next: the separately preregistered
+fixed-path panel-versus-outer A/B; DAG, locality, composition, final executor
+freeze and path optimization remain open.
+
 ### Remaining Budget
 
 The approved ceiling is **1,051 physical attempts**, not a target to exhaust.
@@ -1019,9 +1091,9 @@ execution are connected with SDK correctness coverage. The outer-product
 prototype completes the named geometry implementation, subject to its
 qualification and physical decision. The bounded resident pair and exact slice
 concurrency have SDK correctness coverage; resident production integration is
-not enabled. Next: separately preregistered physical fusion/outer/DAG gates,
-now that P0 correctness is durably accepted, and the
-budgeted locality decision. Composition admission,
-schedule-aware cost extraction and all physical acceptance gates remain open.
+not enabled. Fusion is physically confirmed, and outer dispatch has passed its
+seven-session correctness gate. Next: separately preregistered outer performance
+and DAG gates, followed by the budgeted locality decision. Composition admission,
+schedule-aware cost extraction and the remaining physical acceptance gates remain open.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
