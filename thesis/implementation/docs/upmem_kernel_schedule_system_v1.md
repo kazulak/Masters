@@ -1240,6 +1240,19 @@ scaling criterion; the unchanged CLI permits these under `diagnostic_v1`.
 They remain included with their failed eligibility facts, not filtered out or
 promoted to formal scaling claims. The draft has not been qualified, frozen,
 admitted or physically executed.
+CPU preparation subsequently passed all 12 arm/cell combinations, reproducing
+exactly equal outputs across serial/static schedules and two/four DPUs for
+each circuit. Canonical output hashes, physical/executable identities and
+float32 reference checks are retained separately from physical evidence; five
+draft tests pass. No SDK or physical attempt was used for this preparation.
+
+`scripts/analyze_upmem_dag_ab.py` reuses the established paired-block statistics
+with explicit serial/DAG labels and the two/four-DPU matrix. The shared
+analyzer retains its original one/four-DPU defaults. All 53 focused A/B analysis
+tests pass, and complete output equality against the frozen prior analyzer was
+checked on the retained 72 fusion observations, including the default 10,000
+bootstrap resamples. These are analysis qualification checks, not new timing
+evidence. Controller/verifier qualification and independent review remain open.
 
 ## Qualification and Archival
 

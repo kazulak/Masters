@@ -228,6 +228,7 @@ def _validate_row(
     index: int,
     *,
     arm_labels: Sequence[str] = EXPECTED_ARMS,
+    dpu_counts: Sequence[int] = EXPECTED_DPU_COUNTS,
 ) -> tuple[tuple[str, int, str, str, int], dict[str, Any]]:
     arm_labels = _validate_arm_labels(arm_labels)
     missing = [field for field in (*IDENTITY_FIELDS, *TIME_FIELDS) if field not in raw_row]
@@ -238,7 +239,7 @@ def _validate_row(
     if case_id not in EXPECTED_CASES:
         raise ValueError(f"row {index} has an unknown case_id: {case_id!r}")
     dpu_count = _require_int(raw_row["dpu_count"], f"row {index} dpu_count")
-    if dpu_count not in EXPECTED_DPU_COUNTS:
+    if dpu_count not in dpu_counts:
         raise ValueError(f"row {index} has an unexpected dpu_count")
     arm = raw_row["arm"]
     if arm not in arm_labels:
@@ -485,6 +486,7 @@ def analyze_rows(
     bootstrap_resamples: int = DEFAULT_BOOTSTRAP_RESAMPLES,
     arm_labels: Sequence[str] = EXPECTED_ARMS,
     analysis_version: str = ANALYSIS_VERSION,
+    dpu_counts: Sequence[int] = EXPECTED_DPU_COUNTS,
 ) -> dict[str, Any]:
     """Validate and analyze a complete six-cell, two-arm A/B packet.
 
@@ -494,6 +496,12 @@ def analyze_rows(
     """
 
     arm_labels = _validate_arm_labels(arm_labels)
+    if isinstance(dpu_counts, (str, bytes)):
+        raise ValueError("dpu_counts must contain two ordered distinct positive integers")
+    dpu_counts = tuple(dpu_counts)
+    if (len(dpu_counts) != 2 or any(type(n) is not int or n <= 0 for n in dpu_counts)
+            or dpu_counts[0] >= dpu_counts[1]):
+        raise ValueError("dpu_counts must contain two ordered distinct positive integers")
     if isinstance(rows, (str, bytes, Mapping)):
         raise TypeError("rows must be an iterable of row mappings")
     if type(seed) is not int:
@@ -504,7 +512,7 @@ def analyze_rows(
     materialized = list(rows)
     expected_count = (
         len(EXPECTED_CASES)
-        * len(EXPECTED_DPU_COUNTS)
+        * len(dpu_counts)
         * len(arm_labels)
         * (len(WARMUP_BLOCKS) + len(MEASUREMENT_BLOCKS))
     )
@@ -522,7 +530,7 @@ def analyze_rows(
 
     records: dict[tuple[str, int, str, str, int], dict[str, Any]] = {}
     for index, row in enumerate(mappings):
-        key, normalized = _validate_row(row, index, arm_labels=arm_labels)
+        key, normalized = _validate_row(row, index, arm_labels=arm_labels, dpu_counts=dpu_counts)
         if key in records:
             raise ValueError(f"duplicate row for {key}")
         for field, state in optional_states.items():
@@ -532,7 +540,7 @@ def analyze_rows(
     expected_keys = {
         (case_id, dpu_count, arm, attempt_kind, block_id)
         for case_id in EXPECTED_CASES
-        for dpu_count in EXPECTED_DPU_COUNTS
+        for dpu_count in dpu_counts
         for arm in arm_labels
         for attempt_kind in EXPECTED_ATTEMPTS
         for block_id in (
@@ -551,7 +559,7 @@ def analyze_rows(
 
     cells: list[dict[str, Any]] = []
     for case_id in EXPECTED_CASES:
-        for dpu_count in EXPECTED_DPU_COUNTS:
+        for dpu_count in dpu_counts:
             cell: dict[str, Any] = {
                 "case_id": case_id,
                 "dpu_count": dpu_count,
@@ -653,7 +661,7 @@ def analyze_rows(
         "seed": seed,
         "bootstrap_resamples": bootstrap_resamples,
         "cases": list(EXPECTED_CASES),
-        "dpu_counts": list(EXPECTED_DPU_COUNTS),
+        "dpu_counts": list(dpu_counts),
         "arms": list(arm_labels),
         "attempts": {
             "warmup": {"count_per_arm_cell": len(WARMUP_BLOCKS), "block_ids": list(WARMUP_BLOCKS)},
