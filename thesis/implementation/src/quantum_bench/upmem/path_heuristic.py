@@ -20,11 +20,13 @@ import numpy as np
 
 from quantum_bench.lowering import validate_contraction_dag
 from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
+from quantum_bench.upmem.execution_features import extract_execution_features
 from quantum_bench.upmem.plan import UpmemPlan
 from quantum_bench.upmem.runtime import _wram_panel_operation_facts
 
 
 COST_MODEL_ID = "upmem_slr_cost_v1"
+WAVE_COST_MODEL_ID = "upmem_slr_wave_cost_v1"
 FEATURE_NAMES = (
     "B_host_dpu",
     "B_mram_wram",
@@ -350,6 +352,94 @@ class PlanFeatureFacts:
             "tasklet_utilization": self.tasklet_utilization,
             "dpu_utilization": self.dpu_utilization,
         }
+
+
+def extract_wave_path_features(
+    dag: ContractionDAG,
+    plan: UpmemPlan,
+    *,
+    fuse_complex: bool = False,
+    geometry_policy: str = "panel_only_v1",
+) -> dict[str, object]:
+    """Uncalibrated schedule surrogate, retaining all unnormalized source facts.
+
+    Independent per-term slot maxima may overestimate a common critical DPU's
+    work. This is not an absolute runtime prediction. Aggregate MACs/local bytes
+    are provenance only: do not penalize them again alongside critical work.
+    Sync adds explicit event counts with unit coefficients, not fitted subweights.
+    WRAM is a static-buffer feasibility fact, not a full linked-footprint proof.
+    """
+    facts = extract_execution_features(
+        dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy
+    )
+    totals = facts["totals"]
+    local = sum(max((slot["local_traffic"]["mram_aligned_transfer_bytes_estimate"]
+                     for slot in wave["slots"]), default=0) for wave in facts["waves"])
+    compute = sum(max((slot["real_mac_count"] for slot in wave["slots"]), default=0)
+                  for wave in facts["waves"])
+    barriers = sum(max((slot["barrier_events"] for slot in wave["slots"]), default=0)
+                   for wave in facts["waves"])
+    sync = {key: totals[key] for key in ("cohort_count", "launch_count", "host_reduce_count")}
+    sync["wave_critical_barrier_events"] = barriers
+    return {
+        **facts,
+        "cost_model_id": WAVE_COST_MODEL_ID,
+        "raw": RawFeatureVector(
+            totals["h2d_bytes"] + totals["d2h_bytes"], local, compute,
+            sum(sync.values()), 0, facts["static_memory"]["known_wram_buffers_bytes"],
+        ),
+        "sync_components": sync,
+        "inactive_features": ("E_num", "P_wram"),
+        "feature_dependency_notes": {
+            "B_host_dpu": "Aggregate H2D+D2H including control/completion; excludes local traffic.",
+            "B_mram_wram": "Sum of wave slot maxima; aggregate local bytes are provenance only.",
+            "I_dpu": "Sum of wave slot MAC maxima; total MACs are provenance only, not another penalty.",
+            "N_sync": "Cohorts + launches + host reductions + wave slot barrier maxima; not tasklet sums.",
+            "E_num": "Zero, not estimated; inactive, including for int8 extraction.",
+            "P_wram": "Static buffers only; feasibility/non-discriminating, never scored.",
+        },
+        "surrogate_limits": (
+            "Independent term maxima may overestimate a common critical DPU's work.",
+            "No calibrated weights, absolute runtime prediction or physical adoption claim.",
+        ),
+    }
+
+
+def score_wave_path_features(
+    candidate: Mapping[str, object],
+    reference: Mapping[str, object],
+    weights: WeightVector,
+    *,
+    cost_model_id: str,
+) -> float:
+    """Score relative to an explicit reference with explicitly wave-bound weights.
+
+    No profile lookup/default or historical-weight migration is performed.
+    Callers own weight provenance; this boundary accepts only float32 facts.
+    Reference and candidate must share frozen execution controls. The caller
+    binds the same circuit/candidate pool; logical/physical plan IDs may differ.
+    """
+    if cost_model_id != WAVE_COST_MODEL_ID:
+        raise ValueError("weights require explicit upmem_slr_wave_cost_v1 identity")
+    for field in (
+        "rank_count", "dpu_count", "tasklets_per_dpu", "numeric_policy",
+        "request_transport", "kernel_identity", "schedule_policy",
+        "fuse_complex", "geometry_policy",
+    ):
+        if candidate["plan"][field] != reference["plan"][field]:
+            raise ValueError(f"wave scoring context mismatch: {field}")
+    for facts in (candidate, reference):
+        if facts["cost_model_id"] != WAVE_COST_MODEL_ID:
+            raise ValueError("facts require upmem_slr_wave_cost_v1 identity")
+        if facts["plan"]["numeric_policy"] != "split_complex_float32_v1":
+            raise ValueError("wave scoring profile boundary is float32 only")
+        if not isinstance(facts["raw"], RawFeatureVector):
+            raise TypeError("wave scoring requires RawFeatureVector")
+    if not isinstance(weights, WeightVector):
+        raise TypeError("wave scoring requires explicit WeightVector")
+    if weights.numeric or weights.wram:
+        raise ValueError("E_num and P_wram must have zero weight")
+    return score_features(candidate["raw"], reference["raw"], weights)
 
 
 def extract_plan_features(plan: UpmemPlan) -> PlanFeatureFacts:
@@ -1388,6 +1478,9 @@ def explain_score(
 
 __all__ = [
     "COST_MODEL_ID",
+    "WAVE_COST_MODEL_ID",
+    "extract_wave_path_features",
+    "score_wave_path_features",
     "FEATURE_NAMES",
     "GROUP_FEATURE_NAMES",
     "SIX_TERM_FEATURE_MODEL",
