@@ -105,8 +105,8 @@ competing-process, identity and environment admission is still mandatory.
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Fusion physically confirmed; K1 correctness passed but the fixed-path A/B rejected adoption at `3056090` | Preserve K1 negative evidence; retain panel geometry and admitted fusion for later composition |
 | P3 DAG waves | Seven-session physical correctness independently audited; 72-attempt fixed-resource A/B raw accepted after offline verifier correction; separate 12-attempt Stress16 D4/T8 development confirmation now accepted | Use the confirmation for later composition only; no global production adoption |
-| P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; next bounded exploratory proposal is 44+48 and is not frozen; resident measurement path is missing | Freeze the bounded proposal, add only the minimal resident measurement integration, then qualify or record no-go |
-| P5 composition | Composition admission and schedule-aware cost extraction remain open | Joint qualification and frozen executor/source/binaries/policies/features |
+| P4 resident/slice | Physical campaigns complete and independently audited: resident and both Stress16 slice cells NO_GO; fresh EDC14 D4 confirmation PASS; cumulative 324 attempts | Preserve negative results and unused confirmation slots; EDC result is development-only |
+| P5 composition | Composition SDK tests and schedule/kernel-aware features exist; final-policy admission and path-cost integration remain open | After P4 audit closure, jointly qualify and freeze executor/source/binaries/policies/features; no automatic production adoption |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
 
@@ -1387,10 +1387,84 @@ Both retention records report local and remote verification with no raw
 observation modification.
 
 This closes the P3 confirmation gate for later composition only; it does not
-establish global production adoption. P4 remains a bounded exploratory
-proposal of **44+48**, not frozen, and its minimal resident measurement path
-is still missing. P5 composition, schedule-aware cost extraction and the
-remaining frozen-executor/source/policy paths remain open.
+establish global production adoption. At that checkpoint P4 was an unfrozen
+**44+48** proposal; its subsequent physical results are recorded below.
+
+## P4 Physical Closure
+
+All three packets executed exactly once at clean source
+`ce20a6cde88924b30418d5026eabeec2c807c246`. Slice execution reused accepted T8
+production binaries built at `30560900354b523b2a3a44971f81860a04888640`, with
+exact `src/native` tree identity proof; resident execution used its separately
+SDK-qualified test-only ce20 pair binaries. Rank1, SDK2023.1.0, CPU0/powersave
+and float32 policies remained fixed. Local/remote raw copies were verified.
+
+| Packet / cell | Warmups / measured | Inclusive speedup | Decision |
+| --- | ---: | ---: | --- |
+| Resident8: Stress16 D1, host roundtrip vs resident pair | 2 / 6 | 0.959854641 | NO_GO; resident is 4.1824% longer |
+| Slice36: Stress16 D2 | 3 / 9 | 0.608675995 | NO_GO |
+| Slice36: Stress16 D4 | 3 / 9 | 0.780553338 | NO_GO |
+| Slice36: EDC14 D4 | 3 / 9 | 1.124898715 | GO to fresh confirmation; 11.1031% reduction |
+| Fresh EDC14 D4 confirmation12 | 2 / 10 | 1.125243871 | CONFIRMATION_PASS; 11.1304% reduction; independently audited |
+
+Slice36 included unsliced serial, sliced serial and sliced static; the table
+reports the whole-route unsliced-serial/sliced-static contrast, without pooling.
+Confirmation retained only those two EDC14 D4 arms and the same sliced candidate.
+Its exact speedup is **1.1252438705643877**, inclusive reduction
+**11.130375720382213%**, paired 95% CI
+**[1.0597364159578495, 1.3228109896830418]**. Frozen local analysis matches remote.
+The unchanged gate is at least 5% inclusive reduction and lower CI greater than
+1, using seed20260910 and 10,000 paired resamples; confirmation uses five fresh
+measured blocks. Resident primary is subprocess wall through reap; slice primary
+is session open + steady + close. These timing boundaries are not interchangeable.
+
+P4 used **56 attempts = 8 + 36 + 12**, all successful observations, advancing
+cumulative use from **268 to 324**. No retries or replacements occurred. Stress
+confirmation24 and resident confirmation12 remain unused, without reallocation.
+Resident's valid negative experiment is accepted. Its controller hit a post-run
+`PermissionError` during proc-fd archival; archive-only recovery retained the
+original pending record after exclusive-lock/release proof, with no physical rerun.
+Slice36's independent postrun audit is **PASS**. Both slice packets have all four
+stage exits0, clean terminal source and rank1 `is_owned=0`; the final EDC12
+independent postrun audit is **PASS**, with no blockers. Audit SHA-256:
+`67cc28b0a3aa39d4144612aef0182acc1932884426eebb879dc6d57396fb7ad8`.
+
+Evidence root: `runs/eth/safari-baguette1/ce20a6cde88924b30418d5026eabeec2c807c246/`.
+Use the respective `resident-exploration-v1`, `slice36-exploration-v1` and
+`edc14-d4-confirmation-v1` directories; retained analysis, audit/retention records
+and raw terminal records are authoritative.
+
+| Raw archive | SHA-256 |
+| --- | --- |
+| `resident-pair-exploration-ce20a6c-v1.tar.gz` | `74d0afddfc43dba4f68e97e05c8a84eb1861c899c90bacbd393afdbfd6d7865e` |
+| `p4-slice36-exploration-ce20a6c-v1.tar.gz` | `bb8d91303440a2f1ff2b1dd76028c206b500e70964a6ccc8b783e2570714e7ad` |
+| `p4-edc14-d4-confirmation-ce20a6c-v1.tar.gz` | `374e7fad28ab7a921161db962af84e2f80cddcc6327c42ab764f987319a3f58e` |
+
+This is development-only fixed-route confirmation selected after exploration,
+not untouched generalization, a whole-DAG resident result or production adoption.
+The negative Stress/resident outcomes are not displaced by the EDC result.
+Correctness rests on the qualified runtime's CPU/complex128 validation, exact
+canonical output hashes and bound slice/reduction evidence; no offline recovery
+of unretained physical tensor bytes is claimed. P4 is closed; next is P5
+composition qualification, not additional tuning of these experiments.
+
+## P5 Composition Policy Under Qualification
+
+The proposed retained route combines `packed_wave_v1`, `static_dag_waves_v1`,
+`fuse_complex=true` with its existing deterministic non-fit fallback, and
+`panel_only_v1`. Float32 is the primary performance policy; shared-scale int8
+receives separate correctness/accuracy qualification, not float32 fitted weights.
+Slicing remains an explicitly declared exact DAG transformation, not automatic
+family-specific selection. Resident execution and outer-K1 dispatch are excluded
+from the retained policy. No transfer overlap or multi-rank work is introduced.
+
+Reuse the seven-route changed-checkpoint correctness design with the retained
+composition, then the budgeted six-route Stress16 scaling diagnostic: one DPU at
+T1/T4/T8/T16 and two/four DPUs at T8, one warmup plus three measurements each.
+Reuse the existing 32-combination SDK composition tests. Admission and the
+schedule-aware cost adapter must pass software/review gates before freezing the
+physical configuration. Separate mechanism speedups must not be multiplied into
+an invented combined result. The executor/profile is not yet frozen.
 
 ## Qualification and Archival
 
@@ -1428,10 +1502,12 @@ physical sessions, both local/remote verifiers and independent post-run review.
 The fixed-resource DAG A/B raw is accepted after offline verifier correction,
 and its frozen timing gates pass. The separate 12-attempt Stress16 D4/T8
 development confirmation is also accepted for later composition only; it does
-not establish global production adoption. Next is the not-yet-frozen P4
-bounded exploratory proposal (`44+48`), subject to adding the missing minimal
-resident measurement path. P5 composition admission, schedule-aware cost
-extraction and the remaining physical acceptance gates remain open.
+not establish global production adoption. P4 physical collection is complete as
+recorded above; final EDC confirmation postrun audit passed. Next is P5:
+reuse existing composition SDK tests and `execution_features.py`, close final-policy
+and host-memory admission, and adapt the existing path-cost pipeline to the frozen
+schedule/kernel policy. Do not repeat rejected resident/Stress confirmations or
+reallocate their unused slots. Joint composition qualification remains open.
 The geometry A/B is now complete with a no-go: do not run its reserved
 confirmation or silently retune the specialization. The separate DAG
 confirmation gate is complete; joint composition qualification is still required.
