@@ -1320,6 +1320,20 @@ Authoritative records are `acceptance.json`,
 - Corrected verifier SHA-256: `9eee8256846486a3505e9148a500513070155eee617f50a8422fba3bf0108eed`.
 - Correction archive SHA-256: `e3970c52d452dd0fc15964a5230b972d10a43f31047b5224c58fd1eae5557056`.
 - Identical local/remote normalized rows SHA-256: `a4168da6fd94b6e836054f76e8e85e59545fb96cdf3b9e6d9986dcead6f86976`.
+- Analysis and independent-audit archive SHA-256: `f07f7f8d933aac6e56b5c3157e1bb6f323ee5acfa7a76f38fa5bde5dcd4bda0c`; six internal files and the outer digest verified locally and on ETH.
+
+The confirmation draft selects the established Stress16/four-DPU/T8 sentinel
+after observing this A/B. No DAG-specific confirmation cell was preregistered
+before these timings. The proposed twelve fresh attempts are therefore
+development confirmation, not an untouched test or a pre-A/B-selected cell.
+Their results must remain separate from this dataset. Qualification, immutable
+packet freezing and fresh locked hardware admission remain required.
+
+Focused confirmation preparation passed 55 verifier/analysis tests and ten
+preparation tests. The actual prepared records pass the unmocked preparation
+validator. CPU references are explicitly reused from hash-verified, unchanged
+DAG/numeric/physical-plan records; no new CPU replay, SDK execution or physical
+attempt is claimed. Controller qualification and independent review remain open.
 
 ## Qualification and Archival
 
