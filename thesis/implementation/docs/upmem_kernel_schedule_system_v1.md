@@ -104,7 +104,7 @@ competing-process, identity and environment admission is still mandatory.
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Fusion physically confirmed; K1 correctness passed but the fixed-path A/B rejected adoption at `3056090` | Preserve K1 negative evidence; retain panel geometry and admitted fusion for later composition |
-| P3 DAG waves | Static physical plans connected to whole-TN execution and SDK correctness; physical concurrency qualification pending | One launch with independent operation IDs/disjoint DPUs; fixed-resource A/B |
+| P3 DAG waves | Seven-session physical correctness independently audited; 72-attempt fixed-resource A/B raw accepted after offline verifier correction and timing gates passed | Fresh 12-attempt confirmation pending; no production adoption |
 | P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
 | P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
@@ -121,7 +121,8 @@ calibration. No old pilot medians or lost raw archives become final-system data.
 
 ## Implementation Contracts
 
-The current runtime splits multi-node stages into sequential nodes. Its v4
+At the initial implementation checkpoint, the runtime split multi-node stages
+into sequential nodes. Its v4
 requests describe one canonical geometry and one real product. A versioned native
 contract is required, not reuse of reserved fields or a Python-thread shortcut.
 One protocol owner coordinates operation/work/wave IDs, selectors, bounds,
@@ -1226,20 +1227,20 @@ Raw evidence is retained locally under
 `runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/dag-correctness-v1/`
 and remotely at
 `/home/tkazulak/evidence/kernel-schedule-dag-correctness-3056090-v1`.
-Cumulative milestone attempts are now 184. Geometry confirmation remains
-unused after its no-go. Next is the declared 72-attempt, equal-resource DAG
-A/B at two/four DPUs using generic kernels, not composition or path fitting.
-The requested independent post-run reader stopped on a service usage limit
-before producing findings. That review remains pending; do not describe the
-completed canonical/strict checks as an independent post-run audit.
+Cumulative milestone attempts at this correctness checkpoint were 184.
+Geometry confirmation remains unused after its no-go. The subsequent 72-attempt,
+equal-resource DAG A/B at two/four DPUs using generic kernels is closed below.
+The initial independent reader stopped on a service usage limit; the completed
+`dag-correctness-v1/independent_postrun_audit.json` now records
+`pass_with_bounded_limits` and no blockers.
 
-A source-only A/B draft retains all three development circuits and 12 arm/cell
-combinations (72 scheduled attempts). Four structural tests pass. EDC14's
+The source-only A/B draft retained all three development circuits and 12 arm/cell
+combinations (72 scheduled attempts). Four structural tests initially passed. EDC14's
 static-DAG routes at two/four DPUs fail the formal dominant-wave tasklet-row
 scaling criterion; the unchanged CLI permits these under `diagnostic_v1`.
 They remain included with their failed eligibility facts, not filtered out or
-promoted to formal scaling claims. The draft has not been qualified, frozen,
-admitted or physically executed.
+promoted to formal scaling claims. At that draft checkpoint it had not yet been
+qualified, frozen, admitted or physically executed.
 CPU preparation subsequently passed all 12 arm/cell combinations, reproducing
 exactly equal outputs across serial/static schedules and two/four DPUs for
 each circuit. Canonical output hashes, physical/executable identities and
@@ -1252,7 +1253,73 @@ analyzer retains its original one/four-DPU defaults. All 53 focused A/B analysis
 tests pass, and complete output equality against the frozen prior analyzer was
 checked on the retained 72 fusion observations, including the default 10,000
 bootstrap resamples. These are analysis qualification checks, not new timing
-evidence. Controller/verifier qualification and independent review remain open.
+evidence. Subsequent controller/verifier qualification, independent review,
+freeze and physical execution are reflected in the closure below.
+
+### Static DAG A/B Closure: Accepted Raw and Timing GO
+
+The generic-panel, unfused serial/static-DAG comparison completed at execution
+source `30560900354b523b2a3a44971f81860a04888640`: **72 samples / 72 sessions**,
+12 warmups and 60 measurements across 12 arm/cell combinations. Each arm/cell
+has one warmup and five paired measurement blocks. All 72 samples are accuracy
+qualified, with zero failed/unsupported/fallback observations, retries or
+replacements. Cumulative milestone attempts are **256**.
+
+The authoritative `dag-ab-v1/acceptance.json` records
+`accepted_physical_dag_ab_raw_after_offline_verifier_correction`, with local and
+ETH verified copies and released rank1/private lock. The original controller
+results remain **physical=0, canonical=0, dag_ab=1**. Its strict verifier failed
+with `terminal/sample: backend_id`: plan-level and native-session `backend_id`
+and `execution_class` occupy distinct namespaces in source 305. The separately
+identified offline correction checks each layer against its exact expected
+identity and retains all other shared-field and strict checks. It changed no
+raw observations, runtime or frozen packet and required no physical rerun.
+The original verifier and failure remain preserved. Twelve correction
+regressions passed; local and remote corrected strict verification passed and
+produced identical 72-row normalized output.
+
+Ratios below are serial median / DAG median over the five measurement blocks;
+values above one favor DAG. Warmups are excluded. Session-inclusive time is
+session open + steady execution + session close.
+
+| Circuit | DPUs | Steady ratio | Session-inclusive ratio | Kernel ratio |
+| --- | --- | --- | --- | --- |
+| Stress16 | 2 | 1.163529 | 1.068863 | 0.954027 |
+| Stress16 | 4 | 1.610240 | 1.395117 | 0.902584 |
+| HS20 | 2 | 1.141947 | 1.110758 | 1.024015 |
+| HS20 | 4 | 1.345870 | 1.295389 | 1.076382 |
+| EDC14 | 2 | 1.123528 | 1.087409 | 0.994849 |
+| EDC14 | 4 | 1.547584 | 1.373483 | 1.255278 |
+
+The frozen source-203437 analyzer gives an equal-six-cell session-inclusive
+geometric speedup of **1.2142126437156118**, paired-bootstrap 95% CI
+**[1.1845729381785106, 1.2413408868724962]**, or **17.6421%** time reduction.
+Seed `20260909`, 10,000 resamples, medians/raw MAD and common paired-block
+resampling are unchanged. The fixed 5% practical-reduction, lower-bound >1,
+and maximum 5% per-cell median-regression gates all pass. Both EDC14 cells
+remain included despite their failed formal tasklet-row/scaling eligibility;
+this is a diagnostic fixed-resource scheduling comparison, not a formal
+scaling-eligibility claim. Kernel-only gains are not uniform, as the table shows.
+
+The independent correction audit passed for offline correction adoption, and
+`analysis-v1/independent_analysis_audit.json` records GO for timing interpretation:
+complete analysis/decision reproduction, 168 median/MAD checks and consistent
+summary/CSV timing fields. These results do not authorize production adoption.
+The fresh **12-attempt confirmation remains pending**; no thresholds or timing
+targets were retuned.
+
+Evidence root:
+`runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/dag-ab-v1/`.
+Authoritative records are `acceptance.json`,
+`verifier-repair-v1/correction_report.json` and `analysis-v1/analysis.json`,
+`decision.json`, `summary.json` and `cell_summary.csv`.
+
+- Frozen preregistration archive SHA-256: `93e5f95499751e8719b241a73a9368b4a50c89e072afa4418f83d99ed521f074`.
+- Original raw archive SHA-256: `000fbc8b2d4e514d7d81e1b935f7d88bef7df1f7acb28f199b21be3a5d3fcd46`.
+- Original verifier SHA-256: `ac8b39da44f8e132c534ee8ca078e7cb243034df698bc6604115126dcb78800b`.
+- Corrected verifier SHA-256: `9eee8256846486a3505e9148a500513070155eee617f50a8422fba3bf0108eed`.
+- Correction archive SHA-256: `e3970c52d452dd0fc15964a5230b972d10a43f31047b5224c58fd1eae5557056`.
+- Identical local/remote normalized rows SHA-256: `a4168da6fd94b6e836054f76e8e85e59545fb96cdf3b9e6d9986dcead6f86976`.
 
 ## Qualification and Archival
 
@@ -1286,12 +1353,14 @@ and performance adoption rejected. The bounded resident pair and exact slice
 concurrency have SDK correctness coverage; resident production integration is
 not enabled. Fusion is physically confirmed, and outer dispatch has passed its
 seven-session correctness gate. Static DAG correctness has now passed seven
-physical sessions and both local/remote verifiers. Next: separately
-preregistered fixed-resource DAG performance gates,
-followed by the budgeted locality decision. Composition admission,
+physical sessions, both local/remote verifiers and independent post-run review.
+The fixed-resource DAG A/B raw is accepted after offline verifier correction,
+and its frozen timing gates pass. Next: the pending fresh 12-attempt DAG
+confirmation, followed by the budgeted locality decision. Composition admission,
 schedule-aware cost extraction and the remaining physical acceptance gates remain open.
 The geometry A/B is now complete with a no-go: do not run its reserved
-confirmation or silently retune the specialization. Proceed with the declared
-generic-kernel DAG comparison before composing retained mechanisms.
+confirmation or silently retune the specialization. Complete the separate DAG
+confirmation gate before composing retained mechanisms; no production adoption
+is established by the A/B timing result.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
