@@ -163,7 +163,8 @@ CALIBRATION_TIMING_SCOPE = "steady_execution_v1"
 CALIBRATION_TRANSPORT = "packed_operation_v1"
 WAVE_CALIBRATION_COLUMNS = CALIBRATION_COLUMNS + (
     "profile_schema_version", "execution_profile", "execution_contract_json",
-    "score_id", "primary_quantity", "round_id",
+    "score_id", "primary_quantity", "round_id", "experiment_output_sha256",
+    "runtime_facts_output_sha256",
 )
 WAVE_CALIBRATION_PROFILE = "physical_speedup_fit_v1"
 WAVE_PRIMARY_QUANTITY = "session_inclusive_s"
@@ -2071,6 +2072,49 @@ def _operation_timing_total(
     return sum(values)
 
 
+def _validate_null_logical_plan_candidate(
+    candidate: Mapping[str, Any], circuit_id: str, candidate_id: str
+) -> None:
+    """Allow only generator-recorded, non-runnable infeasible candidates."""
+
+    if candidate.get("is_greedy") is not False:
+        raise ValueError(
+            f"candidate {circuit_id}/{candidate_id} has a null logical_plan_id "
+            "without being an unselected non-greedy record"
+        )
+    topologies = candidate.get("topologies")
+    if not isinstance(topologies, list) or not topologies:
+        raise ValueError(
+            f"candidate {circuit_id}/{candidate_id} has a null logical_plan_id "
+            "without topology infeasibility records"
+        )
+    for topology in topologies:
+        topology_mapping = _mapping(
+            topology, f"candidate topology {circuit_id}/{candidate_id}"
+        )
+        if topology_mapping.get("feasible") is not False:
+            raise ValueError(
+                f"candidate {circuit_id}/{candidate_id} has a null logical_plan_id "
+                "but is not explicitly infeasible"
+            )
+        reason = topology_mapping.get("infeasibility_reason")
+        if not isinstance(reason, str) or not reason:
+            raise ValueError(
+                f"candidate {circuit_id}/{candidate_id} has a null logical_plan_id "
+                "without an explicit infeasibility reason"
+            )
+        if (
+            topology_mapping.get("physical_plan_id") is not None
+            or topology_mapping.get("resource_admission") is not None
+            or topology_mapping.get("memory_admission") is not None
+            or topology_mapping.get("wave_facts") is not None
+        ):
+            raise ValueError(
+                f"candidate {circuit_id}/{candidate_id} has a null logical_plan_id "
+                "but retains executable plan facts"
+            )
+
+
 def _calibration_candidate_index(
     dataset: Mapping[str, Any], calibration: Mapping[str, Any]
 ) -> tuple[
@@ -2130,11 +2174,19 @@ def _calibration_candidate_index(
                     f"candidate path ID {circuit_id}/{candidate_id}",
                     64,
                 )
-                _required_sha(
-                    candidate_mapping.get("logical_plan_id"),
-                    f"candidate logical_plan_id {circuit_id}/{candidate_id}",
-                    64,
-                )
+                if (
+                    candidate_mapping.get("logical_plan_id") is None
+                    and "logical_plan_id" in candidate_mapping
+                ):
+                    _validate_null_logical_plan_candidate(
+                        candidate_mapping, circuit_id, candidate_id
+                    )
+                else:
+                    _required_sha(
+                        candidate_mapping.get("logical_plan_id"),
+                        f"candidate logical_plan_id {circuit_id}/{candidate_id}",
+                        64,
+                    )
                 source_kind = candidate_mapping.get("source_kind")
                 if source_kind not in {"opt_einsum_greedy", "cotengra_one_trial"}:
                     raise ValueError(
@@ -2734,9 +2786,8 @@ def _require_backend_contract(
             raise ValueError(f"terminal {field} path does not match deployment manifest")
         if terminal.get(f"{field}_sha256") != binding["sha256"]:
             raise ValueError(f"terminal {field} SHA does not match deployment manifest")
-    output_sha = _required_sha(sample.get("output_sha256"), "sample output_sha256", 64)
-    if facts.get("output_hash") != output_sha:
-        raise ValueError("sample/backend output identity mismatch")
+    _required_sha(sample.get("output_sha256"), "sample output_sha256", 64)
+    _required_sha(facts.get("output_hash"), "sample backend_facts.output_hash", 64)
 
 
 def _calibration_row(
@@ -2862,6 +2913,12 @@ def _calibration_row(
     if contract is not None:
         if not isinstance(round_id, str) or not round_id:
             raise ValueError("wave calibration requires a private round identity")
+        experiment_output_sha = _required_sha(
+            sample.get("output_sha256"), "sample output_sha256", 64
+        )
+        runtime_facts_output_sha = _required_sha(
+            facts.get("output_hash"), "sample backend_facts.output_hash", 64
+        )
         row.update(
             {
                 "profile_schema_version": WAVE_CALIBRATION_PROFILE,
@@ -2870,6 +2927,8 @@ def _calibration_row(
                 "score_id": contract["cost_model_id"],
                 "primary_quantity": WAVE_PRIMARY_QUANTITY,
                 "round_id": round_id,
+                "experiment_output_sha256": experiment_output_sha,
+                "runtime_facts_output_sha256": runtime_facts_output_sha,
             }
         )
     for field in (

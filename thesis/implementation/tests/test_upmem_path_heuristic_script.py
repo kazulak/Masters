@@ -8,8 +8,11 @@ from pathlib import Path
 import sys
 from typing import Any
 
+import numpy as np
 import pytest
 import yaml
+from quantum_bench import experiment
+from quantum_bench.upmem import runtime
 
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "upmem_path_heuristic.py"
@@ -27,6 +30,22 @@ def _wave_config() -> dict[str, object]:
     config["score_id"] = script.WAVE_COST_MODEL_ID
     config["topologies"] = [config["topologies"][0]]
     return config
+
+
+_FIXTURE_OUTPUT_ARRAY = np.array([0.0, 1.0, 2.0, 3.0], dtype=np.float32)
+
+
+def _fixture_experiment_output_sha256() -> str:
+    return experiment._output_hash(_FIXTURE_OUTPUT_ARRAY)
+
+
+def _fixture_runtime_facts_output_sha256() -> str:
+    # Same array, different subsystem hash domains: inequality is intentional.
+    return runtime._array_hash(_FIXTURE_OUTPUT_ARRAY)
+
+
+def test_fixture_hash_domains_are_distinct_for_the_same_array() -> None:
+    assert _fixture_experiment_output_sha256() != _fixture_runtime_facts_output_sha256()
 
 
 def test_execution_contract_is_explicit_and_legacy_inputs_are_not_migrated() -> None:
@@ -856,7 +875,7 @@ def _calibration_fixture(
             "order_index": block,
             "session_instance_id": session_id,
             "observed_affinity": [0],
-            "output_sha256": "3" * 64,
+            "output_sha256": _fixture_experiment_output_sha256(),
             "identities": {
                 "problem_id": problem,
                 "tensor_network_structure_id": tensor_structure,
@@ -1038,7 +1057,7 @@ def _wave_calibration_fixture(
             **sample["backend_facts"],
             "logical_plan_id": candidate["logical_plan_id"],
             "physical_plan_id": topology["physical_plan_id"],
-            "output_hash": sample["output_sha256"],
+            "output_hash": _fixture_runtime_facts_output_sha256(),
             "request_transport": "packed_wave_v1",
             "schedule_policy": "static_dag_waves_v1",
             "complex_launch_policy": script.WAVE_COMPLEX_LAUNCH_POLICY,
@@ -1246,7 +1265,7 @@ def test_extract_calibration_emits_raw_rows_and_separates_source_commits(
     assert table[0]["timing_scope"] == "steady_execution_v1"
     assert table[0]["fallback"] == "false"
     assert table[0]["request_transport"] == "packed_operation_v1"
-    assert table[0]["output_sha256"] == "3" * 64
+    assert table[0]["output_sha256"] == _fixture_experiment_output_sha256()
     emitted = json.loads((output_dir / "path_runtime_calibration.json").read_text(encoding="utf-8"))
     assert emitted["observations"][0]["sample_id"] == "sample-0"
     assert emitted["observations"][0]["session_instance_id"] == "session-0"
@@ -1295,11 +1314,28 @@ def test_extract_wave_calibration_emits_private_profile_binding(
     assert json.loads(table[0]["execution_contract_json"]) == script.WAVE_EXECUTION_CONTRACT
     assert table[0]["primary_quantity"] == "session_inclusive_s"
     assert table[0]["round_id"] == result["round_id"]
+    assert (
+        table[0]["experiment_output_sha256"]
+        == _fixture_experiment_output_sha256()
+    )
+    assert (
+        table[0]["runtime_facts_output_sha256"]
+        == _fixture_runtime_facts_output_sha256()
+    )
+    assert table[0]["experiment_output_sha256"] != table[0][
+        "runtime_facts_output_sha256"
+    ]
     emitted = json.loads(
         (output_dir / "path_runtime_calibration.json").read_text(encoding="utf-8")
     )
     assert emitted["observations"][0]["execution_contract_json"] == table[0][
         "execution_contract_json"
+    ]
+    assert emitted["observations"][0]["experiment_output_sha256"] == table[0][
+        "experiment_output_sha256"
+    ]
+    assert emitted["observations"][0]["runtime_facts_output_sha256"] == table[0][
+        "runtime_facts_output_sha256"
     ]
 
 
@@ -1405,6 +1441,8 @@ def test_extract_wave_calibration_rejects_archived_stage_drift(
         ("binary", "deployment manifest"),
         ("duplicate_session", "fresh session"),
         ("source", "physical execution source"),
+        ("experiment_output_hash", "sample output_sha256"),
+        ("runtime_output_hash", "backend_facts.output_hash"),
     ],
 )
 def test_extract_wave_calibration_rejects_corrupt_contracts(
@@ -1425,6 +1463,10 @@ def test_extract_wave_calibration_rejects_corrupt_contracts(
         sessions[0]["terminal_backend_facts"]["dpu_binary_sha256"] = "f" * 64
     elif corruption == "duplicate_session":
         samples[1]["session_instance_id"] = samples[0]["session_instance_id"]
+    elif corruption == "experiment_output_hash":
+        samples[0]["output_sha256"] = "not-a-sha256"
+    elif corruption == "runtime_output_hash":
+        samples[0]["backend_facts"]["output_hash"] = "not-a-sha256"
     else:
         manifest = deepcopy(manifest)
         manifest["source_commit"] = "1" * 40
@@ -1527,6 +1569,117 @@ def _refresh_wave_calibration_archive(
             line = f"{script._file_sha256(sidecar_path)}  physical.yml.provenance.json"
         checksum_lines.append(line)
     checksum_path.write_text("\n".join(checksum_lines) + "\n", encoding="ascii")
+
+
+def _wave_null_logical_plan_fixture(
+    tmp_path: Path,
+    monkeypatch,
+    *,
+    malformed: str | None = None,
+    selected_infeasible: bool = False,
+) -> tuple[Path, Path, Path, dict, tuple[dict, ...], tuple[dict, ...]]:
+    raw_dir, candidate_path, calibration_path, manifest, samples, sessions = (
+        _wave_calibration_fixture(tmp_path)
+    )
+    dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
+    calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+    if selected_infeasible:
+        candidate = dataset["circuits"][0]["candidates"][0]
+        candidate["is_greedy"] = False
+        candidate["logical_plan_id"] = None
+        topology = candidate["topologies"][0]
+        topology.update(
+            {
+                "feasible": False,
+                "infeasibility_reason": "selected_candidate_is_infeasible",
+                "physical_plan_id": None,
+                "resource_admission": None,
+                "memory_admission": None,
+                "features": {},
+                "wave_facts": None,
+            }
+        )
+    else:
+        config = _wave_config()
+        item = {
+            "candidate_path_id": "9" * 64,
+            "path": ((0, 1),),
+            "source_kind": "cotengra_one_trial",
+            "source_seed": 20260999,
+            "planner_config_hash": "8" * 64,
+            "is_greedy": False,
+        }
+        record, _rows, candidate = script._infeasible_candidate_record(
+            circuit_id="fixture",
+            split="training",
+            item=item,
+            config=config,
+            reason="estimated_work_unit_count_exceeds_preregistered_bound",
+        )
+        assert candidate is None
+        if malformed == "missing_reason":
+            record["topologies"][0]["infeasibility_reason"] = ""
+        elif malformed == "feasible":
+            record["topologies"][0]["feasible"] = True
+        dataset["circuits"][0]["candidates"].append(record)
+
+    candidate_set_sha = script._sha256_bytes(script._canonical_bytes(dataset))
+    calibration["candidate_set_sha256"] = candidate_set_sha
+    candidate_path.write_bytes(script._canonical_bytes(dataset))
+    calibration_path.write_bytes(script._canonical_bytes(calibration))
+    _refresh_wave_calibration_archive(raw_dir, calibration_path, candidate_set_sha)
+    monkeypatch.setattr(script, "load_artifacts", lambda path: (manifest, samples, sessions))
+    return raw_dir, candidate_path, calibration_path, manifest, samples, sessions
+
+
+def test_extract_wave_calibration_accepts_unselected_null_logical_plan_record(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw_dir, candidate_path, calibration_path, _manifest, samples, _sessions = (
+        _wave_null_logical_plan_fixture(tmp_path, monkeypatch)
+    )
+    result = script.extract_calibration(
+        raw_dir, candidate_path, calibration_path, tmp_path / "out"
+    )
+
+    assert result["sample_count"] == len(samples) == 4
+    assert result["candidate_set_sha256"] == script._file_sha256(candidate_path)
+    assert {row["candidate_path_id"] for row in result["observations"]} != {"9" * 64}
+
+
+@pytest.mark.parametrize(
+    "malformed,match",
+    [
+        ("missing_reason", "without an explicit infeasibility reason"),
+        ("feasible", "feasible wave candidate lacks wave facts"),
+    ],
+)
+def test_extract_wave_calibration_rejects_malformed_null_logical_plan_record(
+    tmp_path: Path, monkeypatch, malformed: str, match: str
+) -> None:
+    raw_dir, candidate_path, calibration_path, _manifest, _samples, _sessions = (
+        _wave_null_logical_plan_fixture(
+            tmp_path, monkeypatch, malformed=malformed
+        )
+    )
+    with pytest.raises(ValueError, match=match):
+        script.extract_calibration(
+            raw_dir, candidate_path, calibration_path, tmp_path / "out"
+        )
+
+
+def test_extract_wave_calibration_rejects_selected_infeasible_null_logical_plan(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw_dir, candidate_path, calibration_path, _manifest, _samples, _sessions = (
+        _wave_null_logical_plan_fixture(
+            tmp_path, monkeypatch, selected_infeasible=True
+        )
+    )
+    with pytest.raises(ValueError, match="calibration candidate is infeasible"):
+        script.extract_calibration(
+            raw_dir, candidate_path, calibration_path, tmp_path / "out"
+        )
 
 
 def _wave_fixed_pool_fixture(
