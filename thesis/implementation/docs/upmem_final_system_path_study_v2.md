@@ -1,5 +1,17 @@
 # UPMEM Final System Path Study v2
 
+## Superseded Final-Workload Role
+
+The user reclassified this six-instance allocation as development-only on
+2026-09-08. Its archived candidate pools, source identities and 92 physical
+development attempts remain unchanged. No weights were fitted. The final
+benchmark must cover all six PIMutation families; see
+[the workload reconciliation](upmem_pimutation_workload_reconciliation_v1.md).
+The historical preparation status and intended split labels below are not a
+current final-workload freeze or authorization to resume fitting or hardware.
+
+## Historical Preparation Record
+
 Status: `draft_not_frozen`.
 
 This is a bounded preregistration and exposure decision for the final path study. Host-only preparation and admission checks are recorded below; no P6 SDK or physical execution has occurred. The draft remains non-final until lead review, exact source/profile qualification, candidate and physical-plan hashes, and the pretest freeze are recorded.
