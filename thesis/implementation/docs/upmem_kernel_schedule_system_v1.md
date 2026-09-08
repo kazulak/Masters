@@ -104,9 +104,9 @@ competing-process, identity and environment admission is still mandatory.
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
 | P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
 | P2 kernels | Fusion physically confirmed; K1 correctness passed but the fixed-path A/B rejected adoption at `3056090` | Preserve K1 negative evidence; retain panel geometry and admitted fusion for later composition |
-| P3 DAG waves | Seven-session physical correctness independently audited; 72-attempt fixed-resource A/B raw accepted after offline verifier correction and timing gates passed | Fresh 12-attempt confirmation pending; no production adoption |
-| P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; no physical locality decision | Bounded exact slice and local segment decision, qualified or explicit no-go |
-| P5 composition | Software accounting and composition qualification in progress | Joint qualification and frozen executor/source/binaries/policies/features |
+| P3 DAG waves | Seven-session physical correctness independently audited; 72-attempt fixed-resource A/B raw accepted after offline verifier correction; separate 12-attempt Stress16 D4/T8 development confirmation now accepted | Use the confirmation for later composition only; no global production adoption |
+| P4 resident/slice | Test-only resident pair and exact slice concurrency have SDK correctness coverage; next bounded exploratory proposal is 44+48 and is not frozen; resident measurement path is missing | Freeze the bounded proposal, add only the minimal resident measurement integration, then qualify or record no-go |
+| P5 composition | Composition admission and schedule-aware cost extraction remain open | Joint qualification and frozen executor/source/binaries/policies/features |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
 
@@ -1305,8 +1305,9 @@ The independent correction audit passed for offline correction adoption, and
 `analysis-v1/independent_analysis_audit.json` records GO for timing interpretation:
 complete analysis/decision reproduction, 168 median/MAD checks and consistent
 summary/CSV timing fields. These results do not authorize production adoption.
-The fresh **12-attempt confirmation remains pending**; no thresholds or timing
-targets were retuned.
+At the time of this historical draft, the fresh **12-attempt confirmation was
+pending**; its later, separate result is recorded below. No historical A/B
+thresholds or timing targets were retuned.
 
 Evidence root:
 `runs/eth/safari-baguette1/30560900354b523b2a3a44971f81860a04888640/dag-ab-v1/`.
@@ -1333,7 +1334,63 @@ Focused confirmation preparation passed 55 verifier/analysis tests and ten
 preparation tests. The actual prepared records pass the unmocked preparation
 validator. CPU references are explicitly reused from hash-verified, unchanged
 DAG/numeric/physical-plan records; no new CPU replay, SDK execution or physical
-attempt is claimed. Controller qualification and independent review remain open.
+attempt is claimed. At that preparation checkpoint, controller qualification
+and independent review remained open; the actual acceptance, analysis, audit
+and retention closure is recorded below.
+
+### DAG Confirmation Closure: Separate 12-Attempt Development Result
+
+The separate RAW confirmation completed at execution source
+`30560900354b523b2a3a44971f81860a04888640` for the post-A/B selected
+Stress16 `quantization_stress_16q_l2` sentinel at D4/T8, using the serial and
+DAG routes. It contains **12 successful, accuracy-qualified, released
+sessions**: 2 warmups and 10 measured observations, with zero failed,
+unsupported or fallback observations, retries or replacements. Cumulative
+milestone attempts are **268**. The run is one recorded physical run; retrieval
+and audit created no new execution and raw observations were not modified.
+
+Warmups are excluded from the summaries. The primary metric is
+session-inclusive time (session open + steady + close per observation before
+arm medians); ratios are serial median / DAG median, so values above one favor
+DAG.
+
+| Metric | Serial median (s) | DAG median (s) | Ratio |
+| --- | ---: | ---: | ---: |
+| Session-inclusive | 2.367904067 | 1.653880376 | 1.431726322 |
+| Steady | 1.996177945 | 1.199680734 | 1.663924318 |
+| Kernel | 0.362022523 | 0.400041616 | 0.904962155 |
+
+The inclusive result is **1.4317263**, paired bootstrap 95% CI
+**[1.3620203, 1.4483858]**, a **30.154249%** reduction, and passes the
+development analysis gates. Kernel-only ratio **0.9049622** means the DAG
+kernel median is approximately 10.50% longer; it is diagnostic, not a stable
+kernel-level improvement or the inclusive acceptance gate.
+
+The result is a **post-A/B selected development sentinel**, not held-out
+evidence and not pooled with the prior completed 72-attempt raw A/B. The prior
+raw A/B remains a separate dataset. The raw acceptance is correctness,
+provenance and two-copy acceptance only; the derived analysis records
+`confirmation_pass`, and the bounded audit records pass with no blocking
+findings. The audit is not independent of raw retrieval, so this closure does
+not claim independent retrieval.
+
+The execution source is `30560900354b523b2a3a44971f81860a04888640`; the
+analysis source is `203437e88f5d8a192bd8b1f1e232f8fcb8c8f699`; and the
+qualified reporting source is `879249f52902b861099daaf14161a12ade6148a4`.
+The retained raw archive `kernel-schedule-dag-confirmation-3056090-v1.tar.gz`
+has SHA-256
+`00faa30b7b09706a900c3e638863acef0c600eeadca14de578bfda52bbf08db6`.
+The retained derived archive `dag-confirmation-analysis-3056090-v1.tar.gz`
+has SHA-256
+`1147d1097eda649ecaa580970eb7de084f058fed61ad5d671b7887952b1d5838`.
+Both retention records report local and remote verification with no raw
+observation modification.
+
+This closes the P3 confirmation gate for later composition only; it does not
+establish global production adoption. P4 remains a bounded exploratory
+proposal of **44+48**, not frozen, and its minimal resident measurement path
+is still missing. P5 composition, schedule-aware cost extraction and the
+remaining frozen-executor/source/policy paths remain open.
 
 ## Qualification and Archival
 
@@ -1369,12 +1426,15 @@ not enabled. Fusion is physically confirmed, and outer dispatch has passed its
 seven-session correctness gate. Static DAG correctness has now passed seven
 physical sessions, both local/remote verifiers and independent post-run review.
 The fixed-resource DAG A/B raw is accepted after offline verifier correction,
-and its frozen timing gates pass. Next: the pending fresh 12-attempt DAG
-confirmation, followed by the budgeted locality decision. Composition admission,
-schedule-aware cost extraction and the remaining physical acceptance gates remain open.
+and its frozen timing gates pass. The separate 12-attempt Stress16 D4/T8
+development confirmation is also accepted for later composition only; it does
+not establish global production adoption. Next is the not-yet-frozen P4
+bounded exploratory proposal (`44+48`), subject to adding the missing minimal
+resident measurement path. P5 composition admission, schedule-aware cost
+extraction and the remaining physical acceptance gates remain open.
 The geometry A/B is now complete with a no-go: do not run its reserved
-confirmation or silently retune the specialization. Complete the separate DAG
-confirmation gate before composing retained mechanisms; no production adoption
-is established by the A/B timing result.
+confirmation or silently retune the specialization. The separate DAG
+confirmation gate is complete; joint composition qualification is still required.
+Neither the A/B results nor this confirmation establish production adoption.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
