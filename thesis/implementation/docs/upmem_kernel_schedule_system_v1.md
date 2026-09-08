@@ -102,11 +102,11 @@ competing-process, identity and environment admission is still mandatory.
 | Phase | Current state | Required exit evidence |
 | --- | --- | --- |
 | P0 reconcile | Seven-session physical correctness accepted at exact `b921b88`; two verified copies | Complete; does not adopt experimental v5 execution |
-| P1 census | Source-only frontier extension implemented; physical weighting pending | Frozen targets, ready-width/critical-path/liveness facts and benchmark cells |
+| P1 census | Frozen geometry/frontier census and kernel/scheduler target selection complete | Cohort timings explain measured costs; no per-node time-weighted attribution is claimed |
 | P2 kernels | Fusion physically confirmed; K1 correctness passed but the fixed-path A/B rejected adoption at `3056090` | Preserve K1 negative evidence; retain panel geometry and admitted fusion for later composition |
 | P3 DAG waves | Seven-session physical correctness independently audited; 72-attempt fixed-resource A/B raw accepted after offline verifier correction; separate 12-attempt Stress16 D4/T8 development confirmation now accepted | Use the confirmation for later composition only; no global production adoption |
 | P4 resident/slice | Physical campaigns complete and independently audited: resident and both Stress16 slice cells NO_GO; fresh EDC14 D4 confirmation PASS; cumulative 324 attempts | Preserve negative results and unused confirmation slots; EDC result is development-only |
-| P5 composition | Composition SDK tests and schedule/kernel-aware features exist; final-policy admission and path-cost integration remain open | After P4 audit closure, jointly qualify and freeze executor/source/binaries/policies/features; no automatic production adoption |
+| P5 composition | Exact `459935f` software/SDK, seven-session correctness, 24-attempt scaling and eight-attempt scalar microablation accepted; retained executor frozen below | Complete; no further P5 hardware planned |
 | P6 paths | Not started | New bounded physical data, offline profile, untouched test and raw evidence |
 | P7 release | Not started | Source lineage, checksummed portable bundle and two verified copies |
 
@@ -1480,7 +1480,8 @@ Six local SDK-simulator checks pass, including exact output/untouched-arena
 comparison with the panel binary for the fixed M=N=K=32/T8 ablation shape,
 odd/tail geometry, signed float32, int8, idle and malformed controls. Simulator
 timing supplies no performance claim. The budgeted eight-attempt physical
-comparison is still pending; no result or adoption is implied by these tests.
+comparison and independent postrun verification are complete, as reported below.
+No result or adoption is implied by the simulator tests alone.
 
 ### Declared Host-Memory Admission
 
@@ -1505,6 +1506,185 @@ the final report must retain this limitation. No allocator or scheduling policy
 was changed to implement the guard.
 
 ## Qualification and Archival
+
+### Accepted P5 Composition and Scaling
+
+Execution source is `459935f586fdd16c82013838e6d27a12604c3093`, on
+`feature/upmem-kernel-schedule-freeze-v1`. Reporting descendants do not replace
+that execution identity. The exact pinned local suite passed 1,773 tests and
+Ruff; hosted CI run `34198320621` completed successfully at the same SHA.
+Target SDK 2023.1.0 qualification passed 463 tests without mandatory skips and
+produced 96 tasklet-specific production binaries across T1-T24. Earlier binaries
+must not be substituted by hash: unchanged native code and stripped-code
+equivalence do not make debug-bearing executable hashes identical.
+
+The retained composition was tested with `packed_wave_v1`,
+`static_dag_waves_v1`, `fused_when_admitted_v1`, and `panel_only_v1` in one rank.
+Its seven-session correctness matrix was Bell2 float32/int8 at D1T1, Stress14
+float32/int8 at D1T8, Stress14 float32 at D4T8, and Stress14 int8 at D3T8/D4T8.
+All seven samples and sessions succeeded with exact policy replay, verified
+resources and release, and no fallback or replacements. The three float32
+attempts passed accuracy qualification. Int8 error remains separately reported;
+the Stress14 int8 relative L2 error was approximately 0.04231, not float32
+accuracy equivalence. This one-shot matrix supports correctness, not timing.
+
+The subsequent Stress16 diagnostic used the same greedy logical plan
+`d489edba75d22a96543ee1960bb4b800922f3240de64b4b60327ebd5eae70e12`
+at six resource routes. All 24 samples/sessions succeeded: one warmup and three
+measurements per route, with fresh sessions, no retries and no replacements.
+CPU 0, powersave, SDK 2023.1.0 and rank1 were recorded. All outputs passed
+float32 accuracy and policy validation; postrun source and release checks passed.
+
+| Route | Kernel median (s) | Steady median (s) | Session-inclusive median (s) |
+| --- | ---: | ---: | ---: |
+| D1T1 | 6.149145 | 6.666362 | 7.104246 |
+| D1T4 | 1.595135 | 2.069949 | 2.510200 |
+| D1T8 | 0.896843 | 1.388148 | 1.834585 |
+| D1T16 | 0.654019 | 1.135046 | 1.589183 |
+| D2T8 | 0.543731 | 0.952835 | 1.390229 |
+| D4T8 | 0.377620 | 0.766677 | 1.199998 |
+
+Session-inclusive time is computed for each joined sample/session as opening
+plus steady execution plus closing, before summarization. The following values
+are geometric means of block-paired ratios, not ratios of unrelated medians.
+
+| Comparison | Kernel speedup | Steady speedup | Session-inclusive speedup |
+| --- | ---: | ---: | ---: |
+| D1T1 to D1T4 | 3.856266 | 3.216612 | 2.823291 |
+| D1T1 to D1T8 | 6.853655 | 4.791684 | 3.882242 |
+| D1T1 to D1T16 | 9.399605 | 5.899151 | 4.501040 |
+| D1T8 to D2T8 | 1.649850 | 1.459075 | 1.318044 |
+| D1T8 to D4T8 | 2.375876 | 1.817839 | 1.530679 |
+
+The analysis retains raw values, MADs, minima/maxima, paired ratios, efficiencies
+and 10,000 shared paired-block bootstrap draws with seed 20260908. With only
+three measured blocks, intervals are descriptive and coarse. This is neither
+final thesis performance nor a universal optimum in tasklet/DPU count.
+Do not multiply these ratios by earlier mechanism-specific speedups.
+
+Request-build fractions are computed per sample before taking medians. SDK H2D
+time is labeled as native transfer time, not Python payload staging. This wave
+route does not emit a distinct payload-staging timer; that quantity is reported
+as unavailable. Steady wall minus kernel is a measured remainder, not a CPU-only
+host-cost measurement. No new production timer was added for this report.
+
+All three raw stages and the scaling analysis have verified local and ETH
+copies, sorted relative internal checksums, portable archives and outer digests:
+
+| Evidence | Archive SHA-256 |
+| --- | --- |
+| P5 target SDK | `435465c6c3adf07da853e1fed8320d944024de65fa1013c5af6a2beb0d4cc7d2` |
+| Seven-session composition | `5ddbb13af5d4f00fe0574ad8a7977947fedcd91899255a3eeeeee5a5ad00108d` |
+| 24-attempt scaling | `dd09a36a2c71df701e4be9e43fac8b382bd713f3b82b496e4bd3cf572b7b0b34` |
+| Corrected scaling analysis | `83cd55a1b7b063cff9035e69dcf7c4f9e921d927da085a64567a64888b1af104` |
+
+Local roots are under `runs/eth/safari-baguette1/` followed by the full source
+SHA and `composition-sdk-v1/`, `composition-correctness-v1/`, or
+`composition-scaling-v1/`.
+
+### Accepted Scalar Microablation
+
+The fixed float32 M=N=K=32, D1T8 comparison completed exactly eight fresh
+sessions: one warmup and three measurements for each of the scalar-MRAM test
+binary and production WRAM-panel binary. Only the two arm positions were
+shuffled within each complete block. Both arms used the same wave body,
+one fused four-product launch, transport, host controller and initialization
+binary. Their DPU binary and algorithm identities remain explicitly distinct.
+
+All original request and response binaries were retained. Independent audit
+verified schedule, identities, common request bodies, response hashes, physical
+target and release. A separate host-only verifier decoded every response and
+recomputed the exact four-product oracle and canonical complex output. All eight
+passed. The verifier's seven focused tests and Ruff passed. No public sample
+records or `steady_execution_v1` measurements were synthesized for this private
+microablation.
+
+| Quantity | Scalar median (s) | Panel median (s) | Paired scalar/panel geometric ratio |
+| --- | ---: | ---: | ---: |
+| Kernel | 0.140978 | 0.122135 | 1.1539 |
+| Native request route | 0.143970 | 0.125139 | 1.1510 |
+| Client request | 0.147758 | 0.128083 | 1.1540 |
+| Session-inclusive microattempt | 0.195281 | 0.187146 | 1.0452 |
+
+Inclusive time is opening plus client request plus closing for each sample,
+before pairing. Panel opening was slower in this sample, so kernel savings did
+not fully propagate to session-inclusive savings. Statistical summaries and
+seeded three-block bootstrap intervals are explicitly post hoc exploratory.
+This single geometry does not establish a full-circuit naive-versus-WRAM
+speedup or motivate another tuning campaign. The scalar binary remains test-only.
+
+Raw archive SHA-256:
+`c33ba35ae1177e8eed5e0dc3b586ac9e387617cea174de93428330091d416ec8`.
+Analysis archive SHA-256:
+`bb1e544e18bea62964ff4f695770d76794fea445895dde5677fc6f6998817717`.
+Both have two verified copies; the raw archive contains 60 regular files with
+59 internal checksums, and the analysis archive has five checksummed files.
+Local evidence is under the exact source root's `scalar-microablation-v1/`.
+Remote evidence remains under `/home/tkazulak/evidence/`. Rank1 was released
+and the remote source remained exact and clean. Cumulative physical attempts
+are 363; no failed, skipped, retried or replacement scalar attempts occurred.
+
+### Execution System Freeze
+
+The accepted execution freeze targets source
+`459935f586fdd16c82013838e6d27a12604c3093`, not a new runtime implementation.
+These are explicit study settings; no claim is made that existing API defaults
+or every experimental option have changed:
+
+| Boundary | Retained rule |
+| --- | --- |
+| Transport | `packed_wave_v1`, one existing persistent native controller |
+| Scheduling | `static_dag_waves_v1`; dependency-ready nodes, disjoint DPU groups, synchronous cohort completion and explicit host reductions |
+| Complex execution | `fused_when_admitted_v1`, separate RR/II/RI/IR products, established deterministic reconstruction |
+| Geometry | `panel_only_v1`; outer-K1 performance adoption rejected |
+| Memory | Host-roundtrip intermediates; default 512 MiB declared host-buffer budget, zero reserve; not total RSS |
+| Resources | One rank; T1-T24 build qualification, physically tested composition/scaling routes only claimed as measured |
+| Numerical policy | `split_complex_float32_v1` primary; shared-scale int8 correctness/error reported separately |
+| Path cost | `upmem_slr_wave_cost_v1`; old serial profiles are not silently migrated |
+| Locality extensions | No resident production path; slicing only as explicitly declared qualified transformations, not automatic family-based selection |
+
+The exact scheduler sorts ready contractions by descending remaining
+critical-path work with node-ID tie-breaking, takes at most the DPU count, and
+assigns disjoint groups with the existing deterministic allocation rule. Host
+reductions complete before dependent contractions become ready. Large nodes
+retain intra-contraction tasklet and tile parallelism. No asynchronous overlap,
+multi-rank execution, CPU placement or automatic backend selection is introduced.
+
+Wave cost extraction uses actual scheduled controls. Host transfer bytes are
+aggregate H2D+D2H. Compute and estimated MRAM-WRAM traffic are sums of per-wave
+slot maxima; synchronization exposes cohort, launch, host-reduction and
+wave-critical barrier counts. E_num/P_wram are inactive score terms, and memory
+admission is a hard gate. Independently maximizing different terms may
+overestimate one common critical DPU's work; these are heuristic features, not
+absolute runtime predictions. Aggregate work is not penalized a second time.
+
+Key source-file SHA-256 bindings at the execution source:
+
+| File | SHA-256 |
+| --- | --- |
+| `upmem/path_heuristic.py` | `762c229630de9ee81a94a6784bfa77a43179f0894a4fdb41229333aded10a51f` |
+| `upmem/execution_features.py` | `f725a8b0e13f549b0ca0250e284021a8428222143da9bf24ded1fece4628868e` |
+| `upmem/runtime.py` | `b7168cd09f007978622346fd9954bdda54beb9ce48d870e4df8d158ed8681c02` |
+
+The target SDK archive binds the full 96-binary manifest, SHA-256
+`0a8ccc3f10c06b57a1f711b1c96794508c9ab1599081dc0bc8992e417b47308c`,
+and environment record, SHA-256
+`efa775f10ac848862076e5868ac22b2b3cbb38b6760bc087155e4674eb679013`.
+Its recorded packages are NumPy 2.2.6, opt_einsum 3.4.0, cotengra 0.7.5,
+Quimb 1.11.2 and pytest 9.0.3, with SDK 2023.1.0. Exact host/DPU/init binaries,
+layouts, completion formats and numerical rules remain bound to that source.
+
+Independent consolidation review found no remaining runtime or hardware blocker.
+P1 target selection is complete; its geometry/frontier census and later cohort
+timings do not establish per-node time-weighted kernel attribution. That
+limitation is retained without allocating overlapping cohort time to nodes.
+The semantic execution tag is `thesis-upmem-kernel-schedule-system-v1`, targeting
+the exact execution source rather than this reporting descendant.
+
+P6 must explicitly adapt the existing path-study CLI to the frozen wave model
+and policy; the presence of a qualified extraction function alone is not a
+claim that the old serial CLI already executes this system. No path training,
+new candidate timing, final test or final-study release is implied by this record.
 
 Changed executable checkpoints need full pinned pytest/Ruff/diff checks,
 exact-head CI, T1-T24 builds, strict SDK correctness and independent audit.
@@ -1541,14 +1721,14 @@ The fixed-resource DAG A/B raw is accepted after offline verifier correction,
 and its frozen timing gates pass. The separate 12-attempt Stress16 D4/T8
 development confirmation is also accepted for later composition only; it does
 not establish global production adoption. P4 physical collection is complete as
-recorded above; final EDC confirmation postrun audit passed. Next is P5:
-reuse existing composition SDK tests and `execution_features.py`, close final-policy
-and host-memory admission, and adapt the existing path-cost pipeline to the frozen
-schedule/kernel policy. Do not repeat rejected resident/Stress confirmations or
-reallocate their unused slots. Joint composition qualification remains open.
+recorded above; final EDC confirmation postrun audit passed. P5 software, SDK,
+composition correctness and scaling are now accepted at exact `459935f`.
+The retained executor is frozen. Next adapt the path-study pipeline to its
+schedule/kernel policy. Do not repeat rejected resident/Stress confirmations or reallocate their
+unused slots. No additional P5 physical collection is planned.
 The geometry A/B is now complete with a no-go: do not run its reserved
 confirmation or silently retune the specialization. The separate DAG
-confirmation gate is complete; joint composition qualification is still required.
+confirmation gate and execution-system freeze are complete.
 Neither the A/B results nor this confirmation establish production adoption.
 SDK concurrency does not establish physical speedup. No final path fitting starts
 before the retained executor and its schedule-aware feature extraction freeze.
