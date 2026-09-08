@@ -3,13 +3,16 @@
 import hashlib
 import json
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
+import pytest
 
 from quantum_bench import cpu
 from quantum_bench.circuits import builtin_circuit
 from quantum_bench.lowering import build_contraction_dag, lower_tensor_network
 from quantum_bench.model import make_simulation_job
+from quantum_bench.numerics import decode_complex_products
 from quantum_bench.upmem.locality_probe import resident_pair_probe_layout
 from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
 from tests import test_upmem_resident_kernel_simulator as probe
@@ -18,7 +21,8 @@ from tests import test_upmem_resident_kernel_simulator as probe
 resident_sdk = probe.sdk
 
 
-def test_selected_stress_pair_preserves_complete_statevector(resident_sdk, monkeypatch):
+def selected_case():
+    """CPU oracle for the retained pair, shared with the test-only measurement client."""
     pool = Path(__file__).resolve().parents[1] / "thesis_results/upmem_path_heuristic_generalization_v1/software/candidate_paths.json"
     data = pool.read_bytes()
     assert hashlib.sha256(data).hexdigest() == "d95150ddf89f6aafa861000b0db2d8447d64456a035c5404463a878c3a319049"
@@ -51,9 +55,8 @@ def test_selected_stress_pair_preserves_complete_statevector(resident_sdk, monke
             }
         return lanes
 
-    monkeypatch.setattr(cpu, "_replay_tile_lanes", observe)
-    expected = cpu.replay_upmem_plan_once(dag, plan, inputs)
-    monkeypatch.setattr(cpu, "_replay_tile_lanes", original)
+    with patch.object(cpu, "_replay_tile_lanes", observe):
+        expected = cpu.replay_upmem_plan_once(dag, plan, inputs)
     assert set(captured) == set(names)
     info = probe.make_plan(admitted["first_geometry"], admitted["second_geometry"], "right", 1, 8)
     assert info["retained"] == admitted["retained_planes"]
@@ -69,7 +72,19 @@ def test_selected_stress_pair_preserves_complete_statevector(resident_sdk, monke
     resident_values = captured[names[1]]["inputs"][2:]
     host_patch = b"".join(array.tobytes() + probe.GUARD * (span[1] - array.nbytes)
                           for span, array in zip(info["retained"], resident_values))
-    item = {"info": info}
+    item = {"info": info, "initial": bytes(arena),
+            "first_products": captured[names[0]]["products"],
+            "second_products": captured[names[1]]["products"],
+            "host_patch": (info["retained"][0][0], len(host_patch), host_patch)}
+    return item, (dag, plan, inputs, expected, captured, names)
+
+
+def test_selected_stress_pair_preserves_complete_statevector(resident_sdk, monkeypatch):
+    item, (dag, plan, inputs, expected, captured, names) = selected_case()
+    info, arena = item["info"], item["initial"]
+    host_patch = item["host_patch"][2]
+    resident_values = captured[names[1]]["inputs"][2:]
+    original = cpu._replay_tile_lanes
     first = probe.request(1, item, 0, bytes(arena))
     baseline = probe.run(resident_sdk, 8, (first, probe.request(2, item, info["retained"][0][0], host_patch)))
     resident = probe.run(resident_sdk, 8, (first, probe.request(3, item, 0, b"")))
@@ -101,3 +116,30 @@ def test_selected_stress_pair_preserves_complete_statevector(resident_sdk, monke
     assert reconstructed.output.size == 65536
     np.testing.assert_array_equal(reconstructed.output, expected.output)
     np.testing.assert_allclose(reconstructed.output, cpu.run_complex128_reference(dag, inputs), atol=2e-6, rtol=2e-6)
+
+
+@pytest.mark.parametrize("arm,h2d,d2h,h2d_calls,d2h_calls", [
+    ("resident", 93832, 65680, 5, 3),
+    ("host_roundtrip", 102024, 82064, 6, 4),
+])
+def test_selected_measurement_sdk_matches_cpu_oracle(resident_sdk, arm, h2d, d2h, h2d_calls, d2h_calls):
+    from tests.upmem_resident_probe_client import measure_selected
+
+    item, _ = selected_case()
+    products = item["second_products"]
+    raw = b"".join(value.astype("<f4").tobytes() for value in products)
+    value = decode_complex_products(
+        tuple(np.add(np.float32(0.0), lane, dtype=np.float32) for lane in products),
+        1.0, 1.0, "split_complex_float32_v1")
+    host, binaries = resident_sdk
+    record = measure_selected(host, binaries[8], arm)
+    assert record["physical"] is False and record["timing_source"] == "simulator_diagnostic_only"
+    assert record["status"] == 0 and record["release_verified"] == 1 and not record["fallback"]
+    assert (record["dpus"], record["ranks"], record["tasklets"], record["launches"]) == (1, 1, 8, 2)
+    assert (record["h2d_bytes"], record["d2h_bytes"], record["h2d_calls"], record["d2h_calls"]) == (
+        h2d, d2h, h2d_calls, d2h_calls)
+    assert record["consumer_products_sha256"] == hashlib.sha256(raw).hexdigest()
+    assert record["consumer_complex64_sha256"] == hashlib.sha256(value.tobytes()).hexdigest()
+    assert record["initial_live_sha256"] == hashlib.sha256(item["initial"][:93184]).hexdigest()
+    assert record["host_sha256"] == hashlib.sha256(host.read_bytes()).hexdigest()
+    assert record["dpu_sha256"] == hashlib.sha256(binaries[8].read_bytes()).hexdigest()
