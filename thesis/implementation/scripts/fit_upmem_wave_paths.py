@@ -105,6 +105,23 @@ def _check_fallback(value: object) -> None:
         raise ValueError("measured row explicitly reports fallback")
 
 
+def _check_resource_admission(row: Mapping[str, object]) -> None:
+    """Require hard execution gates while retaining collection diagnostics."""
+    for field in (
+        "collection_resource_admission_passed",
+        "execution_resource_admission_passed",
+        "startup_resource_admission_passed",
+    ):
+        if type(row.get(field)) is not bool:
+            raise ValueError(f"{field} must be a boolean")
+    for field in (
+        "execution_resource_admission_passed",
+        "startup_resource_admission_passed",
+    ):
+        if row[field] is not True:
+            raise ValueError(f"{field} must be exactly True")
+
+
 def _raw(value: object) -> RawFeatureVector:
     if isinstance(value, RawFeatureVector):
         return value
@@ -158,6 +175,7 @@ def _row_key(row: Mapping[str, object] | Sequence[object], split: str) -> _RowKe
 
 def _checked_row(row: Mapping[str, object], split: str) -> _CheckedRow:
     _check_split(row, split)
+    _check_resource_admission(row)
     for field in ("scope_id", "timing_scope"):
         if field in row and row[field] not in (None, "steady_execution_v1"):
             raise ValueError("wave fitting requires scope_id steady_execution_v1")

@@ -9,7 +9,6 @@ import sys
 
 import pytest
 
-
 ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location(
     "wave_pipeline_qualifier", ROOT / "scripts" / "qualify_upmem_path_candidates.py"
@@ -144,12 +143,47 @@ def test_real_wave_candidate_generation_to_cpu_and_execution_packet(tmp_path, mo
         assert "stage_id" not in packet
 
 
-def test_tiny_bell_is_rejected_without_relaxing_study_admission():
+def test_tiny_bell_is_rejected_for_planned_execution_coverage():
     config = generator.load_config(ROOT / "configs" / "upmem_final_system_path_study_v2.json")
     config["circuits"] = [{
         "circuit_id": "bell_pipeline_fixture", "split": "training",
         "circuit": {"kind": "builtin", "name": "bell_2q", "parameters": {}},
     }]
     config["candidate_generation"]["one_trial_searches"] = 1
+    definition = config["circuits"][0]["circuit"]
+    circuit = generator.builtin_circuit(definition["name"], definition["parameters"])
+    network, _inputs = generator.lower_tensor_network(
+        generator.make_simulation_job(circuit)
+    )
+    path, provenance = generator.plan_opt_einsum(network, optimize="greedy")
+    item = {
+        "candidate_path_id": generator.path_id(path, circuit_id="bell_pipeline_fixture"),
+        "path": path,
+        "source_kind": "opt_einsum_greedy",
+        "source_seed": None,
+        "planner_config_hash": provenance["planner_config_hash"],
+        "is_greedy": True,
+    }
+    record, rows, candidate = generator._serialized_candidate_with_admission(
+        circuit_id="bell_pipeline_fixture",
+        split="training",
+        definition=definition,
+        item=item,
+        config=config,
+    )
+
+    topology = next(item for item in record["topologies"] if item["topology_id"] == "4dpu_t8")
+    assert candidate is not None
+    assert topology["feasible"] is False
+    assert "planned_execution_resource_admission_failed:" in topology["infeasibility_reason"]
+    assert topology["wave_facts"] is None
+    assert topology["features"] == {}
+    assert topology["resource_admission"]["collection_resource_admission_passed"] is False
+    assert any(
+        row["topology_id"] == "4dpu_t8"
+        and row["feasible"] is False
+        and "planned_execution_resource_admission_failed:" in row["infeasibility_reason"]
+        for row in rows
+    )
     with pytest.raises(ValueError, match="greedy candidate is infeasible"):
         generator.build_dataset(config)

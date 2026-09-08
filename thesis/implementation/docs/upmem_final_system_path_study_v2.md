@@ -2,7 +2,7 @@
 
 Status: `draft_not_frozen`.
 
-This is a bounded preregistration and exposure decision for the final path study. It does not execute a candidate, contact hardware, use the SDK, generate a candidate set, or make a physical optimization claim. The draft remains non-final until lead review, exact source/profile qualification, candidate and physical-plan hashes, and the pretest freeze are recorded.
+This is a bounded preregistration and exposure decision for the final path study. Host-only preparation and admission checks are recorded below; no P6 SDK or physical execution has occurred. The draft remains non-final until lead review, exact source/profile qualification, candidate and physical-plan hashes, and the pretest freeze are recorded.
 
 ## Governing contract
 
@@ -37,9 +37,60 @@ The test choices use the existing built-in generators with new size parameters. 
 
 No family-held-out claim is made. The holdout unit is the instance. A family-held-out interpretation is allowed only when that family has never influenced development, including candidate or profile decisions.
 
+## Diagnostic admission correction
+
+The first host-only generation attempt at preparation source
+`95c4a70e56c8192ae1b4f4e77ece87e1b6677e61` stopped before writing candidate
+artifacts because the EDC14 greedy path failed tasklet-scaling eligibility at
+four DPUs: its dominant wave had output-row counts `(8, 8, 8, 4)` for T8.
+Declared memory admission passed. This was not an observed numerical failure.
+No P6 physical observations existed, and no candidate pool had been frozen.
+
+The private P6 preparation layer incorrectly treated collection/scaling
+eligibility as execution feasibility even though its collection policy is
+`diagnostic_v1`. The frozen executor distinguishes them: idle tasklets are
+permitted for correctness, and the CLI enforces dominant-wave row/occupancy
+requirements only for `physical_performance_v1`. Filtering those paths would
+remove path-dependent underutilization from the fixed-topology study.
+
+Retain EDC14 and the existing workload, generator, seed, and budget. The bounded
+repair is confined to private preparation, qualification, and analysis code:
+retain collection eligibility and utilization as explicit diagnostic facts,
+including false values, rather than requiring all paths to qualify for scaling
+claims. Missing, malformed, or inconsistent facts are errors. Actual plan,
+memory, allocation, active-resource, binary, execution, replay, and numerical
+checks remain mandatory. The frozen runtime, feature definitions, public
+evidence schemas, and physical-performance admission rules are unchanged.
+Diagnostic results remain ineligible for generic performance claims.
+
+In particular, preparation must predict the frozen execution-resource check:
+the union of non-idle planned DPU slots over all contraction waves must cover
+the requested topology. An underfilled dominant wave is not the same as a DPU
+that never executes any work. Plans failing all-wave coverage are explicitly
+infeasible before collection; qualification recomputes that coverage from the
+selected plan. The tiny Bell four-DPU fixture has only two active slots across
+all waves and remains inadmissible for this reason, not for tasklet occupancy.
+
+Two prospective geometry-only checks (EDC13 and EDC16) also failed four-DPU
+tasklet-scaling eligibility. Neither replaces EDC14. Their diagnostic records
+are retained for traceability, not imported as candidate pools or timing data.
+There will be no further size search to force collection eligibility.
+
+Retained preparation artifacts under `runs/p6-preparation/`:
+
+| Artifact | SHA-256 |
+| --- | --- |
+| `candidate-generation-95c4a70-v1.log` | `d2a36ef94ba2be8f032550e572a57acfdf456f3b58a21de14e51ffcf836e56b7` |
+| `edc14-greedy-admission-diagnostic.json` | `b7d4609dc4369bc55319be248663e8c040ec6eafd450c86a16eb3c32c133c5e9` |
+| `edc13-edc16-greedy-admission-diagnostic.json` | `0b437278d883711c8c5c3fefb3657afe15ae3d840c702f428f4fb521e8d79ca7` |
+
+The corrected preparation source requires new software qualification and new
+artifact hashes before generation is resumed. This does not invalidate any P6
+physical data: none has been collected.
+
 ## Candidate pool and proposal strategy
 
-Candidate generation reuses the existing field pattern and cotengra strategy exactly: `cotengra_method=greedy`, `cotengra_objective=flops`, `master_seed=20260902`, `one_trial_searches=64`, `maximum_planned_work_units=400`, `maximum_semantic_identity_expansion_units=1000000`, `opt_einsum_reference=greedy`, and the existing 60-second physical-lowering admission timeout. No candidate generation is performed by this task.
+Candidate generation reuses the existing field pattern and cotengra strategy exactly: `cotengra_method=greedy`, `cotengra_objective=flops`, `master_seed=20260902`, `one_trial_searches=64`, `maximum_planned_work_units=400`, `maximum_semantic_identity_expansion_units=1000000`, `opt_einsum_reference=greedy`, and the existing 60-second physical-lowering admission timeout. The failed preparation attempt above did not produce a frozen pool.
 
 The candidate pool is finite and fixed before the first timing observation in each training cell: one opt_einsum greedy reference plus 64 cotengra one-trial candidates, followed by feasibility checks and physical-choice deduplication. The initial six-role calibration set is selected without timing. Its diversity role is one feasible candidate farthest from greedy in normalized eligible feature space, with candidate path ID breaking ties. Roles can collapse to the same physical choice; the resulting unused slots stay unused, without an iterative refill to six candidates.
 

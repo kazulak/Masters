@@ -62,6 +62,7 @@ from quantum_bench.upmem.path_heuristic import (
     select_best_candidate,
 )
 from quantum_bench.upmem.plan import (
+    UpmemPlan,
     UpmemTopology,
     collection_resource_admission,
     physical_plan_id,
@@ -454,6 +455,76 @@ def _collection_admission_reasons(admission: Mapping[str, Any]) -> tuple[str, ..
     return tuple(reasons or ("unspecified",))
 
 
+_WAVE_SCALING_BOOLEAN_FIELDS = (
+    "tasklet_row_sufficiency_passed",
+    "dominant_work_wave_tasklet_row_sufficiency_passed",
+    "collection_resource_admission_passed",
+)
+_WAVE_SCALING_INTEGER_FIELDS = (
+    "dominant_work_wave_allocated_dpu_slots",
+    "dominant_work_wave_populated_dpu_slots",
+)
+
+
+def _wave_scaling_admission(
+    admission: Mapping[str, Any],
+    topology: Mapping[str, Any] | UpmemTopology,
+    *,
+    expected: Mapping[str, Any] | None = None,
+    field: str = "wave scaling admission",
+) -> dict[str, Any]:
+    """Validate the plan-derived scaling facts without making them feasibility gates."""
+
+    if isinstance(topology, UpmemTopology):
+        dpu_count = topology.dpu_count
+    else:
+        dpu_count = topology.get("dpu_count")
+        if isinstance(dpu_count, bool) or not isinstance(dpu_count, int):
+            raise ValueError(f"{field} has an invalid topology dpu_count")
+    if dpu_count <= 0:
+        raise ValueError(f"{field} has a non-positive topology dpu_count")
+
+    values: dict[str, Any] = {}
+    for name in _WAVE_SCALING_BOOLEAN_FIELDS:
+        value = admission.get(name)
+        if type(value) is not bool:
+            raise ValueError(f"{field} {name} must be a boolean")
+        values[name] = value
+    for name in _WAVE_SCALING_INTEGER_FIELDS:
+        value = admission.get(name)
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{field} {name} must be a non-negative integer")
+        values[name] = value
+    if values["dominant_work_wave_allocated_dpu_slots"] != dpu_count:
+        raise ValueError(f"{field} allocated DPU slots do not match the topology")
+    if (
+        values["dominant_work_wave_populated_dpu_slots"]
+        > values["dominant_work_wave_allocated_dpu_slots"]
+    ):
+        raise ValueError(f"{field} populated DPU slots exceed allocated slots")
+    if (
+        values["dominant_work_wave_tasklet_row_sufficiency_passed"]
+        != values["tasklet_row_sufficiency_passed"]
+    ):
+        raise ValueError(f"{field} tasklet-row flags are inconsistent")
+    derived_collection = values["tasklet_row_sufficiency_passed"] and (
+        dpu_count == 1
+        or values["dominant_work_wave_populated_dpu_slots"]
+        == values["dominant_work_wave_allocated_dpu_slots"]
+    )
+    if values["collection_resource_admission_passed"] != derived_collection:
+        raise ValueError(f"{field} collection admission is inconsistent with scaling facts")
+
+    if expected is not None:
+        expected_values = _wave_scaling_admission(
+            expected, topology, field=f"{field} expected"
+        )
+        for name in (*_WAVE_SCALING_BOOLEAN_FIELDS, *_WAVE_SCALING_INTEGER_FIELDS):
+            if values[name] != expected_values[name]:
+                raise ValueError(f"{field} {name} does not match candidate plan facts")
+    return values
+
+
 def _estimated_work_unit_count(dag: Any) -> int:
     limits = tile_limits_for_numeric_mode("float32")
     result = 0
@@ -667,6 +738,36 @@ def _validate_wave_facts_context(
         raise TypeError("wave facts must contain a RawFeatureVector")
     if raw.numeric_overhead != 0.0:
         raise ValueError("wave facts must keep E_num inactive")
+
+
+def _require_wave_execution_coverage(plan: UpmemPlan) -> None:
+    """Require every declared one-rank topology slot to have planned work."""
+
+    if not isinstance(plan, UpmemPlan):
+        raise TypeError("wave execution coverage requires the final UpmemPlan")
+    topology = plan.topology
+    expected_ranks = {0}
+    if topology.rank_count != 1:
+        raise ValueError(
+            "planned_execution_resource_admission_failed:"
+            f"expected_one_rank_scope_observed={topology.rank_count}"
+        )
+    expected_slots = {(0, dpu) for dpu in range(topology.dpu_count)}
+    observed_slots = {
+        (unit.logical_rank, unit.logical_dpu)
+        for stage in plan.stages
+        if stage.kind == "contract_batch"
+        for unit in stage.work_units
+    }
+    observed_ranks = {rank for rank, _dpu in observed_slots}
+    if observed_ranks != expected_ranks or observed_slots != expected_slots:
+        raise ValueError(
+            "planned_execution_resource_admission_failed:"
+            f"expected_active_ranks={sorted(expected_ranks)!r},"
+            f"observed_active_ranks={sorted(observed_ranks)!r},"
+            f"expected_active_slots={sorted(expected_slots)!r},"
+            f"observed_active_slots={sorted(observed_slots)!r}"
+        )
 
 
 def _wave_memory_admission(
@@ -1018,6 +1119,7 @@ def _serialize_wave_candidate(
                 schedule_policy=contract["schedule_policy"],
             )
             resource_admission = collection_resource_admission(plan)
+            _require_wave_execution_coverage(plan)
             wave_facts = extract_wave_path_features(
                 dag,
                 plan,
@@ -1028,6 +1130,7 @@ def _serialize_wave_candidate(
             feasible = False
             reason = f"{type(exc).__name__}:{exc}"
         if wave_facts is not None and plan is not None:
+            _wave_scaling_admission(resource_admission, topology)
             _validate_wave_facts_context(wave_facts, contract, topology)
             memory_admission = _wave_memory_admission(wave_facts, config)
             if not memory_admission["passed"]:
@@ -1036,17 +1139,6 @@ def _serialize_wave_candidate(
                     "declared_executor_memory_admission_failed:"
                     f"{memory_admission['required_bytes']}>"
                     f"{memory_admission['configured_budget_bytes']}"
-                )
-            if not resource_admission["collection_resource_admission_passed"]:
-                feasible = False
-                reasons = _collection_admission_reasons(resource_admission)
-                collection_reason = "collection_resource_admission_failed:" + ",".join(
-                    reasons
-                )
-                reason = (
-                    collection_reason
-                    if reason is None
-                    else f"{reason};{collection_reason}"
                 )
 
         physical_id = physical_plan_id(plan) if plan is not None else None
@@ -1902,6 +1994,11 @@ def _validate_dataset_execution_contract(
                     if topology_mapping.get("feasible") is True:
                         raise ValueError("feasible wave candidate lacks wave facts")
                     continue
+                admission = _mapping(
+                    topology_mapping.get("resource_admission"),
+                    "candidate resource admission",
+                )
+                _wave_scaling_admission(admission, topology_value)
                 facts = _wave_facts_from_record(
                     candidate_mapping, str(topology_mapping["topology_id"])
                 )
@@ -2156,7 +2253,15 @@ def _calibration_candidate_index(
                 topology.get("resource_admission"),
                 f"candidate resource admission {cell_id}/{candidate_id}",
             )
-            if admission.get("collection_resource_admission_passed") is not True:
+            if contract is not None:
+                _wave_scaling_admission(
+                    admission,
+                    _mapping(
+                        topology.get("topology"),
+                        f"candidate topology resources {cell_id}/{candidate_id}",
+                    ),
+                )
+            elif admission.get("collection_resource_admission_passed") is not True:
                 raise ValueError(
                     f"calibration candidate lacks resource admission: {cell_id}/{candidate_id}"
                 )
@@ -2415,6 +2520,12 @@ def _joined_backend_facts(
     return joined, terminal
 
 
+def _fact_matches_expected(actual: Any, expected: Any) -> bool:
+    if type(expected) is bool:
+        return type(actual) is bool and actual is expected
+    return actual == expected
+
+
 def _require_backend_contract(
     sample: Mapping[str, Any],
     session: Mapping[str, Any],
@@ -2422,6 +2533,8 @@ def _require_backend_contract(
     topology: Mapping[str, Any],
     contract: Mapping[str, Any] | None = None,
     binary_bindings: Mapping[str, Mapping[str, str]] | None = None,
+    *,
+    claim_policy: str | None = None,
 ) -> None:
     if session.get("status") != "success":
         raise ValueError("calibration contains a non-success session")
@@ -2443,19 +2556,19 @@ def _require_backend_contract(
     }
     terminal = _mapping(session.get("terminal_backend_facts"), "terminal backend facts")
     for field, value in expected_terminal.items():
-        if terminal.get(field) != value:
+        if not _fact_matches_expected(terminal.get(field), value):
             raise ValueError(f"terminal physical fact {field} is not qualified")
     expected_topology = _mapping(topology.get("topology"), "candidate topology")
     dpu_count = int(expected_topology["dpu_count"])
     rank_count = int(expected_topology["rank_count"])
     tasklets = int(expected_topology["tasklets_per_dpu"])
+    diagnostic_scaling = contract is not None and claim_policy == "diagnostic_v1"
     expected_facts = {
         "target_observed": "physical_hardware",
         "physical_target_verified": True,
         "hardware_kernel_executed": True,
         "simulator_kernel_executed": False,
         "cpu_fallback_used": False,
-        "collection_resource_admission_passed": True,
         "execution_resource_admission_passed": True,
         "startup_resource_admission_passed": True,
         "requested_dpus": dpu_count,
@@ -2469,8 +2582,10 @@ def _require_backend_contract(
             else CALIBRATION_TRANSPORT
         ),
     }
+    if not diagnostic_scaling:
+        expected_facts["collection_resource_admission_passed"] = True
     for field, value in expected_facts.items():
-        if facts.get(field) != value:
+        if not _fact_matches_expected(facts.get(field), value):
             raise ValueError(f"sample physical fact {field} is not qualified")
     for field, value in {
         "requested_dpu_count": dpu_count,
@@ -2497,6 +2612,20 @@ def _require_backend_contract(
     if contract is None:
         return
 
+    candidate_admission = _mapping(
+        topology.get("resource_admission"), "candidate resource admission"
+    )
+    _wave_scaling_admission(candidate_admission, expected_topology)
+    if diagnostic_scaling:
+        _wave_scaling_admission(
+            facts,
+            expected_topology,
+            expected=candidate_admission,
+            field="sample wave scaling admission",
+        )
+    elif candidate_admission.get("collection_resource_admission_passed") is not True:
+        raise ValueError("non-diagnostic wave execution requires collection admission")
+
     if sample.get("failure") is not None or session.get("failure") is not None:
         raise ValueError("wave calibration contains a failure record")
     if session.get("session_protocol_id") != WAVE_SESSION_PROTOCOL:
@@ -2504,7 +2633,7 @@ def _require_backend_contract(
     numeric_facts = _mapping(sample.get("numeric_facts"), "sample numeric facts")
     if numeric_facts.get("numeric_policy") != contract["numeric_policy"]:
         raise ValueError("sample numeric policy does not match wave contract")
-    for field, value in (
+    wave_fact_expectations = [
         ("request_transport", contract["request_transport"]),
         ("schedule_policy", contract["schedule_policy"]),
         ("complex_launch_policy", WAVE_COMPLEX_LAUNCH_POLICY),
@@ -2513,12 +2642,18 @@ def _require_backend_contract(
         ("physical_plan_consumed", True),
         ("test_double_execution", False),
         ("rank_response_timing_scope", "cohort_counters_on_first_node_v1"),
-        ("tasklet_row_sufficiency_passed", True),
-        ("dominant_work_wave_tasklet_row_sufficiency_passed", True),
         ("execution_active_dpu_count", dpu_count),
         ("execution_active_rank_count", 1),
-    ):
-        if facts.get(field) != value:
+    ]
+    if not diagnostic_scaling:
+        wave_fact_expectations.extend(
+            [
+                ("tasklet_row_sufficiency_passed", True),
+                ("dominant_work_wave_tasklet_row_sufficiency_passed", True),
+            ]
+        )
+    for field, value in wave_fact_expectations:
+        if not _fact_matches_expected(facts.get(field), value):
             raise ValueError(f"sample wave fact {field} is not qualified")
     for field in (
         "execution_resource_admission_reasons",
@@ -2554,7 +2689,7 @@ def _require_backend_contract(
         ("dispatch", "bulk_set_synchronous_v1"),
         ("dispatch_mode", "bulk_set_synchronous_v1"),
     ):
-        if terminal.get(field) != value:
+        if not _fact_matches_expected(terminal.get(field), value):
             raise ValueError(f"terminal wave fact {field} is not qualified")
     if terminal.get("physical_profile") != "prepared_wave_v1":
         raise ValueError("terminal physical profile is not prepared_wave_v1")
@@ -2893,6 +3028,7 @@ def extract_calibration(
             expected_item["topology"],
             contract,
             manifest_contract.get("binary_bindings", {}).get(route_id),
+            claim_policy=manifest_contract["collection"]["claim_policy"],
         )
         identities = _mapping(sample.get("identities"), "sample identities")
         circuit = _mapping(expected_item["circuit"], "candidate circuit")
@@ -2994,7 +3130,12 @@ def extract_calibration(
         "sample_count": len(samples),
         "session_count": len(sessions),
         "all_successful_physical_sessions": True,
-        "all_resource_admission_passed": True,
+        "all_resource_admission_passed": all(
+            row["collection_resource_admission_passed"] is True
+            and row["execution_resource_admission_passed"] is True
+            and row["startup_resource_admission_passed"] is True
+            for row in rows
+        ),
         "all_accuracy_qualified": True,
         "fallback_used": False,
         "raw_artifact_sha256": {
@@ -3502,7 +3643,13 @@ def _wave_stage_fit_inputs(
         raise ValueError("wave runtime calibration must use one warmup and three measurements")
     if runtime.get("all_successful_physical_sessions") is not True:
         raise ValueError("wave runtime calibration contains an unsuccessful session")
-    if runtime.get("all_resource_admission_passed") is not True:
+    all_resource_admission = runtime.get("all_resource_admission_passed")
+    if type(all_resource_admission) is not bool:
+        raise ValueError("wave runtime calibration has an invalid resource admission aggregate")
+    if (
+        all_resource_admission is False
+        and runtime.get("claim_policy") != "diagnostic_v1"
+    ):
         raise ValueError("wave runtime calibration contains failed resource admission")
     if runtime.get("all_accuracy_qualified") is not True:
         raise ValueError("wave runtime calibration contains unqualified accuracy")
@@ -3638,6 +3785,34 @@ def _wave_stage_fit_inputs(
         for field, value in expected_row_fields.items():
             if row.get(field) != value:
                 raise ValueError(f"wave runtime observation has a mismatched {field}")
+        for field in (
+            "collection_resource_admission_passed",
+            "execution_resource_admission_passed",
+            "startup_resource_admission_passed",
+        ):
+            if type(row.get(field)) is not bool:
+                raise ValueError(f"wave runtime observation has an invalid {field}")
+        for field in (
+            "execution_resource_admission_passed",
+            "startup_resource_admission_passed",
+        ):
+            if row[field] is not True:
+                raise ValueError(f"wave runtime observation has failed {field}")
+        candidate_admission = _mapping(
+            item["topology"].get("resource_admission"),
+            "wave runtime candidate resource admission",
+        )
+        expected_collection_admission = candidate_admission.get(
+            "collection_resource_admission_passed"
+        )
+        if type(expected_collection_admission) is not bool:
+            raise ValueError(
+                "wave runtime candidate collection admission fact is not boolean"
+            )
+        if row["collection_resource_admission_passed"] is not expected_collection_admission:
+            raise ValueError(
+                "wave runtime collection admission does not match candidate plan facts"
+            )
         contract_json = row.get("execution_contract_json")
         try:
             row_contract = json.loads(contract_json)
@@ -3668,6 +3843,14 @@ def _wave_stage_fit_inputs(
         raise ValueError(
             f"wave runtime observations are not exact (missing={missing}, extra={extra})"
         )
+    observed_all_resource_admission = all(
+        row["collection_resource_admission_passed"] is True
+        and row["execution_resource_admission_passed"] is True
+        and row["startup_resource_admission_passed"] is True
+        for row in observations
+    )
+    if all_resource_admission != observed_all_resource_admission:
+        raise ValueError("wave runtime resource admission aggregate is inconsistent")
 
     cells_for_fit: dict[str, dict[str, Any]] = {}
     for cell_id, cell in sorted(cell_map.items()):
@@ -4760,8 +4943,7 @@ def _wave_evaluation_pool(
         admission = _mapping(
             topology.get("resource_admission"), "wave resource admission"
         )
-        if admission.get("collection_resource_admission_passed") is not True:
-            raise ValueError("wave evaluation candidate lacks passed resource admission")
+        _wave_scaling_admission(admission, topology_spec)
         memory = _mapping(topology.get("memory_admission"), "wave memory admission")
         estimate = memory.get("declared_executor_memory_estimate_bytes")
         budget = memory.get("configured_budget_bytes")
@@ -5405,6 +5587,7 @@ def extract_wave_pretest(
             expected_item["topology"],
             contract,
             manifest_contract["binary_bindings"].get(route_id),
+            claim_policy=manifest_contract["collection"]["claim_policy"],
         )
         validation = _mapping(sample.get("validation"), "wave pretest validation")
         if (
@@ -5525,7 +5708,12 @@ def extract_wave_pretest(
         "sample_count": len(samples),
         "session_count": len(sessions),
         "all_successful_physical_sessions": True,
-        "all_resource_admission_passed": True,
+        "all_resource_admission_passed": all(
+            row["collection_resource_admission_passed"] is True
+            and row["execution_resource_admission_passed"] is True
+            and row["startup_resource_admission_passed"] is True
+            for row in rows
+        ),
         "all_accuracy_qualified": True,
         "all_policy_replays_passed": True,
         "fallback_used": False,

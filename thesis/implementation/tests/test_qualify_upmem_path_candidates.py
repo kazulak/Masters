@@ -196,6 +196,14 @@ def _mark_wave_dataset(dataset: dict[str, object]) -> dict[str, object]:
                     "required_bytes": estimate,
                     "passed": True,
                 }
+                topology["resource_admission"].update(
+                    {
+                        "tasklet_row_sufficiency_passed": True,
+                        "dominant_work_wave_tasklet_row_sufficiency_passed": True,
+                        "dominant_work_wave_allocated_dpu_slots": resources["dpu_count"],
+                        "dominant_work_wave_populated_dpu_slots": resources["dpu_count"],
+                    }
+                )
     return dataset
 
 
@@ -1080,7 +1088,44 @@ def test_prepare_evaluation_rejects_frozen_selection_contract_violations(
         )
 
 
-def test_prepare_evaluation_rejects_candidate_without_resource_admission(
+@pytest.mark.parametrize("bad_value", [None, "false"])
+def test_prepare_wave_evaluation_rejects_missing_or_nonbool_collection_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, bad_value: object
+) -> None:
+    dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(
+        tmp_path, wave=True
+    )
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    admission = dataset["circuits"][0]["candidates"][1]["topologies"][1][
+        "resource_admission"
+    ]
+    if bad_value is None:
+        del admission["collection_resource_admission_passed"]
+    else:
+        admission["collection_resource_admission_passed"] = bad_value
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    selection["fitted_profile_sha256"] = hashlib.sha256(
+        qualify._canonical_bytes(profile)
+    ).hexdigest()
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    with pytest.raises(ValueError, match="resource admission|boolean"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            output_path=tmp_path / "validation.yml",
+            mode="evaluation",
+            profile_path=profile_path,
+            split="validation",
+        )
+
+
+def test_prepare_legacy_evaluation_still_rejects_failed_collection_admission(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     dataset_path, selection_path, profile_path, _, _ = _evaluation_fixture(tmp_path)
@@ -1104,11 +1149,57 @@ def test_prepare_evaluation_rejects_candidate_without_resource_admission(
         qualify.prepare_config(
             dataset_path=dataset_path,
             selection_path=selection_path,
-            output_path=tmp_path / "validation.yml",
+            output_path=tmp_path / "legacy-validation.yml",
             mode="evaluation",
             profile_path=profile_path,
             split="validation",
         )
+
+
+def test_prepare_wave_diagnostic_accepts_failed_collection_admission(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    dataset_path, selection_path, profile_path, greedy, selected = _evaluation_fixture(
+        tmp_path, wave=True
+    )
+    dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
+    candidate = dataset["circuits"][0]["candidates"][1]
+    for topology in candidate["topologies"]:
+        admission = topology["resource_admission"]
+        admission["collection_resource_admission_passed"] = False
+        if topology["topology"]["dpu_count"] == 1:
+            admission["tasklet_row_sufficiency_passed"] = False
+            admission["dominant_work_wave_tasklet_row_sufficiency_passed"] = False
+        else:
+            admission["dominant_work_wave_populated_dpu_slots"] = 3
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    profile = json.loads(profile_path.read_text(encoding="utf-8"))
+    profile["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    profile_path.write_bytes(qualify._canonical_bytes(profile))
+    selection = json.loads(selection_path.read_text(encoding="utf-8"))
+    selection["candidate_set_sha256"] = qualify._candidate_set_sha256(dataset)
+    selection["fitted_profile_sha256"] = hashlib.sha256(
+        qualify._canonical_bytes(profile)
+    ).hexdigest()
+    selection_path.write_bytes(qualify._canonical_bytes(selection))
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, selected: (object(), {}))
+    monkeypatch.setattr(qualify, "_verify_wave_plan", lambda *args: None)
+
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        output_path=tmp_path / "diagnostic.yml",
+        mode="evaluation",
+        profile_path=profile_path,
+        split="validation",
+    )
+
+    assert config["collection"]["claim_policy"] == "diagnostic_v1"
+    assert set(config["plans"]) == {f"path_{greedy}", f"path_{selected}"}
+    assert all(
+        topology["resource_admission"]["collection_resource_admission_passed"] is False
+        for topology in candidate["topologies"]
+    )
 
 
 @pytest.mark.parametrize("prepared_waves", [False, True])
@@ -1259,7 +1350,7 @@ def test_prepare_rejects_invalid_wave_identity_before_writing(tmp_path: Path, de
     assert not output.exists()
 
 
-@pytest.mark.parametrize("dpus", [1, 4])
+@pytest.mark.parametrize("dpus", [1])
 def test_wave_plan_identity_is_recomputed_with_real_lowering(dpus):
     from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
 
@@ -1272,7 +1363,12 @@ def test_wave_plan_identity_is_recomputed_with_real_lowering(dpus):
         dag, numeric_policy=qualify.FLOAT32, topology=UpmemTopology(**resources),
         schedule_policy="static_dag_waves_v1",
     )
-    record = {"topology": resources, "physical_plan_id": physical_plan_id(plan)}
+    record = {
+        "topology": resources,
+        "physical_plan_id": physical_plan_id(plan),
+        "resource_admission": qualify.collection_resource_admission(plan),
+    }
+    assert record["resource_admission"]["collection_resource_admission_passed"] is False
     qualify._verify_wave_plan(dag, record, f"{dpus}dpu_t8")
     record["physical_plan_id"] = "0" * 64
     with pytest.raises(ValueError, match="physical-plan"):
@@ -1280,6 +1376,32 @@ def test_wave_plan_identity_is_recomputed_with_real_lowering(dpus):
     record["topology"] = {**resources, "tasklets_per_dpu": 4}
     with pytest.raises(ValueError, match="topology"):
         qualify._verify_wave_plan(dag, record, f"{dpus}dpu_t8")
+
+
+def test_wave_plan_rejects_identity_correct_forged_bell_4d_for_hard_coverage():
+    from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
+
+    spec = qualify.builtin_circuit("bell_2q", {})
+    network, _ = qualify.lower_tensor_network(qualify.make_simulation_job(spec))
+    path, _ = qualify.plan_opt_einsum(network, optimize="greedy")
+    dag = qualify.build_contraction_dag(network, path)
+    resources = {"dpu_count": 4, "rank_count": 1, "tasklets_per_dpu": 8}
+    plan = plan_upmem(
+        dag, numeric_policy=qualify.FLOAT32, topology=UpmemTopology(**resources),
+        schedule_policy="static_dag_waves_v1",
+    )
+    record = {
+        "feasible": True,
+        "topology": resources,
+        "logical_plan_id": plan.logical_plan_id,
+        "physical_plan_id": physical_plan_id(plan),
+        "resource_admission": qualify.collection_resource_admission(plan),
+    }
+
+    with pytest.raises(
+        ValueError, match="planned_execution_resource_admission_failed"
+    ):
+        qualify._verify_wave_plan(dag, record, "4dpu_t8")
 
 
 def test_prepare_rejects_candidate_infeasible_for_selected_topology(

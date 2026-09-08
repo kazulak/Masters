@@ -66,6 +66,9 @@ def _row(
         "total_wall_s": total,
         "session_close_s": 0.0,
         "split": split,
+        "collection_resource_admission_passed": True,
+        "execution_resource_admission_passed": True,
+        "startup_resource_admission_passed": True,
         **extra,
     }
 
@@ -267,6 +270,79 @@ def test_failure_fallback_and_heldout_split_are_rejected_even_when_rows_are_call
     rows = [_row("g", 10.0, split="validation"), _row("p", 5.0, split="validation")]
     with pytest.raises(ValueError, match="training/development"):
         fit.fit_upmem_wave_paths(cells, rows, _expected(rows), split="training", sample_count=2)
+
+
+def test_collection_admission_false_is_valid_diagnostic_input() -> None:
+    rows = [
+        _row("g", 10.0, collection_resource_admission_passed=False),
+        _row("p", 5.0, collection_resource_admission_passed=False),
+    ]
+    result = fit.fit_upmem_wave_paths(
+        _cells({"g": _raw(100.0), "p": _raw(50.0)}),
+        rows,
+        _expected(rows),
+        sample_count=2,
+    )
+    assert result.selected_path_ids == (("cell", "p"),)
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "collection_resource_admission_passed",
+        "execution_resource_admission_passed",
+        "startup_resource_admission_passed",
+    ),
+)
+def test_missing_resource_admission_flags_are_rejected(field: str) -> None:
+    rows = [_row("g", 10.0), _row("p", 5.0)]
+    del rows[1][field]
+    with pytest.raises(ValueError, match=f"{field} must be a boolean"):
+        fit.fit_upmem_wave_paths(
+            _cells({"g": _raw(100.0), "p": _raw(50.0)}),
+            rows,
+            _expected(rows),
+            sample_count=2,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "collection_resource_admission_passed",
+        "execution_resource_admission_passed",
+        "startup_resource_admission_passed",
+    ),
+)
+def test_nonboolean_resource_admission_flags_are_rejected(field: str) -> None:
+    rows = [_row("g", 10.0), _row("p", 5.0)]
+    rows[1][field] = 1
+    with pytest.raises(ValueError, match=f"{field} must be a boolean"):
+        fit.fit_upmem_wave_paths(
+            _cells({"g": _raw(100.0), "p": _raw(50.0)}),
+            rows,
+            _expected(rows),
+            sample_count=2,
+        )
+
+
+@pytest.mark.parametrize(
+    "field",
+    (
+        "execution_resource_admission_passed",
+        "startup_resource_admission_passed",
+    ),
+)
+def test_failed_hard_resource_admission_flags_are_rejected(field: str) -> None:
+    rows = [_row("g", 10.0), _row("p", 5.0)]
+    rows[1][field] = False
+    with pytest.raises(ValueError, match=f"{field} must be exactly True"):
+        fit.fit_upmem_wave_paths(
+            _cells({"g": _raw(100.0), "p": _raw(50.0)}),
+            rows,
+            _expected(rows),
+            sample_count=2,
+        )
 
 
 def test_unmeasured_candidate_cannot_win_and_missing_greedy_pair_fails() -> None:

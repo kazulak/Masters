@@ -54,7 +54,7 @@ def _write_jsonl(path: Path, values: list[dict[str, Any]]) -> None:
     )
 
 
-def _training_config(tmp_path: Path) -> tuple[Path, Path]:
+def _training_config(tmp_path: Path, *, n_qubits: int = 14) -> tuple[Path, Path]:
     config = deepcopy(generator.load_config(ROOT / "configs" / "upmem_final_system_path_study_v2.json"))
     config["circuits"] = [
         {
@@ -63,7 +63,7 @@ def _training_config(tmp_path: Path) -> tuple[Path, Path]:
             "circuit": {
                 "kind": "builtin",
                 "name": "quantization_stress",
-                "parameters": {"n_qubits": 14, "repeat_layers": 2},
+                "parameters": {"n_qubits": n_qubits, "repeat_layers": 2},
             },
         },
         {
@@ -72,7 +72,7 @@ def _training_config(tmp_path: Path) -> tuple[Path, Path]:
             "circuit": {
                 "kind": "builtin",
                 "name": "quantization_stress",
-                "parameters": {"n_qubits": 14, "repeat_layers": 2},
+                "parameters": {"n_qubits": n_qubits, "repeat_layers": 2},
             },
         },
         {
@@ -81,11 +81,12 @@ def _training_config(tmp_path: Path) -> tuple[Path, Path]:
             "circuit": {
                 "kind": "builtin",
                 "name": "quantization_stress",
-                "parameters": {"n_qubits": 14, "repeat_layers": 2},
+                "parameters": {"n_qubits": n_qubits, "repeat_layers": 2},
             },
         },
     ]
     config["candidate_generation"]["one_trial_searches"] = 1
+    config["candidate_generation"]["maximum_planned_work_units"] = 20_000
     config_path = tmp_path / "generator.json"
     config_path.write_text(json.dumps(config), encoding="utf-8")
     generated = tmp_path / "generated"
@@ -273,6 +274,15 @@ def _backend_facts(
         "physical_plan_id": topology["physical_plan_id"],
         "output_hash": output_sha,
     })
+    admission = topology["resource_admission"]
+    for field in (
+        "tasklet_row_sufficiency_passed",
+        "dominant_work_wave_tasklet_row_sufficiency_passed",
+        "dominant_work_wave_allocated_dpu_slots",
+        "dominant_work_wave_populated_dpu_slots",
+        "collection_resource_admission_passed",
+    ):
+        backend[field] = admission[field]
     terminal = deepcopy(base_session["terminal_backend_facts"])
     terminal.update({
         "requested_dpu_count": dpu_count,
@@ -492,8 +502,10 @@ def _raw_fixture(
     }
 
 
-def _scenario(tmp_path: Path, *, mode: str, split: str) -> dict[str, Any]:
-    dataset_path, rankings_path = _training_config(tmp_path)
+def _scenario(
+    tmp_path: Path, *, mode: str, split: str, n_qubits: int = 14
+) -> dict[str, Any]:
+    dataset_path, rankings_path = _training_config(tmp_path, n_qubits=n_qubits)
     del rankings_path
     dataset = json.loads(dataset_path.read_text(encoding="utf-8"))
     raw_dir, profile_path, provenance_path, normalized, binary_manifest = (
@@ -599,6 +611,26 @@ def test_extract_wave_pretest_full_physical_one_plus_five(
     assert (output_dir / "path_runtime_wave_pretest.csv").is_file()
 
 
+def test_extract_wave_pretest_accepts_underutilized_diagnostic_route(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(
+        tmp_path, mode="confirmation", split="training", n_qubits=6
+    )
+    output_dir = tmp_path / "underutilized"
+    result = generator.extract_wave_pretest(
+        scenario["raw_dir"], scenario["candidate_path"], scenario["provenance_path"],
+        scenario["profile_path"], output_dir, mode="confirmation", split="training",
+    )
+
+    underutilized = [
+        row for row in result["observations"] if row["topology_id"] == "4dpu_t8"
+    ]
+    assert underutilized
+    assert any(row["collection_resource_admission_passed"] is False for row in underutilized)
+    assert result["all_resource_admission_passed"] is False
+
+
 def _reload_raw(scenario: dict[str, Any]) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     manifest = json.loads((scenario["raw_dir"] / "manifest.json").read_text())
     samples = [json.loads(line) for line in (scenario["raw_dir"] / "samples.jsonl").read_text().splitlines()]
@@ -659,6 +691,44 @@ def test_extract_wave_pretest_rejects_profile_drift(tmp_path: Path) -> None:
             scenario["raw_dir"], scenario["candidate_path"], scenario["provenance_path"],
             scenario["profile_path"], tmp_path / "bad", mode="evaluation", split="validation",
         )
+
+
+def test_extract_wave_pretest_rejects_scaling_fact_corruption_and_hard_gate(
+    tmp_path: Path,
+) -> None:
+    scenario = _scenario(
+        tmp_path, mode="confirmation", split="training", n_qubits=6
+    )
+    manifest, base_samples, base_sessions = _reload_raw(scenario)
+    target = next(
+        index
+        for index, sample in enumerate(base_samples)
+        if sample["route_id"] == "4dpu_t8"
+        and sample["backend_facts"]["collection_resource_admission_passed"] is False
+    )
+
+    for kind in (
+        "missing", "nonbool", "inconsistent", "hard_gate", "hard_gate_nonbool"
+    ):
+        samples = deepcopy(base_samples)
+        sample = samples[target]
+        if kind == "missing":
+            sample["backend_facts"].pop("tasklet_row_sufficiency_passed")
+        elif kind == "nonbool":
+            sample["backend_facts"]["tasklet_row_sufficiency_passed"] = "false"
+        elif kind == "inconsistent":
+            sample["backend_facts"]["collection_resource_admission_passed"] = True
+        elif kind == "hard_gate":
+            sample["backend_facts"]["execution_resource_admission_passed"] = False
+        else:
+            sample["backend_facts"]["execution_resource_admission_passed"] = 1
+        _rewrite_raw(scenario, manifest, samples, deepcopy(base_sessions))
+        with pytest.raises(ValueError):
+            generator.extract_wave_pretest(
+                scenario["raw_dir"], scenario["candidate_path"],
+                scenario["provenance_path"], scenario["profile_path"],
+                tmp_path / f"bad-{kind}", mode="confirmation", split="training",
+            )
 
 
 @pytest.mark.parametrize("kind", ("split", "source"))

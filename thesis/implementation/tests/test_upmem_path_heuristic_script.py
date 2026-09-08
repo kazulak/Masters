@@ -725,6 +725,10 @@ def _calibration_fixture(
                         "tasklets_per_dpu": 8,
                     },
                     "resource_admission": {
+                        "tasklet_row_sufficiency_passed": True,
+                        "dominant_work_wave_tasklet_row_sufficiency_passed": True,
+                        "dominant_work_wave_allocated_dpu_slots": 1,
+                        "dominant_work_wave_populated_dpu_slots": 1,
                         "collection_resource_admission_passed": True,
                     },
                 }],
@@ -779,6 +783,10 @@ def _calibration_fixture(
         "hardware_kernel_executed": True,
         "simulator_kernel_executed": False,
         "cpu_fallback_used": False,
+        "tasklet_row_sufficiency_passed": True,
+        "dominant_work_wave_tasklet_row_sufficiency_passed": True,
+        "dominant_work_wave_allocated_dpu_slots": 1,
+        "dominant_work_wave_populated_dpu_slots": 1,
         "collection_resource_admission_passed": True,
         "execution_resource_admission_passed": True,
         "startup_resource_admission_passed": True,
@@ -1293,6 +1301,75 @@ def test_extract_wave_calibration_emits_private_profile_binding(
     assert emitted["observations"][0]["execution_contract_json"] == table[0][
         "execution_contract_json"
     ]
+
+
+def test_extract_wave_calibration_accepts_underutilized_diagnostic_facts(
+    tmp_path: Path, monkeypatch
+) -> None:
+    raw_dir, candidate_path, calibration_path, manifest, base_samples, base_sessions = (
+        _wave_calibration_fixture(tmp_path)
+    )
+    dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
+    topology = dataset["circuits"][0]["candidates"][0]["topologies"][0]
+    topology["resource_admission"].update(
+        {
+            "tasklet_row_sufficiency_passed": False,
+            "dominant_work_wave_tasklet_row_sufficiency_passed": False,
+            "dominant_work_wave_allocated_dpu_slots": 1,
+            "dominant_work_wave_populated_dpu_slots": 0,
+            "collection_resource_admission_passed": False,
+        }
+    )
+    candidate_set_sha = script._sha256_bytes(script._canonical_bytes(dataset))
+    candidate_path.write_bytes(script._canonical_bytes(dataset))
+    calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+    calibration["candidate_set_sha256"] = candidate_set_sha
+    calibration_path.write_bytes(script._canonical_bytes(calibration))
+    _refresh_wave_calibration_archive(raw_dir, calibration_path, candidate_set_sha)
+
+    samples = [deepcopy(item) for item in base_samples]
+    for sample in samples:
+        sample["backend_facts"].update(
+            {
+                "tasklet_row_sufficiency_passed": False,
+                "dominant_work_wave_tasklet_row_sufficiency_passed": False,
+                "dominant_work_wave_allocated_dpu_slots": 1,
+                "dominant_work_wave_populated_dpu_slots": 0,
+                "collection_resource_admission_passed": False,
+            }
+        )
+    monkeypatch.setattr(
+        script,
+        "load_artifacts",
+        lambda path: (manifest, tuple(samples), base_sessions),
+    )
+    result = script.extract_calibration(
+        raw_dir, candidate_path, calibration_path, tmp_path / "underutilized"
+    )
+
+    assert result["all_resource_admission_passed"] is False
+    assert all(
+        row["collection_resource_admission_passed"] is False
+        for row in result["observations"]
+    )
+    runtime_path = tmp_path / "underutilized" / "path_runtime_calibration.json"
+    runtime = json.loads(runtime_path.read_text(encoding="utf-8"))
+    row_tampered = deepcopy(runtime)
+    row_tampered["observations"][0]["collection_resource_admission_passed"] = True
+    with pytest.raises(ValueError, match="candidate plan facts"):
+        script._wave_stage_fit_inputs(
+            json.loads(candidate_path.read_text(encoding="utf-8")),
+            json.loads(calibration_path.read_text(encoding="utf-8")),
+            row_tampered,
+        )
+    runtime["all_resource_admission_passed"] = True
+    runtime_path.write_bytes(script._canonical_bytes(runtime))
+    with pytest.raises(ValueError, match="aggregate"):
+        script._wave_stage_fit_inputs(
+            json.loads(candidate_path.read_text(encoding="utf-8")),
+            json.loads(calibration_path.read_text(encoding="utf-8")),
+            runtime,
+        )
 
 
 def test_extract_wave_calibration_rejects_archived_stage_drift(

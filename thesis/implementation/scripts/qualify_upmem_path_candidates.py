@@ -32,7 +32,12 @@ from quantum_bench.upmem.path_heuristic import (
     path_id,
     score_features,
 )
-from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
+from quantum_bench.upmem.plan import (
+    UpmemTopology,
+    collection_resource_admission,
+    physical_plan_id,
+    plan_upmem,
+)
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -42,6 +47,8 @@ from upmem_path_heuristic import (  # noqa: E402
     WAVE_ADAPTIVE_STAGE,
     _validate_calibration_execution_contract,
     _validate_dataset_execution_contract,
+    _require_wave_execution_coverage,
+    _wave_scaling_admission,
     _wave_score,
     _wave_stage_metadata,
     execution_contract,
@@ -758,6 +765,45 @@ def _topology_record(candidate: dict[str, Any], topology_id: str) -> dict[str, A
     return matches[0]
 
 
+def _require_collection_admission_fact(
+    topology: Mapping[str, Any],
+    circuit_id: str,
+    topology_id: str,
+    candidate_id: object,
+    *,
+    wave: bool,
+) -> bool:
+    admission = topology.get("resource_admission")
+    if not isinstance(admission, dict):
+        raise ValueError(
+            f"evaluation candidate lacks resource admission for "
+            f"{circuit_id}/{topology_id}/{candidate_id}"
+        )
+    if wave:
+        resources = topology.get("topology")
+        if not isinstance(resources, Mapping):
+            raise ValueError(
+                f"candidate topology resources are invalid for "
+                f"{circuit_id}/{topology_id}/{candidate_id}"
+            )
+        facts = _wave_scaling_admission(
+            admission,
+            resources,
+            field=(
+                "candidate wave scaling admission "
+                f"{circuit_id}/{topology_id}/{candidate_id}"
+            ),
+        )
+        return facts["collection_resource_admission_passed"]
+    value = admission.get("collection_resource_admission_passed")
+    if value is not True:
+        raise ValueError(
+            f"evaluation candidate lacks passed resource admission for "
+            f"{circuit_id}/{topology_id}/{candidate_id}"
+        )
+    return True
+
+
 def _verify_wave_plan(dag: Any, topology: dict[str, Any], topology_id: str) -> None:
     if topology_id not in _EVALUATION_TOPOLOGIES:
         raise ValueError("unsupported path-study topology")
@@ -772,11 +818,21 @@ def _verify_wave_plan(dag: Any, topology: dict[str, Any], topology_id: str) -> N
         dag, numeric_policy=FLOAT32, topology=UpmemTopology(**resources),
         schedule_policy="static_dag_waves_v1",
     )
+    _require_wave_execution_coverage(plan)
     declared_logical = topology.get("logical_plan_id")
     if declared_logical is not None and declared_logical != plan.logical_plan_id:
         raise ValueError("candidate logical-plan identity differs from wave execution")
     if physical_plan_id(plan) != topology.get("physical_plan_id"):
         raise ValueError("candidate physical-plan identity differs from wave execution")
+    admission = topology.get("resource_admission")
+    if not isinstance(admission, Mapping):
+        raise ValueError("candidate lacks wave resource admission facts")
+    _wave_scaling_admission(
+        admission,
+        resources,
+        expected=collection_resource_admission(plan),
+        field=f"candidate wave scaling admission {topology_id}",
+    )
 
 
 def _require_evaluation_candidate(
@@ -792,14 +848,13 @@ def _require_evaluation_candidate(
             f"evaluation candidate is infeasible for {circuit_id}/{topology_id}/"
             f"{candidate.get('candidate_path_id')}"
         )
-    admission = topology.get("resource_admission")
-    if not isinstance(admission, dict) or admission.get(
-        "collection_resource_admission_passed"
-    ) is not True:
-        raise ValueError(
-            f"evaluation candidate lacks passed resource admission for "
-            f"{circuit_id}/{topology_id}/{candidate.get('candidate_path_id')}"
-        )
+    _require_collection_admission_fact(
+        topology,
+        circuit_id,
+        topology_id,
+        candidate.get("candidate_path_id"),
+        wave=contract is not None,
+    )
     if contract is not None:
         for field, value in (
             ("execution_profile", EXECUTION_PROFILE),
@@ -969,10 +1024,22 @@ def _evaluation_selection(
         for candidate in circuit_candidates:
             topology = _topology_record(candidate, topology_id)
             admission = topology.get("resource_admission")
+            collection_admission_valid = (
+                isinstance(admission, dict)
+                and admission.get("collection_resource_admission_passed") is True
+            )
+            if contract is not None and topology.get("feasible") is True:
+                _require_collection_admission_fact(
+                    topology,
+                    circuit_id,
+                    topology_id,
+                    candidate.get("candidate_path_id"),
+                    wave=True,
+                )
+                collection_admission_valid = True
             if (
                 topology.get("feasible") is True
-                and isinstance(admission, dict)
-                and admission.get("collection_resource_admission_passed") is True
+                and collection_admission_valid
                 and (
                     contract is None
                     or isinstance(topology.get("memory_admission"), dict)

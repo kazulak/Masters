@@ -87,6 +87,9 @@ def _rows(
                 "total_wall_s": total,
                 "session_close_s": 0.0,
                 "split": split,
+                "collection_resource_admission_passed": True,
+                "execution_resource_admission_passed": True,
+                "startup_resource_admission_passed": True,
             }
             if status is not None:
                 row["status"] = status
