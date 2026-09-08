@@ -21,7 +21,7 @@ import sys
 import time
 from typing import Any
 
-from quantum_bench.circuits import builtin_circuit
+from quantum_bench.circuits import builtin_circuit, quest_compatible_circuit
 from quantum_bench.evidence import (
     canonical_json,
     load_artifacts,
@@ -206,6 +206,28 @@ def _version(package: str) -> str:
         return metadata.version(package)
     except metadata.PackageNotFoundError:
         return "unavailable"
+
+
+def _circuit_from_definition(definition: Mapping[str, Any]) -> Any:
+    """Construct the declared circuit kind without changing legacy defaults."""
+
+    if not isinstance(definition, Mapping):
+        raise ValueError("circuit definition must be an object")
+    kind = definition.get("kind", "builtin")
+    name = definition.get("name")
+    parameters = definition.get("parameters", {})
+    if not isinstance(kind, str) or not kind:
+        raise ValueError("circuit definition kind must be a nonempty string")
+    if not isinstance(name, str) or not name:
+        raise ValueError("circuit definition name must be a nonempty string")
+    if not isinstance(parameters, Mapping):
+        raise ValueError("circuit definition parameters must be an object")
+    normalized_parameters = dict(parameters)
+    if kind == "builtin":
+        return builtin_circuit(name, normalized_parameters)
+    if kind == "quest_compatible":
+        return quest_compatible_circuit(name, normalized_parameters)
+    raise ValueError(f"unsupported circuit kind: {kind!r}")
 
 
 def execution_contract(
@@ -573,9 +595,16 @@ def _cotengra_trial_worker(
     methods: str,
     seed: int,
     queue: Any,
+    circuit_kind: str = "builtin",
 ) -> None:
     try:
-        circuit = builtin_circuit(circuit_name, circuit_parameters)
+        circuit = _circuit_from_definition(
+            {
+                "kind": circuit_kind,
+                "name": circuit_name,
+                "parameters": circuit_parameters,
+            }
+        )
         network, _ = lower_tensor_network(make_simulation_job(circuit))
         path, provenance = plan_cotengra(
             network,
@@ -591,6 +620,7 @@ def _cotengra_trial_worker(
 
 def _isolated_cotengra_trial(
     *,
+    circuit_kind: str = "builtin",
     circuit_name: str,
     circuit_parameters: dict[str, Any],
     objective: str,
@@ -604,7 +634,15 @@ def _isolated_cotengra_trial(
     queue = context.Queue(maxsize=1)
     process = context.Process(
         target=_cotengra_trial_worker,
-        args=(circuit_name, circuit_parameters, objective, methods, seed, queue),
+        args=(
+            circuit_name,
+            circuit_parameters,
+            objective,
+            methods,
+            seed,
+            queue,
+            circuit_kind,
+        ),
     )
     process.start()
     deadline = time.monotonic() + 300.0
@@ -660,6 +698,7 @@ def _candidate_paths(
             if circuit_definition is None:
                 raise ValueError("isolated trials require a circuit definition")
             candidate_path, provenance = _isolated_cotengra_trial(
+                circuit_kind=str(circuit_definition.get("kind", "builtin")),
                 circuit_name=str(circuit_definition["name"]),
                 circuit_parameters=dict(circuit_definition["parameters"]),
                 objective=str(generation["cotengra_objective"]),
@@ -1351,7 +1390,7 @@ def _serialized_candidate_with_admission(
     # Perform deterministic, target-neutral admission before entering native
     # planning in a child. This avoids paying or timing out physical lowering
     # for paths already known to violate the frozen campaign bounds.
-    circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
+    circuit = _circuit_from_definition(definition)
     network, inputs = lower_tensor_network(make_simulation_job(circuit))
     dag = build_contraction_dag(network, item["path"])
     conventional = extract_conventional_features(dag)
@@ -1535,7 +1574,7 @@ def build_dataset(
         circuit_id = str(circuit_spec["circuit_id"])
         split = str(circuit_spec["split"])
         definition = circuit_spec["circuit"]
-        circuit = builtin_circuit(str(definition["name"]), dict(definition["parameters"]))
+        circuit = _circuit_from_definition(definition)
         job = make_simulation_job(circuit)
         network, _ = lower_tensor_network(job)
         raw_candidates, timing = _candidate_paths(

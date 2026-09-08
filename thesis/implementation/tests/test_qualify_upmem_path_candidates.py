@@ -20,6 +20,44 @@ sys.modules[SPEC.name] = qualify
 SPEC.loader.exec_module(qualify)
 
 
+def test_qualifier_kind_dispatch_preserves_matching_definition() -> None:
+    definition = {
+        "kind": "quest_compatible",
+        "name": "edc",
+        "parameters": {"n_qubits": 4},
+    }
+    circuit = {"circuit_id": "quest-edc", "circuit": definition}
+    spec = qualify._circuit_from_definition(definition)
+    network, inputs = qualify.lower_tensor_network(qualify.make_simulation_job(spec))
+    path, provenance = qualify.plan_opt_einsum(network, optimize="greedy")
+    candidate = {
+        "candidate_path_id": qualify.path_id(path, circuit_id="quest-edc"),
+        "source_kind": "opt_einsum_greedy",
+        "planner_config_hash": provenance["planner_config_hash"],
+        "logical_plan_id": qualify.contraction_dag_hash(
+            qualify.build_contraction_dag(network, path)
+        ),
+    }
+    regenerated, regenerated_inputs = qualify._regenerate(circuit, candidate)
+    assert qualify.contraction_dag_hash(regenerated) == candidate["logical_plan_id"]
+    assert set(regenerated_inputs) == set(inputs)
+    for key in inputs:
+        np.testing.assert_array_equal(regenerated_inputs[key], inputs[key])
+
+    wrong_definition = {**definition, "kind": "builtin"}
+    with pytest.raises(ValueError, match="regeneration mismatch|logical-plan mismatch"):
+        qualify._regenerate(
+            {"circuit_id": "quest-edc", "circuit": wrong_definition}, candidate
+        )
+
+
+def test_qualifier_rejects_unknown_circuit_kind() -> None:
+    with pytest.raises(ValueError, match="unsupported circuit kind"):
+        qualify._circuit_from_definition(
+            {"kind": "not-a-real-kind", "name": "edc", "parameters": {}}
+        )
+
+
 @pytest.mark.parametrize("simulator", [False, True])
 @pytest.mark.parametrize("topology,dpus", [("1dpu_t8", 1), ("4dpu_t8", 4)])
 def test_frozen_wave_route_uses_qualified_execution_policy(simulator, topology, dpus):
@@ -340,6 +378,56 @@ def _evaluation_fixture(
     ).hexdigest()
     selection_path.write_bytes(qualify._canonical_bytes(selection))
     return dataset_path, selection_path, profile_path, greedy, candidate
+
+
+def test_prepare_config_preserves_declared_circuit_kind(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    definition = {
+        "kind": "quest_compatible",
+        "name": "edc",
+        "parameters": {"n_qubits": 4},
+    }
+    dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
+        "circuits": [
+            {
+                "circuit_id": "quest-edc",
+                "split": "validation",
+                "circuit": definition,
+                "candidates": [_candidate("a" * 64, greedy=True, seed=None, host=100)],
+            }
+        ],
+    }
+    dataset_path = tmp_path / "dataset.json"
+    selection_path = tmp_path / "selection.json"
+    profile_path = tmp_path / "profile.json"
+    output_path = tmp_path / "evaluation.yml"
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    selection_path.write_text("{}", encoding="utf-8")
+    profile_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        qualify,
+        "_evaluation_selection",
+        lambda **kwargs: (
+            [("quest-edc", "1dpu_t8", "a" * 64)],
+            {("quest-edc", "1dpu_t8", "a" * 64): ("greedy",)},
+            None,
+        ),
+    )
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, candidate: (object(), {}))
+
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        profile_path=profile_path,
+        output_path=output_path,
+        mode="evaluation",
+        split="validation",
+    )
+
+    assert config["cases"]["quest-edc"]["circuit"]["kind"] == "quest_compatible"
 
 
 @pytest.mark.parametrize("split", ("validation", "test"))
@@ -926,7 +1014,6 @@ def test_qualify_frozen_selection_replays_each_unique_candidate_deterministicall
     calls: list[str] = []
     reference = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex128)
     actual = np.asarray([1.0 + 2.0j, 3.0 + 4.0j], dtype=np.complex64)
-    monkeypatch.setattr(qualify, "builtin_circuit", lambda name, params: object())
     monkeypatch.setattr(
         qualify, "make_simulation_job", lambda spec: spec
     )
@@ -1005,7 +1092,6 @@ def test_qualify_frozen_selection_records_cpu_failure(
 ) -> None:
     dataset_path, selection_path, profile_path, _, candidate = _evaluation_fixture(tmp_path)
     reference = np.asarray([1.0 + 0.0j], dtype=np.complex128)
-    monkeypatch.setattr(qualify, "builtin_circuit", lambda name, params: object())
     monkeypatch.setattr(qualify, "make_simulation_job", lambda spec: spec)
     monkeypatch.setattr(
         qualify, "lower_tensor_network", lambda job: (object(), {"input": reference})
@@ -1354,7 +1440,9 @@ def test_prepare_rejects_invalid_wave_identity_before_writing(tmp_path: Path, de
 def test_wave_plan_identity_is_recomputed_with_real_lowering(dpus):
     from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
 
-    spec = qualify.builtin_circuit("bell_2q", {})
+    spec = qualify._circuit_from_definition(
+        {"kind": "builtin", "name": "bell_2q", "parameters": {}}
+    )
     network, _ = qualify.lower_tensor_network(qualify.make_simulation_job(spec))
     path, _ = qualify.plan_opt_einsum(network, optimize="greedy")
     dag = qualify.build_contraction_dag(network, path)
@@ -1381,7 +1469,9 @@ def test_wave_plan_identity_is_recomputed_with_real_lowering(dpus):
 def test_wave_plan_rejects_identity_correct_forged_bell_4d_for_hard_coverage():
     from quantum_bench.upmem.plan import UpmemTopology, physical_plan_id, plan_upmem
 
-    spec = qualify.builtin_circuit("bell_2q", {})
+    spec = qualify._circuit_from_definition(
+        {"kind": "builtin", "name": "bell_2q", "parameters": {}}
+    )
     network, _ = qualify.lower_tensor_network(qualify.make_simulation_job(spec))
     path, _ = qualify.plan_opt_einsum(network, optimize="greedy")
     dag = qualify.build_contraction_dag(network, path)

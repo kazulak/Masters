@@ -16,7 +16,6 @@ from typing import Any
 import numpy as np
 import yaml
 
-from quantum_bench.circuits import builtin_circuit
 from quantum_bench.cpu import run_complex128_reference, run_cpu_once
 from quantum_bench.evidence import canonical_json
 from quantum_bench.experiment import load_experiment_config
@@ -45,6 +44,7 @@ sys.path.insert(0, str(ROOT / "scripts"))
 from upmem_path_heuristic import (  # noqa: E402
     EXECUTION_PROFILE,
     WAVE_ADAPTIVE_STAGE,
+    _circuit_from_definition,
     _validate_calibration_execution_contract,
     _validate_dataset_execution_contract,
     _require_wave_execution_coverage,
@@ -381,7 +381,7 @@ def _planner_config(candidate: dict[str, Any]) -> dict[str, Any]:
 
 def _regenerate(circuit: dict[str, Any], candidate: dict[str, Any]) -> tuple[Any, dict[str, Any]]:
     definition = circuit["circuit"]
-    spec = builtin_circuit(definition["name"], dict(definition["parameters"]))
+    spec = _circuit_from_definition(definition)
     network, inputs = lower_tensor_network(make_simulation_job(spec))
     planner = _planner_config(candidate)
     if planner["engine"] == "opt_einsum":
@@ -541,7 +541,7 @@ def qualify_frozen_selection(
         candidate = candidates[(circuit_id, candidate_id)]
         if circuit_id not in references:
             definition = circuit["circuit"]
-            spec = builtin_circuit(definition["name"], dict(definition["parameters"]))
+            spec = _circuit_from_definition(definition)
             network, reference_inputs = lower_tensor_network(make_simulation_job(spec))
             greedy_path, _ = plan_opt_einsum(network, optimize="greedy")
             reference = np.asarray(
@@ -642,7 +642,7 @@ def qualify_cpu(
     rows = []
     for circuit in dataset["circuits"]:
         definition = circuit["circuit"]
-        spec = builtin_circuit(definition["name"], dict(definition["parameters"]))
+        spec = _circuit_from_definition(definition)
         network, reference_inputs = lower_tensor_network(make_simulation_job(spec))
         greedy_path, _ = plan_opt_einsum(network, optimize="greedy")
         reference = run_complex128_reference(

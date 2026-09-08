@@ -48,6 +48,71 @@ def test_fixture_hash_domains_are_distinct_for_the_same_array() -> None:
     assert _fixture_experiment_output_sha256() != _fixture_runtime_facts_output_sha256()
 
 
+def test_circuit_kind_changes_gate_structure_and_problem_identity() -> None:
+    builtin = script._circuit_from_definition(
+        {"kind": "builtin", "name": "edc", "parameters": {"n_qubits": 4}}
+    )
+    quest = script._circuit_from_definition(
+        {
+            "kind": "quest_compatible",
+            "name": "edc",
+            "parameters": {"n_qubits": 4},
+        }
+    )
+    assert len(builtin.operations) != len(quest.operations)
+    assert sum(len(operation.wires) == 1 for operation in builtin.operations) != sum(
+        len(operation.wires) == 1 for operation in quest.operations
+    )
+    assert sum(len(operation.wires) == 2 for operation in builtin.operations) != sum(
+        len(operation.wires) == 2 for operation in quest.operations
+    )
+    builtin_job = script.make_simulation_job(builtin)
+    quest_job = script.make_simulation_job(quest)
+    assert script.problem_id(builtin_job) != script.problem_id(quest_job)
+
+
+def test_unknown_circuit_kind_is_rejected() -> None:
+    with pytest.raises(ValueError, match="unsupported circuit kind"):
+        script._circuit_from_definition(
+            {"kind": "not-a-real-kind", "name": "edc", "parameters": {}}
+        )
+
+
+def test_isolated_cotengra_child_receives_declared_circuit_kind(monkeypatch) -> None:
+    monkeypatch.setattr(
+        script,
+        "plan_opt_einsum",
+        lambda network, optimize: ([(0, 1)], {"planner_config_hash": "greedy"}),
+    )
+    seen: list[str] = []
+
+    def isolated_trial(**kwargs):
+        seen.append(kwargs["circuit_kind"])
+        return [(0, 1)], {"planner_config_hash": "trial"}
+
+    monkeypatch.setattr(script, "_isolated_cotengra_trial", isolated_trial)
+    candidates, _timing = script._candidate_paths(
+        object(),
+        "quest-edc",
+        {
+            "candidate_generation": {
+                "one_trial_searches": 1,
+                "master_seed": 7,
+                "cotengra_objective": "flops",
+                "cotengra_method": "greedy",
+            }
+        },
+        isolate_trials=True,
+        circuit_definition={
+            "kind": "quest_compatible",
+            "name": "edc",
+            "parameters": {"n_qubits": 4},
+        },
+    )
+    assert seen == ["quest_compatible"]
+    assert len(candidates) == 1
+
+
 def test_execution_contract_is_explicit_and_legacy_inputs_are_not_migrated() -> None:
     legacy = script.load_config()
     assert script.execution_contract(legacy) is None
