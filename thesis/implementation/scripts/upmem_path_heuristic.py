@@ -7,43 +7,57 @@ import argparse
 import csv
 from dataclasses import asdict
 from collections.abc import Mapping
+from functools import lru_cache
 import hashlib
 from importlib import metadata
+import importlib.util
 import json
 import math
 import multiprocessing
 from pathlib import Path
 import queue as queue_module
 import subprocess
+import sys
 import time
 from typing import Any
 
 from quantum_bench.circuits import builtin_circuit
-from quantum_bench.evidence import load_artifacts, problem_id, tensor_network_structure_id
+from quantum_bench.evidence import (
+    canonical_json,
+    load_artifacts,
+    problem_id,
+    tensor_network_structure_id,
+)
+from quantum_bench.experiment import load_experiment_config
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
 from quantum_bench.model import ContractNode, make_simulation_job
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
     ConventionalPathFeatures,
+    FEATURE_NAMES,
     FeatureModelDecision,
+    GROUP_FEATURE_NAMES,
     PathCandidate,
     RawFeatureVector,
     RuntimeMeasurement,
     TrainingCell,
     WeightFitResult,
     WeightVector,
+    WAVE_COST_MODEL_ID,
     choose_feature_model,
     equal_model_weights,
     explicit_feature_model,
     explain_score,
     extract_conventional_features,
     extract_plan_features,
+    extract_wave_path_features,
     feature_dependency_metadata,
     fit_weights,
     normalize_features,
     path_id,
     score_features,
+    score_wave_path_features,
     select_calibration_candidates,
     select_best_candidate,
 )
@@ -62,6 +76,18 @@ DEFAULT_CONFIG = ROOT / "configs" / "upmem_path_heuristic_v1.json"
 NUMERIC_POLICY = "split_complex_float32_v1"
 SCHEMA_VERSION = "upmem_path_candidate_dataset_v1"
 GENERALIZATION_STUDY_ID = "upmem_path_heuristic_generalization_v1"
+EXECUTION_PROFILE = "kernel_schedule_system_v1"
+EXECUTION_SOURCE = "459935f586fdd16c82013838e6d27a12604c3093"
+WAVE_EXECUTION_CONTRACT = {
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": True,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": NUMERIC_POLICY,
+    "cost_model_id": WAVE_COST_MODEL_ID,
+    "execution_source": EXECUTION_SOURCE,
+}
+_EXPECTED_CONTRACT_UNSET = object()
 GENERALIZATION_WORKLOAD_MANIFEST = (
     ROOT
     / "thesis_results"
@@ -69,7 +95,7 @@ GENERALIZATION_WORKLOAD_MANIFEST = (
     / "workload"
     / "thesis_workload_manifest.json"
 )
-FEATURE_COLUMNS = (
+SERIAL_FEATURE_COLUMNS = (
     "circuit_id", "split", "candidate_path_id", "source_kind", "source_seed",
     "is_greedy", "topology_id", "feasible", "infeasibility_reason",
     "logical_plan_id", "physical_plan_id", "flops", "macs",
@@ -82,6 +108,24 @@ FEATURE_COLUMNS = (
     "tasklet_utilization", "dpu_utilization", "host_memory_estimate_bytes",
     "semantic_identity_expansion_units",
 )
+WAVE_FEATURE_COLUMNS = SERIAL_FEATURE_COLUMNS + (
+    "execution_profile", "score_id", "execution_contract_json",
+    "cohort_count", "original_wave_count", "launch_count",
+    "active_slot_launch_count", "idle_slot_launch_count", "product_count",
+    "real_mac_count", "wave_critical_real_mac_sum", "control_bytes",
+    "completion_bytes", "input_payload_bytes", "output_payload_bytes",
+    "barrier_tasklet_calls", "wave_critical_barrier_events",
+    "wave_critical_h2d_bytes", "wave_critical_d2h_bytes",
+    "wave_critical_mram_bytes", "static_peak_mram_bytes",
+    "known_wram_buffers_bytes", "declared_executor_memory_estimate_bytes",
+    "declared_executor_persistent_bytes", "declared_executor_peak_workspace_bytes",
+    "declared_executor_live_payload_bytes", "memory_admission_required_bytes",
+    "memory_admission_limit_bytes", "memory_admission_reserve_bytes",
+    "memory_admission_passed",
+)
+# Keep the historical public default; generation selects the tuple implied by
+# the explicit execution profile.
+FEATURE_COLUMNS = SERIAL_FEATURE_COLUMNS
 CALIBRATION_COLUMNS = (
     "split", "attempt_type", "cell_id", "circuit_id", "topology_id",
     "candidate_path_id", "plan_id", "route_id", "block", "sample_index",
@@ -116,6 +160,25 @@ CALIBRATION_COLUMNS = (
 CALIBRATION_SCHEMA_VERSION = "upmem_path_runtime_calibration_v1"
 CALIBRATION_TIMING_SCOPE = "steady_execution_v1"
 CALIBRATION_TRANSPORT = "packed_operation_v1"
+WAVE_CALIBRATION_COLUMNS = CALIBRATION_COLUMNS + (
+    "profile_schema_version", "execution_profile", "execution_contract_json",
+    "score_id", "primary_quantity", "round_id",
+)
+WAVE_CALIBRATION_PROFILE = "physical_speedup_fit_v1"
+WAVE_PRIMARY_QUANTITY = "session_inclusive_s"
+WAVE_NORMALIZATION = "log((candidate+1)/(greedy+1))"
+WAVE_INITIAL_STAGE = "initial_training"
+WAVE_ADAPTIVE_STAGE = "adaptive_training"
+WAVE_MAX_ADAPTIVE_ROUNDS = 3
+WAVE_SESSION_PROTOCOL = "upmem_prepared_wave_abi_v5"
+WAVE_KERNEL_IMPLEMENTATION = "dpu_panel_dispatch_v5_v1"
+WAVE_COMPLEX_LAUNCH_POLICY = "fused_when_admitted_v1"
+WAVE_PRETEST_SCHEMA = "upmem_path_wave_pretest_extraction_v1"
+WAVE_PRETEST_MEASUREMENT_BLOCKS = 5
+WAVE_TOPOLOGY_RESOURCES = {
+    "1dpu_t8": {"dpu_count": 1, "rank_count": 1, "tasklets_per_dpu": 8},
+    "4dpu_t8": {"dpu_count": 4, "rank_count": 1, "tasklets_per_dpu": 8},
+}
 
 
 def _canonical_bytes(value: object) -> bytes:
@@ -143,12 +206,81 @@ def _version(package: str) -> str:
         return "unavailable"
 
 
+def execution_contract(
+    config_or_dataset: Mapping[str, Any],
+) -> dict[str, Any] | None:
+    """Resolve the explicit wave contract without migrating legacy inputs."""
+
+    if not isinstance(config_or_dataset, Mapping):
+        raise TypeError("execution contract input must be a mapping")
+    profile = config_or_dataset.get("execution_profile")
+    declared = config_or_dataset.get("execution_contract")
+    if profile is None:
+        if declared is not None or config_or_dataset.get("score_id") == WAVE_COST_MODEL_ID:
+            raise ValueError(
+                "wave execution metadata requires explicit execution_profile"
+            )
+        return None
+    if profile != EXECUTION_PROFILE:
+        raise ValueError(f"unsupported execution profile: {profile!r}")
+
+    expected = dict(WAVE_EXECUTION_CONTRACT)
+    if declared is not None:
+        if not isinstance(declared, Mapping):
+            raise ValueError("execution_contract does not match frozen wave policy")
+        declared_mapping = dict(declared)
+        if declared_mapping != expected:
+            mismatched = next(
+                (
+                    field
+                    for field, value in expected.items()
+                    if declared_mapping.get(field) != value
+                ),
+                "keys",
+            )
+            raise ValueError(
+                f"execution_contract does not match frozen wave policy: {mismatched}"
+            )
+    if "score_id" in config_or_dataset and config_or_dataset["score_id"] != expected[
+        "cost_model_id"
+    ]:
+        raise ValueError("wave execution profile has a mismatched score_id")
+    calibration = config_or_dataset.get("calibration")
+    if isinstance(calibration, Mapping) and "frozen_v1_profile" in calibration:
+        raise ValueError("wave execution profile cannot mix the legacy frozen profile")
+    for field, value in expected.items():
+        if field in config_or_dataset and config_or_dataset[field] != value:
+            raise ValueError(f"wave execution profile has a mismatched {field}")
+    for policy_name in ("execution_policy", "route_policy"):
+        policy = config_or_dataset.get(policy_name)
+        if policy is None:
+            continue
+        if not isinstance(policy, Mapping):
+            raise ValueError(f"{policy_name} must be an object")
+        for field, value in expected.items():
+            if field in policy and policy[field] != value:
+                raise ValueError(f"wave execution profile has a mismatched {field}")
+        if "rank_count" in policy and policy["rank_count"] != 1:
+            raise ValueError("wave execution profile requires exactly one rank")
+    if "rank_count" in config_or_dataset and config_or_dataset["rank_count"] != 1:
+        raise ValueError("wave execution profile requires exactly one rank")
+    topologies = config_or_dataset.get("topologies")
+    if topologies is not None:
+        if not isinstance(topologies, list) or not topologies:
+            raise ValueError("wave execution profile requires topology records")
+        for topology in topologies:
+            if not isinstance(topology, Mapping) or int(topology.get("rank_count", 0)) != 1:
+                raise ValueError("wave execution profile requires exactly one rank")
+    return expected
+
+
 def load_config(path: Path = DEFAULT_CONFIG) -> dict[str, Any]:
     record = json.loads(path.read_text(encoding="utf-8"))
     if record.get("schema_version") != "upmem_path_heuristic_preregistration_v1":
         raise ValueError("unrecognized path-heuristic preregistration")
     if record.get("numeric_policy") != NUMERIC_POLICY:
         raise ValueError("physical v1 requires split-complex float32")
+    execution_contract(record)
     return record
 
 
@@ -499,6 +631,501 @@ def _candidate_paths(
     }
 
 
+def _feature_columns(config_or_dataset: Mapping[str, Any]) -> tuple[str, ...]:
+    return WAVE_FEATURE_COLUMNS if execution_contract(config_or_dataset) else SERIAL_FEATURE_COLUMNS
+
+
+def _jsonable_wave_facts(facts: Mapping[str, Any]) -> dict[str, Any]:
+    raw = facts.get("raw")
+    if not isinstance(raw, RawFeatureVector):
+        raise TypeError("wave facts must contain a RawFeatureVector")
+    return {**dict(facts), "raw": raw.as_mapping()}
+
+
+def _validate_wave_facts_context(
+    facts: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    topology: UpmemTopology,
+) -> None:
+    if facts.get("cost_model_id") != contract["cost_model_id"]:
+        raise ValueError("wave facts have a mismatched cost model")
+    plan = _mapping(facts.get("plan"), "wave facts plan")
+    for field in (
+        "schedule_policy", "request_transport", "fuse_complex", "geometry_policy",
+        "numeric_policy",
+    ):
+        if plan.get(field) != contract[field]:
+            raise ValueError(f"wave facts have a mismatched {field}")
+    if plan.get("rank_count") != topology.rank_count or topology.rank_count != 1:
+        raise ValueError("wave facts have a mismatched rank count")
+    if plan.get("dpu_count") != topology.dpu_count:
+        raise ValueError("wave facts have a mismatched DPU count")
+    if plan.get("tasklets_per_dpu") != topology.tasklets_per_dpu:
+        raise ValueError("wave facts have a mismatched tasklet count")
+    raw = facts.get("raw")
+    if not isinstance(raw, RawFeatureVector):
+        raise TypeError("wave facts must contain a RawFeatureVector")
+    if raw.numeric_overhead != 0.0:
+        raise ValueError("wave facts must keep E_num inactive")
+
+
+def _wave_memory_admission(
+    facts: Mapping[str, Any], config: Mapping[str, Any]
+) -> dict[str, Any]:
+    buffers = _mapping(facts.get("host_buffers"), "wave facts host_buffers")
+    estimate = buffers.get("declared_executor_memory_estimate_bytes")
+    if isinstance(estimate, bool) or not isinstance(estimate, int) or estimate < 0:
+        raise ValueError("wave facts declared memory estimate must be nonnegative integer")
+    budget = config.get("host_memory_admission_bytes")
+    if isinstance(budget, bool) or not isinstance(budget, int) or budget < 0:
+        raise ValueError("host_memory_admission_bytes must be a nonnegative integer")
+    reserve = config.get("host_memory_admission_reserve_bytes", 0)
+    if isinstance(reserve, bool) or not isinstance(reserve, int) or reserve < 0:
+        raise ValueError("host_memory_admission_reserve_bytes must be a nonnegative integer")
+    required = estimate + reserve
+    passed = required <= budget
+    return {
+        "scope": buffers.get("declared_executor_memory_scope"),
+        "declared_executor_memory_estimate_bytes": estimate,
+        "configured_budget_bytes": budget,
+        "configured_reserve_bytes": reserve,
+        "required_bytes": required,
+        "passed": passed,
+    }
+
+
+def _wave_feature_values(
+    plan: Any,
+    facts: Mapping[str, Any],
+    resource_admission: Mapping[str, Any],
+    memory_admission: Mapping[str, Any],
+    contract: Mapping[str, Any],
+) -> dict[str, Any]:
+    totals = _mapping(facts.get("totals"), "wave facts totals")
+    waves = facts.get("waves")
+    if not isinstance(waves, list):
+        raise ValueError("wave facts waves must be a list")
+    raw = facts.get("raw")
+    if not isinstance(raw, RawFeatureVector):
+        raise TypeError("wave facts must contain a RawFeatureVector")
+
+    def wave_maximum(field: str) -> int:
+        return sum(
+            max((int(_mapping(slot, "wave slot").get(field, 0)) for slot in _mapping(wave, "wave").get("slots", [])), default=0)
+            for wave in waves
+        )
+
+    partial_wave_count = sum(
+        sum(bool(_mapping(slot, "wave slot").get("active")) for slot in _mapping(wave, "wave").get("slots", []))
+        < int(plan.topology.dpu_count)
+        for wave in waves
+    )
+    work_unit_count = sum(
+        len(stage.work_units)
+        for stage in plan.stages
+        if stage.kind == "contract_batch"
+    )
+    buffers = _mapping(facts.get("host_buffers"), "wave facts host_buffers")
+    static_memory = _mapping(facts.get("static_memory"), "wave facts static_memory")
+    sync = _mapping(facts.get("sync_components"), "wave facts sync_components")
+    return {
+        **raw.as_mapping(),
+        "execution_profile": EXECUTION_PROFILE,
+        "score_id": contract["cost_model_id"],
+        "execution_contract_json": _json_text(contract),
+        "h2d_bytes": int(totals["h2d_bytes"]),
+        "d2h_bytes": int(totals["d2h_bytes"]),
+        "work_unit_count": work_unit_count,
+        "wave_count": int(totals["launch_count"]),
+        "packed_operation_count": int(totals["cohort_count"]),
+        "dpu_launch_count": int(totals["launch_count"]),
+        "host_reduce_count": int(totals["host_reduce_count"]),
+        "barrier_events": int(totals["barrier_events"]),
+        "partial_wave_count": partial_wave_count,
+        "tasklet_utilization": float(
+            resource_admission["arithmetic_weighted_tasklet_utilization"]
+        ),
+        "dpu_utilization": float(
+            resource_admission["arithmetic_weighted_dpu_slot_utilization"]
+        ),
+        "host_memory_estimate_bytes": int(
+            memory_admission["declared_executor_memory_estimate_bytes"]
+        ),
+        "cohort_count": int(totals["cohort_count"]),
+        "original_wave_count": int(totals["original_wave_count"]),
+        "launch_count": int(totals["launch_count"]),
+        "active_slot_launch_count": int(totals["active_slot_launch_count"]),
+        "idle_slot_launch_count": int(totals["idle_slot_launch_count"]),
+        "product_count": int(totals["product_count"]),
+        "real_mac_count": int(totals["real_mac_count"]),
+        "wave_critical_real_mac_sum": int(totals["wave_critical_real_mac_sum"]),
+        "control_bytes": int(totals["control_bytes"]),
+        "completion_bytes": int(totals["completion_bytes"]),
+        "input_payload_bytes": int(totals["input_payload_bytes"]),
+        "output_payload_bytes": int(totals["output_payload_bytes"]),
+        "barrier_tasklet_calls": int(totals["barrier_tasklet_calls"]),
+        "wave_critical_barrier_events": int(sync["wave_critical_barrier_events"]),
+        "wave_critical_h2d_bytes": wave_maximum("h2d_bytes"),
+        "wave_critical_d2h_bytes": wave_maximum("d2h_bytes"),
+        # ``mram_bytes`` is the per-slot storage span. The raw frozen feature
+        # is the corresponding critical local-transfer maximum.
+        "wave_critical_mram_bytes": int(raw.mram_wram_bytes),
+        "static_peak_mram_bytes": int(static_memory["static_peak_mram_bytes"]),
+        "known_wram_buffers_bytes": int(static_memory["known_wram_buffers_bytes"]),
+        "declared_executor_memory_estimate_bytes": int(
+            buffers["declared_executor_memory_estimate_bytes"]
+        ),
+        "declared_executor_persistent_bytes": int(
+            buffers["declared_executor_persistent_bytes"]
+        ),
+        "declared_executor_peak_workspace_bytes": int(
+            buffers["declared_executor_peak_workspace_bytes"]
+        ),
+        "declared_executor_live_payload_bytes": int(
+            buffers["declared_executor_live_payload_bytes"]
+        ),
+        "memory_admission_required_bytes": int(memory_admission["required_bytes"]),
+        "memory_admission_limit_bytes": int(memory_admission["configured_budget_bytes"]),
+        "memory_admission_reserve_bytes": int(memory_admission["configured_reserve_bytes"]),
+        "memory_admission_passed": bool(memory_admission["passed"]),
+    }
+
+
+def _wave_facts_from_record(
+    record: Mapping[str, Any], topology_id: str
+) -> dict[str, Any]:
+    topology = next(
+        (
+            item for item in record.get("topologies", [])
+            if item.get("topology_id") == topology_id
+        ),
+        None,
+    )
+    if not isinstance(topology, Mapping):
+        raise ValueError(f"candidate lacks topology {topology_id}")
+    facts = topology.get("wave_facts")
+    if not isinstance(facts, Mapping):
+        raise ValueError("wave candidate lacks inspectable wave facts")
+    result = dict(facts)
+    result["raw"] = RawFeatureVector.from_mapping(
+        _mapping(result.get("raw"), "wave candidate raw features")
+    )
+    return result
+
+
+def _wave_score(
+    candidate_record: Mapping[str, Any],
+    reference_record: Mapping[str, Any],
+    topology_id: str,
+    weights: WeightVector | None,
+) -> float:
+    if weights is None:
+        # With no eligible active dimensions, every candidate is tied and the
+        # caller's path-ID ordering is the complete deterministic policy.
+        return 0.0
+    return score_wave_path_features(
+        _wave_facts_from_record(candidate_record, topology_id),
+        _wave_facts_from_record(reference_record, topology_id),
+        weights,
+        cost_model_id=WAVE_COST_MODEL_ID,
+    )
+
+
+def _wave_equal_weights(model: FeatureModelDecision) -> WeightVector | None:
+    if not model.active_features:
+        return None
+    weights = equal_model_weights(model)
+    values = list(weights.as_tuple())
+    values[4] = 0.0
+    values[5] = 0.0
+    if sum(values) <= 0.0:
+        return None
+    if not weights.numeric and not weights.wram:
+        return weights
+    return WeightVector.from_values(values, inactive=("E_num", "P_wram"))
+
+
+def _wave_physical_plan_id(
+    record: Mapping[str, Any], topology_id: str
+) -> str:
+    topologies = record.get("topologies")
+    if not isinstance(topologies, list):
+        raise ValueError("wave candidate lacks topology records")
+    topology = next(
+        (
+            item for item in topologies
+            if isinstance(item, Mapping) and item.get("topology_id") == topology_id
+        ),
+        None,
+    )
+    if not isinstance(topology, Mapping):
+        raise ValueError(f"wave candidate lacks topology {topology_id}")
+    physical_id = topology.get("physical_plan_id")
+    if not isinstance(physical_id, str) or not physical_id:
+        raise ValueError("wave candidate lacks physical-plan identity")
+    return physical_id
+
+
+def _wave_calibration_candidates(
+    candidates: tuple[PathCandidate, ...],
+    topology_id: str,
+    *,
+    limit: int,
+    model: FeatureModelDecision,
+    greedy_path_id: str,
+    records: Mapping[str, Mapping[str, Any]],
+    return_roles: bool = False,
+) -> tuple[PathCandidate, ...] | tuple[tuple[PathCandidate, ...], tuple[dict[str, str], ...]]:
+    """Select calibration paths using only eligible wave dimensions."""
+
+    feasible = tuple(
+        sorted(
+            (item for item in candidates if item.feasible_for(topology_id)),
+            key=lambda item: item.path_id,
+        )
+    )
+    greedy = next(item for item in feasible if item.path_id == greedy_path_id)
+    normalized = {
+        item.path_id: normalize_features(
+            item.raw_for(topology_id), greedy.raw_for(topology_id)
+        )
+        for item in feasible
+    }
+    weights = _wave_equal_weights(model)
+
+    def score(item: PathCandidate) -> float:
+        return _wave_score(
+            records[item.path_id], records[greedy.path_id], topology_id, weights
+        )
+
+    selected: list[PathCandidate] = []
+    selected_ids: set[str] = set()
+    selected_physical_ids: set[str] = set()
+
+    def add(item: PathCandidate) -> None:
+        if len(selected) >= limit or item.path_id in selected_ids:
+            return
+        physical_id = _wave_physical_plan_id(records[item.path_id], topology_id)
+        if physical_id in selected_physical_ids:
+            return
+        selected.append(item)
+        selected_ids.add(item.path_id)
+        selected_physical_ids.add(physical_id)
+
+    role_candidates = (
+        ("greedy", greedy),
+        (
+            "minimum_flops",
+            min(feasible, key=lambda item: (item.conventional.flops, item.path_id)),
+        ),
+        (
+            "minimum_peak_intermediate",
+            min(
+                feasible,
+                key=lambda item: (
+                    item.conventional.peak_intermediate_elements,
+                    item.path_id,
+                ),
+            ),
+        ),
+        (
+            "minimum_writes",
+            min(
+                feasible,
+                key=lambda item: (
+                    item.conventional.total_intermediate_writes,
+                    item.path_id,
+                ),
+            ),
+        ),
+        ("equal_wave_cost", min(feasible, key=lambda item: (score(item), item.path_id))),
+    )
+
+    for _role, item in role_candidates:
+        add(item)
+
+    if model.mode == "six_term":
+        eligible = tuple(
+            name
+            for name in model.active_features
+            if name not in {"E_num", "P_wram"}
+        )
+
+        def projected(item: PathCandidate) -> tuple[float, ...]:
+            return tuple(normalized[item.path_id][name] for name in eligible)
+    else:
+        eligible = model.active_features
+
+        def projected(item: PathCandidate) -> tuple[float, ...]:
+            return model.project(normalized[item.path_id])
+
+    greedy_vector = projected(greedy)
+
+    def distance_from_greedy(item: PathCandidate) -> tuple[float, str]:
+        vector = projected(item)
+        distance = math.sqrt(
+            sum((left - right) ** 2 for left, right in zip(vector, greedy_vector))
+        )
+        return (-distance, item.path_id)
+
+    # The preregistered role list has one feature-diverse role. Do not refill
+    # after its path deduplicates an earlier role.
+    feature_diverse = min(feasible, key=distance_from_greedy)
+    add(feature_diverse)
+    roles = tuple(
+        [
+            {"role": role, "candidate_path_id": item.path_id}
+            for role, item in (*role_candidates, ("feature_diverse", feature_diverse))
+        ]
+    )
+    selected_result = tuple(selected)
+    if return_roles:
+        return selected_result, roles
+    return selected_result
+
+
+def _serialize_wave_candidate(
+    *,
+    circuit_id: str,
+    split: str,
+    network: Any,
+    inputs: dict[str, Any],
+    item: dict[str, Any],
+    config: dict[str, Any],
+    contract: Mapping[str, Any],
+) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
+    del inputs
+    dag = build_contraction_dag(network, item["path"])
+    conventional = extract_conventional_features(dag)
+    logical_id = contraction_dag_hash(dag)
+    feature_pairs: list[tuple[str, RawFeatureVector]] = []
+    feasible_topologies: list[str] = []
+    topology_records: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+    feature_columns = _feature_columns(config)
+    for topology_id, topology in _topologies(config):
+        feasible = True
+        reason = None
+        plan = None
+        resource_admission = None
+        wave_facts = None
+        memory_admission = None
+        try:
+            plan = plan_upmem(
+                dag,
+                numeric_policy=contract["numeric_policy"],
+                topology=topology,
+                schedule_policy=contract["schedule_policy"],
+            )
+            resource_admission = collection_resource_admission(plan)
+            wave_facts = extract_wave_path_features(
+                dag,
+                plan,
+                fuse_complex=contract["fuse_complex"],
+                geometry_policy=contract["geometry_policy"],
+            )
+        except Exception as exc:
+            feasible = False
+            reason = f"{type(exc).__name__}:{exc}"
+        if wave_facts is not None and plan is not None:
+            _validate_wave_facts_context(wave_facts, contract, topology)
+            memory_admission = _wave_memory_admission(wave_facts, config)
+            if not memory_admission["passed"]:
+                feasible = False
+                reason = (
+                    "declared_executor_memory_admission_failed:"
+                    f"{memory_admission['required_bytes']}>"
+                    f"{memory_admission['configured_budget_bytes']}"
+                )
+            if not resource_admission["collection_resource_admission_passed"]:
+                feasible = False
+                reasons = _collection_admission_reasons(resource_admission)
+                collection_reason = "collection_resource_admission_failed:" + ",".join(
+                    reasons
+                )
+                reason = (
+                    collection_reason
+                    if reason is None
+                    else f"{reason};{collection_reason}"
+                )
+
+        physical_id = physical_plan_id(plan) if plan is not None else None
+        wave_json = _jsonable_wave_facts(wave_facts) if wave_facts is not None else None
+        if feasible and wave_facts is not None and plan is not None:
+            feature_pairs.append((topology_id, wave_facts["raw"]))
+            feasible_topologies.append(topology_id)
+        if wave_facts is not None and plan is not None:
+            wave_values = _wave_feature_values(
+                plan,
+                wave_facts,
+                resource_admission,
+                memory_admission,
+                contract,
+            )
+        else:
+            wave_values = {}
+        topology_record = {
+            "topology_id": topology_id,
+            "topology": asdict(topology),
+            "logical_plan_id": logical_id,
+            "feasible": feasible,
+            "infeasibility_reason": reason,
+            "physical_plan_id": physical_id,
+            "resource_admission": resource_admission,
+            "memory_admission": memory_admission,
+            "features": wave_facts["raw"].as_mapping() if wave_facts is not None else {},
+            "wave_facts": wave_json,
+            "host_memory_estimate_bytes": (
+                memory_admission["declared_executor_memory_estimate_bytes"]
+                if memory_admission is not None else None
+            ),
+            "execution_profile": EXECUTION_PROFILE,
+            "execution_contract": dict(contract),
+            "score_id": contract["cost_model_id"],
+        }
+        topology_records.append(topology_record)
+        row = {
+            "circuit_id": circuit_id,
+            "split": split,
+            "candidate_path_id": item["candidate_path_id"],
+            "source_kind": item["source_kind"],
+            "source_seed": item["source_seed"],
+            "is_greedy": item["is_greedy"],
+            "topology_id": topology_id,
+            "feasible": feasible,
+            "infeasibility_reason": reason or "",
+            "logical_plan_id": logical_id,
+            "physical_plan_id": physical_id or "",
+            **conventional.as_mapping(),
+            **wave_values,
+        }
+        rows.append({column: row.get(column, "") for column in feature_columns})
+
+    candidate = PathCandidate(
+        path_id=item["candidate_path_id"],
+        conventional=conventional,
+        features_by_topology=tuple(feature_pairs),
+        feasible_topologies=tuple(feasible_topologies),
+        is_greedy=bool(item["is_greedy"]),
+        source=str(item["source_kind"]),
+    )
+    record = {
+        "candidate_path_id": item["candidate_path_id"],
+        "path": [list(step) for step in item["path"]],
+        "source_kind": item["source_kind"],
+        "source_seed": item["source_seed"],
+        "planner_config_hash": item["planner_config_hash"],
+        "is_greedy": item["is_greedy"],
+        "logical_plan_id": logical_id,
+        "conventional_features": conventional.as_mapping(),
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": contract["cost_model_id"],
+        "topologies": topology_records,
+    }
+    return record, rows, candidate
+
+
 def _serialize_candidate(
     *,
     circuit_id: str,
@@ -508,6 +1135,17 @@ def _serialize_candidate(
     item: dict[str, Any],
     config: dict[str, Any],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], PathCandidate | None]:
+    contract = execution_contract(config)
+    if contract is not None:
+        return _serialize_wave_candidate(
+            circuit_id=circuit_id,
+            split=split,
+            network=network,
+            inputs=inputs,
+            item=item,
+            config=config,
+            contract=contract,
+        )
     dag = build_contraction_dag(network, item["path"])
     conventional = extract_conventional_features(dag)
     logical_id = contraction_dag_hash(dag)
@@ -586,7 +1224,7 @@ def _serialize_candidate(
             **fact_values,
             "host_memory_estimate_bytes": memory_estimate,
         }
-        rows.append({column: row.get(column, "") for column in FEATURE_COLUMNS})
+        rows.append({column: row.get(column, "") for column in _feature_columns(config)})
     candidate = PathCandidate(
         path_id=item["candidate_path_id"],
         conventional=conventional,
@@ -645,7 +1283,8 @@ def _serialized_candidate_with_admission(
             host_memory_estimate_bytes=memory_estimate,
             estimated_work_unit_count=estimated_work_units,
         )
-    if memory_estimate > memory_limit:
+    contract = execution_contract(config)
+    if contract is None and memory_estimate > memory_limit:
         return _infeasible_candidate_record(
             circuit_id=circuit_id,
             split=split,
@@ -707,6 +1346,7 @@ def _infeasible_candidate_record(
     estimated_work_unit_count: int | None = None,
     semantic_identity_expansion_units: int | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], None]:
+    contract = execution_contract(config)
     topology_records = []
     rows = []
     for topology_id, topology in _topologies(config):
@@ -724,6 +1364,16 @@ def _infeasible_candidate_record(
                 "semantic_identity_expansion_units": semantic_identity_expansion_units,
             }
         )
+        if contract is not None:
+            topology_records[-1].update(
+                {
+                    "wave_facts": None,
+                    "memory_admission": None,
+                    "execution_profile": EXECUTION_PROFILE,
+                    "execution_contract": dict(contract),
+                    "score_id": contract["cost_model_id"],
+                }
+            )
         row = {
             "circuit_id": circuit_id,
             "split": split,
@@ -735,22 +1385,39 @@ def _infeasible_candidate_record(
             "feasible": False,
             "infeasibility_reason": reason,
         }
-        rows.append({column: row.get(column, "") for column in FEATURE_COLUMNS})
+        if contract is not None:
+            row.update(
+                {
+                    "execution_profile": EXECUTION_PROFILE,
+                    "score_id": contract["cost_model_id"],
+                    "execution_contract_json": _json_text(contract),
+                }
+            )
+        rows.append({column: row.get(column, "") for column in _feature_columns(config)})
+    record = {
+        "candidate_path_id": item["candidate_path_id"],
+        "path": [list(step) for step in item["path"]],
+        "source_kind": item["source_kind"],
+        "source_seed": item["source_seed"],
+        "planner_config_hash": item["planner_config_hash"],
+        "is_greedy": item["is_greedy"],
+        "logical_plan_id": logical_plan_id,
+        "conventional_features": (
+            conventional.as_mapping() if conventional is not None else None
+        ),
+        "semantic_identity_expansion_units": semantic_identity_expansion_units,
+        "topologies": topology_records,
+    }
+    if contract is not None:
+        record.update(
+            {
+                "execution_profile": EXECUTION_PROFILE,
+                "execution_contract": dict(contract),
+                "score_id": contract["cost_model_id"],
+            }
+        )
     return (
-        {
-            "candidate_path_id": item["candidate_path_id"],
-            "path": [list(step) for step in item["path"]],
-            "source_kind": item["source_kind"],
-            "source_seed": item["source_seed"],
-            "planner_config_hash": item["planner_config_hash"],
-            "is_greedy": item["is_greedy"],
-            "logical_plan_id": logical_plan_id,
-            "conventional_features": (
-                conventional.as_mapping() if conventional is not None else None
-            ),
-            "semantic_identity_expansion_units": semantic_identity_expansion_units,
-            "topologies": topology_records,
-        },
+        record,
         rows,
         None,
     )
@@ -761,6 +1428,7 @@ def build_dataset(
     *,
     candidate_partition: tuple[int, int] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, Any], dict[str, float]]:
+    contract = execution_contract(config)
     source_sha = _source_sha()
     circuit_records = []
     feature_rows: list[dict[str, Any]] = []
@@ -808,6 +1476,9 @@ def build_dataset(
             if candidate is not None:
                 path_candidates.append(candidate)
         total_feature_s += time.perf_counter() - feature_started
+        records_by_id = {
+            record["candidate_path_id"]: record for record in candidate_records
+        }
         for topology_id, _ in _topologies(config):
             feasible = [candidate for candidate in path_candidates if candidate.feasible_for(topology_id)]
             greedy = next((candidate for candidate in feasible if candidate.is_greedy), None)
@@ -818,11 +1489,28 @@ def build_dataset(
                 for candidate in feasible
             )
             model = choose_feature_model(normalized)
-            weights = equal_model_weights(model)
+            weights = _wave_equal_weights(model) if contract is not None else equal_model_weights(model)
+
+            def candidate_score(candidate: PathCandidate) -> float:
+                if contract is None:
+                    assert weights is not None
+                    return score_features(
+                        candidate.raw_for(topology_id),
+                        greedy.raw_for(topology_id),
+                        weights,
+                        model=model,
+                    )
+                return _wave_score(
+                    records_by_id[candidate.path_id],
+                    records_by_id[greedy.path_id],
+                    topology_id,
+                    weights,
+                )
+
             ordered = sorted(
                 feasible,
                 key=lambda candidate: (
-                    score_features(candidate.raw_for(topology_id), greedy.raw_for(topology_id), weights, model=model),
+                    candidate_score(candidate),
                     candidate.path_id,
                 ),
             )
@@ -834,14 +1522,22 @@ def build_dataset(
                         "topology_id": topology_id,
                         "candidate_path_id": candidate.path_id,
                         "equal_weight_rank": rank,
-                        "equal_weight_score": score_features(
-                            candidate.raw_for(topology_id), greedy.raw_for(topology_id), weights, model=model
-                        ),
+                        "equal_weight_score": candidate_score(candidate),
                         "feature_model": model.mode,
                     }
                 )
             if split in calibration_splits:
-                if calibration_profile is None:
+                if contract is not None:
+                    selected, roles = _wave_calibration_candidates(
+                        tuple(feasible),
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        model=model,
+                        greedy_path_id=greedy.path_id,
+                        records=records_by_id,
+                        return_roles=True,
+                    )
+                elif calibration_profile is None:
                     selected = select_calibration_candidates(
                         feasible,
                         topology_id,
@@ -888,7 +1584,7 @@ def build_dataset(
     dataset = {
         "schema_version": SCHEMA_VERSION,
         "source_sha": source_sha,
-        "score_id": COST_MODEL_ID,
+        "score_id": contract["cost_model_id"] if contract is not None else COST_MODEL_ID,
         "preregistration_sha256": config_hash,
         "dependency_versions": {
             "numpy": _version("numpy"),
@@ -899,6 +1595,10 @@ def build_dataset(
         "feature_dependencies": [asdict(item) for item in feature_dependency_metadata()],
         "circuits": circuit_records,
     }
+    if contract is not None:
+        dataset["execution_profile"] = EXECUTION_PROFILE
+        dataset["execution_contract"] = dict(contract)
+        dataset["inactive_score_features"] = ["E_num", "P_wram"]
     calibration = {
         "schema_version": "upmem_path_calibration_candidate_set_v1",
         "source_sha": source_sha,
@@ -906,6 +1606,11 @@ def build_dataset(
         "timing_used_for_selection": False,
         "cells": calibration_cells,
     }
+    if contract is not None:
+        calibration["execution_profile"] = EXECUTION_PROFILE
+        calibration["execution_contract"] = dict(contract)
+        calibration["score_id"] = contract["cost_model_id"]
+        calibration["inactive_score_features"] = ["E_num", "P_wram"]
     if calibration_profile is not None:
         _, calibration_model, calibration_profile_sha = calibration_profile
         calibration["selection_profile_sha256"] = calibration_profile_sha
@@ -924,6 +1629,7 @@ def _write_csv(path: Path, rows: list[dict[str, Any]], columns: tuple[str, ...])
 
 
 def _candidate_pool_hashes(dataset: Mapping[str, Any]) -> dict[str, Any]:
+    contract = execution_contract(dataset)
     circuits = []
     for circuit in dataset["circuits"]:
         payload = {
@@ -932,6 +1638,14 @@ def _candidate_pool_hashes(dataset: Mapping[str, Any]) -> dict[str, Any]:
                 candidate["candidate_path_id"] for candidate in circuit["candidates"]
             ],
         }
+        if contract is not None:
+            payload.update(
+                {
+                    "execution_profile": EXECUTION_PROFILE,
+                    "execution_contract": dict(contract),
+                    "score_id": contract["cost_model_id"],
+                }
+            )
         circuits.append(
             {
                 "circuit_id": circuit["circuit_id"],
@@ -939,13 +1653,22 @@ def _candidate_pool_hashes(dataset: Mapping[str, Any]) -> dict[str, Any]:
                 "candidate_pool_sha256": _sha256_bytes(_canonical_bytes(payload)),
             }
         )
-    return {
+    result = {
         "schema_version": "upmem_path_candidate_pool_hashes_v1",
         "source_sha": dataset["source_sha"],
         "candidate_set_sha256": _sha256_bytes(_canonical_bytes(dict(dataset))),
         "workload_manifest_sha256": dataset.get("workload_manifest_sha256"),
         "circuits": circuits,
     }
+    if contract is not None:
+        result.update(
+            {
+                "execution_profile": EXECUTION_PROFILE,
+                "execution_contract": dict(contract),
+                "score_id": contract["cost_model_id"],
+            }
+        )
+    return result
 
 
 def _workload_manifest_sha(
@@ -992,8 +1715,243 @@ def _json_text(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
 
 
+def _wave_topology_resources(
+    topology_id: object, topology: Mapping[str, Any]
+) -> dict[str, int]:
+    if not isinstance(topology_id, str) or topology_id not in WAVE_TOPOLOGY_RESOURCES:
+        raise ValueError(
+            "wave calibration requires topology 1dpu_t8 or 4dpu_t8"
+        )
+    expected = WAVE_TOPOLOGY_RESOURCES[str(topology_id)]
+    actual = {
+        field: topology.get(field)
+        for field in ("dpu_count", "rank_count", "tasklets_per_dpu")
+    }
+    if actual != expected:
+        raise ValueError(
+            f"wave topology {topology_id} must use one rank and eight tasklets"
+        )
+    return dict(expected)
+
+
+def _wave_stage_round_id(
+    stage_id: str, round_ordinal: int, experiment_id: str
+) -> str:
+    """Keep each private round key tied to its stage and experiment identity."""
+
+    if stage_id == WAVE_INITIAL_STAGE:
+        return f"{WAVE_INITIAL_STAGE}:{experiment_id}"
+    return f"{stage_id}:{round_ordinal}:{experiment_id}"
+
+
+def _wave_round_id(experiment_id: str) -> str:
+    """Return the established private key for the initial training round."""
+
+    return _wave_stage_round_id(WAVE_INITIAL_STAGE, 0, experiment_id)
+
+
+def _wave_stage_metadata(
+    value: Mapping[str, Any], *, field: str = "calibration"
+) -> dict[str, Any]:
+    """Validate the small private stage binding shared by calibration artifacts."""
+
+    stage_id = value.get("stage_id", WAVE_INITIAL_STAGE)
+    if stage_id == WAVE_INITIAL_STAGE:
+        round_ordinal = value.get("round_ordinal", 0)
+        if (
+            isinstance(round_ordinal, bool)
+            or not isinstance(round_ordinal, int)
+            or round_ordinal != 0
+        ):
+            raise ValueError(f"{field} initial stage must use round_ordinal 0")
+        prior_hashes = value.get("prior_stage_hashes", [])
+        if prior_hashes != []:
+            raise ValueError(f"{field} initial stage must have no prior stages")
+        selection_profile_sha = value.get("selection_profile_sha256")
+        if selection_profile_sha not in (None, ""):
+            raise ValueError(f"{field} initial stage cannot use a selection profile")
+        timing_used = value.get("timing_used_for_selection", False)
+        if timing_used is not False:
+            raise ValueError(
+                f"{field} initial stage must not use timing for selection"
+            )
+    elif stage_id == WAVE_ADAPTIVE_STAGE:
+        round_ordinal = value.get("round_ordinal")
+        if (
+            isinstance(round_ordinal, bool)
+            or not isinstance(round_ordinal, int)
+            or not 1 <= round_ordinal <= WAVE_MAX_ADAPTIVE_ROUNDS
+        ):
+            raise ValueError(
+                f"{field} adaptive stage round_ordinal must be 1.."
+                f"{WAVE_MAX_ADAPTIVE_ROUNDS}"
+            )
+        prior_hashes = value.get("prior_stage_hashes")
+        if not isinstance(prior_hashes, list) or len(prior_hashes) != round_ordinal:
+            raise ValueError(
+                f"{field} adaptive stage must list exactly its prior stages"
+            )
+        prior_hashes = [
+            _wave_lower_sha(item, f"{field} prior_stage_hash", 64)
+            for item in prior_hashes
+        ]
+        if len(set(prior_hashes)) != len(prior_hashes):
+            raise ValueError(f"{field} prior stages must be distinct")
+        selection_profile_sha = _wave_lower_sha(
+            value.get("selection_profile_sha256"),
+            f"{field} selection_profile_sha256",
+            64,
+        )
+        timing_used = value.get("timing_used_for_selection")
+        if timing_used is not True:
+            raise ValueError(
+                f"{field} adaptive stage must truthfully use timing for selection"
+            )
+    else:
+        raise ValueError(f"{field} has an unsupported stage_id: {stage_id!r}")
+    return {
+        "stage_id": stage_id,
+        "round_ordinal": int(round_ordinal),
+        "prior_stage_hashes": list(prior_hashes),
+        "selection_profile_sha256": selection_profile_sha,
+        "timing_used_for_selection": timing_used,
+    }
+
+
+def _validate_calibration_execution_contract(
+    calibration: Mapping[str, Any], contract: Mapping[str, Any] | None
+) -> None:
+    actual = execution_contract(calibration)
+    if actual != (dict(contract) if contract is not None else None):
+        raise ValueError("calibration execution contract does not match candidate dataset")
+    if contract is None:
+        return
+    for field, value in (
+        ("execution_profile", EXECUTION_PROFILE),
+        ("execution_contract", dict(contract)),
+        ("score_id", contract["cost_model_id"]),
+    ):
+        if calibration.get(field) != value:
+            raise ValueError(f"calibration is missing wave {field}")
+
+
+def _validate_dataset_execution_contract(
+    dataset: Mapping[str, Any],
+    expected_contract: Mapping[str, Any] | None | object = _EXPECTED_CONTRACT_UNSET,
+) -> dict[str, Any] | None:
+    contract = execution_contract(dataset)
+    expected = (
+        contract
+        if expected_contract is _EXPECTED_CONTRACT_UNSET
+        else dict(expected_contract) if expected_contract is not None else None
+    )
+    if contract != expected:
+        raise ValueError("candidate dataset execution contract does not match config")
+    if contract is None:
+        if dataset.get("score_id") not in {None, COST_MODEL_ID}:
+            raise ValueError("legacy candidate dataset has a mismatched score_id")
+        return None
+    for field, value in (
+        ("execution_profile", EXECUTION_PROFILE),
+        ("execution_contract", dict(contract)),
+        ("score_id", contract["cost_model_id"]),
+    ):
+        if dataset.get(field) != value:
+            raise ValueError(f"candidate dataset is missing wave {field}")
+    circuits = dataset.get("circuits")
+    if not isinstance(circuits, list):
+        raise ValueError("wave candidate dataset must contain circuits")
+    for circuit in circuits:
+        circuit_mapping = _mapping(circuit, "candidate circuit")
+        candidates = circuit_mapping.get("candidates")
+        if not isinstance(candidates, list):
+            raise ValueError("wave candidate circuit must contain candidates")
+        for candidate in candidates:
+            candidate_mapping = _mapping(candidate, "candidate")
+            for field, value in (
+                ("execution_profile", EXECUTION_PROFILE),
+                ("execution_contract", dict(contract)),
+                ("score_id", contract["cost_model_id"]),
+            ):
+                if candidate_mapping.get(field) != value:
+                    raise ValueError(f"candidate is missing wave {field}")
+            topologies = candidate_mapping.get("topologies")
+            if not isinstance(topologies, list):
+                raise ValueError("wave candidate must contain topology records")
+            for topology in topologies:
+                topology_mapping = _mapping(topology, "candidate topology")
+                for field, value in (
+                    ("execution_profile", EXECUTION_PROFILE),
+                    ("execution_contract", dict(contract)),
+                    ("score_id", contract["cost_model_id"]),
+                ):
+                    if topology_mapping.get(field) != value:
+                        raise ValueError(f"candidate topology is missing wave {field}")
+                topology_spec = dict(
+                    _mapping(topology_mapping.get("topology"), "candidate topology resources")
+                )
+                try:
+                    topology_value = UpmemTopology(**topology_spec)
+                except (TypeError, ValueError) as exc:
+                    raise ValueError("candidate topology resources are invalid") from exc
+                _wave_topology_resources(
+                    topology_mapping.get("topology_id"), topology_spec
+                )
+                facts_value = topology_mapping.get("wave_facts")
+                if facts_value is None:
+                    if topology_mapping.get("feasible") is True:
+                        raise ValueError("feasible wave candidate lacks wave facts")
+                    continue
+                facts = _wave_facts_from_record(
+                    candidate_mapping, str(topology_mapping["topology_id"])
+                )
+                _validate_wave_facts_context(facts, contract, topology_value)
+                plan = _mapping(facts.get("plan"), "wave facts plan")
+                if plan.get("logical_plan_id") != candidate_mapping.get("logical_plan_id"):
+                    raise ValueError("wave facts logical-plan identity mismatch")
+                if plan.get("physical_plan_id") != topology_mapping.get("physical_plan_id"):
+                    raise ValueError("wave facts physical-plan identity mismatch")
+                if topology_mapping.get("features") != facts["raw"].as_mapping():
+                    raise ValueError("wave topology raw features do not match wave facts")
+    return dict(contract)
+
+
+def _reject_unadapted_wave_dataset(
+    dataset: Mapping[str, Any], operation: str
+) -> None:
+    contract = execution_contract(dataset)
+    if contract is not None:
+        raise ValueError(
+            f"{operation} does not support execution_profile={EXECUTION_PROFILE}; "
+            "wave fit/extract/evaluate is not yet adapted"
+        )
+
+
 def _file_sha256(path: Path) -> str:
     return _sha256_bytes(path.read_bytes())
+
+
+def _load_frozen_wave_binary_manifest(raw_root: Path) -> dict[str, str]:
+    """Load the deployment hash map adjacent to a finalized raw artifact set."""
+
+    path = raw_root.parent / "preregistration" / "binary_sha256.json"
+    if not path.is_file():
+        raise ValueError("wave calibration requires a frozen deployment binary manifest")
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError("frozen deployment binary manifest is unreadable") from exc
+    manifest = _mapping(value, "frozen deployment binary manifest")
+    if not manifest:
+        raise ValueError("frozen deployment binary manifest is empty")
+    result: dict[str, str] = {}
+    for binary_path, digest in manifest.items():
+        if not isinstance(binary_path, str) or not binary_path:
+            raise ValueError("frozen deployment binary manifest has an invalid path")
+        result[binary_path] = _required_sha(
+            digest, f"frozen deployment hash for {binary_path}", 64
+        )
+    return result
 
 
 def _operation_timing_total(
@@ -1024,6 +1982,13 @@ def _calibration_candidate_index(
     str,
     str,
 ]:
+    contract = execution_contract(dataset)
+    if contract is None:
+        _reject_unadapted_wave_dataset(dataset, "calibration extraction")
+    else:
+        _validate_dataset_execution_contract(dataset, contract)
+    _validate_calibration_execution_contract(calibration, contract)
+    stage_metadata = _wave_stage_metadata(calibration) if contract is not None else None
     if dataset.get("schema_version") != SCHEMA_VERSION:
         raise ValueError("candidate dataset has an invalid schema version")
     if calibration.get("schema_version") != "upmem_path_calibration_candidate_set_v1":
@@ -1034,8 +1999,13 @@ def _calibration_candidate_index(
     candidate_set_sha = _sha256_bytes(_canonical_bytes(dict(dataset)))
     if calibration.get("candidate_set_sha256") != candidate_set_sha:
         raise ValueError("calibration candidate-set identity does not match dataset")
-    if calibration.get("timing_used_for_selection") is not False:
-        raise ValueError("calibration candidate selection must not use timing")
+    if contract is None:
+        if calibration.get("timing_used_for_selection") is not False:
+            raise ValueError("legacy calibration candidate selection must not use timing")
+    elif calibration.get("timing_used_for_selection") is not stage_metadata[
+        "timing_used_for_selection"
+    ]:
+        raise ValueError("calibration timing-selection flag does not match its stage")
 
     circuit_map: dict[str, dict[str, Any]] = {}
     candidate_map: dict[tuple[str, str], dict[str, Any]] = {}
@@ -1057,6 +2027,37 @@ def _calibration_candidate_index(
             key = (circuit_id, candidate_id)
             if not candidate_id or key in candidate_map:
                 raise ValueError("candidate dataset has duplicate or empty path IDs")
+            if contract is not None:
+                _required_sha(
+                    candidate_id,
+                    f"candidate path ID {circuit_id}/{candidate_id}",
+                    64,
+                )
+                _required_sha(
+                    candidate_mapping.get("logical_plan_id"),
+                    f"candidate logical_plan_id {circuit_id}/{candidate_id}",
+                    64,
+                )
+                source_kind = candidate_mapping.get("source_kind")
+                if source_kind not in {"opt_einsum_greedy", "cotengra_one_trial"}:
+                    raise ValueError(
+                        f"wave candidate has an unsupported source kind: {source_kind!r}"
+                    )
+                _required_sha(
+                    candidate_mapping.get("planner_config_hash"),
+                    f"candidate planner provenance {circuit_id}/{candidate_id}",
+                    64,
+                )
+                source_seed = candidate_mapping.get("source_seed")
+                if source_kind == "opt_einsum_greedy":
+                    if source_seed is not None:
+                        raise ValueError("greedy wave candidate must not have a source seed")
+                elif (
+                    isinstance(source_seed, bool)
+                    or not isinstance(source_seed, int)
+                    or source_seed < 0
+                ):
+                    raise ValueError("cotengra wave candidate must have a nonnegative source seed")
             candidate_map[key] = candidate_mapping
 
     cells = calibration.get("cells")
@@ -1074,10 +2075,15 @@ def _calibration_candidate_index(
             raise ValueError("calibration cells must have unique nonempty IDs")
         if circuit_id not in circuit_map:
             raise ValueError(f"calibration cell references unknown circuit: {circuit_id}")
-        if circuit_map[circuit_id].get("split") not in {"training", "validation"}:
+        allowed_splits = {"training", "validation"}
+        if contract is not None:
+            allowed_splits = {"training"}
+        if circuit_map[circuit_id].get("split") not in allowed_splits:
             raise ValueError(
                 f"calibration cell references a non-calibration split: {circuit_id}"
             )
+        if contract is not None and cell_mapping.get("split", "training") != "training":
+            raise ValueError("wave calibration cells must be training only")
         if (circuit_id, topology_id) in cell_topology_keys:
             raise ValueError("calibration cells must have unique circuit/topology pairs")
         cell_topology_keys.add((circuit_id, topology_id))
@@ -1109,6 +2115,43 @@ def _calibration_candidate_index(
                 raise ValueError(
                     f"calibration candidate is infeasible: {cell_id}/{candidate_id}"
                 )
+            if contract is not None:
+                topology_resources = _mapping(
+                    topology.get("topology"),
+                    f"candidate topology {cell_id}/{candidate_id}",
+                )
+                _wave_topology_resources(topology_id, topology_resources)
+                memory_admission = _mapping(
+                    topology.get("memory_admission"),
+                    f"candidate memory admission {cell_id}/{candidate_id}",
+                )
+                memory_values = {
+                    field: memory_admission.get(field)
+                    for field in (
+                        "declared_executor_memory_estimate_bytes",
+                        "configured_budget_bytes",
+                        "configured_reserve_bytes",
+                        "required_bytes",
+                    )
+                }
+                if any(
+                    isinstance(value, bool) or not isinstance(value, int) or value < 0
+                    for value in memory_values.values()
+                ):
+                    raise ValueError(
+                        f"candidate memory admission facts are invalid: {cell_id}/{candidate_id}"
+                    )
+                if (
+                    memory_values["required_bytes"]
+                    != memory_values["declared_executor_memory_estimate_bytes"]
+                    + memory_values["configured_reserve_bytes"]
+                    or memory_admission.get("passed") is not True
+                    or memory_values["required_bytes"]
+                    > memory_values["configured_budget_bytes"]
+                ):
+                    raise ValueError(
+                        f"candidate memory admission is not passed: {cell_id}/{candidate_id}"
+                    )
             admission = _mapping(
                 topology.get("resource_admission"),
                 f"candidate resource admission {cell_id}/{candidate_id}",
@@ -1136,6 +2179,12 @@ def _calibration_candidate_index(
 def _manifest_calibration_contract(
     manifest: Mapping[str, Any],
     expected: Mapping[tuple[str, str, str], Mapping[str, Any]],
+    contract: Mapping[str, Any] | None = None,
+    binary_manifest: Mapping[str, str] | None = None,
+    *,
+    stage_metadata: Mapping[str, Any] | None = None,
+    measurement_blocks: int = 3,
+    bind_stage_metadata: bool = True,
 ) -> tuple[str, str, dict[str, Any]]:
     if manifest.get("status") != "completed":
         raise ValueError("raw evidence manifest must be completed")
@@ -1153,8 +2202,14 @@ def _manifest_calibration_contract(
     collection = _mapping(experiment.get("collection"), "experiment collection")
     if collection.get("claim_policy") != "diagnostic_v1":
         raise ValueError("calibration evidence must use diagnostic_v1")
-    if collection.get("warmup_blocks") != 1 or collection.get("measurement_blocks") != 3:
-        raise ValueError("calibration evidence must use one warmup and three measurements")
+    if (
+        collection.get("warmup_blocks") != 1
+        or collection.get("measurement_blocks") != measurement_blocks
+    ):
+        raise ValueError(
+            "calibration evidence must use one warmup and "
+            f"{measurement_blocks} measurements"
+        )
     if collection.get("session_policy") != "fresh_session_per_attempt_v1":
         raise ValueError("calibration evidence must use fresh sessions")
     if experiment.get("experiment_id") != experiment_id:
@@ -1183,6 +2238,147 @@ def _manifest_calibration_contract(
             actual_matrix.append((case_id, plan_id, route_id))
     if len(actual_matrix) != len(set(actual_matrix)) or set(actual_matrix) != expected_matrix:
         raise ValueError("manifest matrix does not match calibration cell/path set exactly")
+    if contract is not None:
+        if physical_source != contract["execution_source"]:
+            raise ValueError(
+                "physical execution source does not match the wave execution contract"
+            )
+        if binary_manifest is None:
+            raise ValueError(
+                "wave calibration requires a frozen deployment binary manifest"
+            )
+        environment = dict(
+            _mapping(configuration.get("environment"), "environment")
+        )
+        rank_paths = environment.get("requested_rank_paths")
+        if (
+            not isinstance(rank_paths, list)
+            or len(rank_paths) != 1
+            or any(not isinstance(path, str) or not path for path in rank_paths)
+        ):
+            raise ValueError("wave environment must declare exactly one rank path")
+        routes = _mapping(experiment.get("routes"), "manifest experiment routes")
+        route_ids = set(routes)
+        if not route_ids <= set(WAVE_TOPOLOGY_RESOURCES):
+            raise ValueError("wave manifest contains an unsupported route")
+        expected_route_ids = {topology_id for _case, topology_id, _candidate in expected}
+        if not expected_route_ids <= route_ids:
+            raise ValueError("wave manifest is missing a calibration route")
+        binary_bindings: dict[str, dict[str, dict[str, str]]] = {}
+        for route_id, route_value in routes.items():
+            route = _mapping(route_value, f"wave route {route_id}")
+            if route.get("executor") != "upmem_physical":
+                raise ValueError("wave calibration route must use the physical executor")
+            if route.get("numeric_policy") != contract["numeric_policy"]:
+                raise ValueError("wave route numeric policy does not match contract")
+            options = _mapping(route.get("options"), f"wave route {route_id} options")
+            resources = _wave_topology_resources(
+                route_id, {
+                    field: options.get(field)
+                    for field in ("dpu_count", "rank_count", "tasklets_per_dpu")
+                }
+            )
+            for field, value in (
+                ("request_transport", contract["request_transport"]),
+                ("schedule_policy", contract["schedule_policy"]),
+                ("fuse_complex", contract["fuse_complex"]),
+                ("geometry_policy", contract["geometry_policy"]),
+            ):
+                if options.get(field) != value:
+                    raise ValueError(f"wave route {field} does not match contract")
+            if options.get("rank_paths") != rank_paths:
+                raise ValueError("wave route rank paths do not match environment")
+            route_binary_bindings: dict[str, dict[str, str]] = {}
+            for field in ("dpu_binary", "host_binary", "initialization_binary"):
+                binary_path = options.get(field)
+                if not isinstance(binary_path, str) or not binary_path:
+                    raise ValueError(f"wave route lacks {field}")
+                binary_sha = binary_manifest.get(binary_path)
+                if binary_sha is None:
+                    raise ValueError(
+                        f"wave route {field} is absent from the frozen deployment manifest"
+                    )
+                route_binary_bindings[field] = {
+                    "path": binary_path,
+                    "sha256": binary_sha,
+                }
+            binary_bindings[route_id] = route_binary_bindings
+            if resources["rank_count"] != 1 or resources["tasklets_per_dpu"] != 8:
+                raise ValueError("wave calibration routes require one rank and eight tasklets")
+        binding_values = configuration.get("identity_bindings")
+        if not isinstance(binding_values, list):
+            raise ValueError("wave manifest must declare identity_bindings")
+        manifest_environment_id = _required_sha(
+            manifest.get("environment_id"), "manifest environment_id", 64
+        )
+        manifest_validation_id = _required_sha(
+            manifest.get("validation_policy_id"),
+            "manifest validation_policy_id",
+            64,
+        )
+        identity_bindings: dict[tuple[str, str, str], dict[str, Any]] = {}
+        for value in binding_values:
+            binding = dict(_mapping(value, "manifest identity binding"))
+            key = (
+                binding.get("case_id"),
+                binding.get("plan_id"),
+                binding.get("route_id"),
+            )
+            if any(not isinstance(item, str) or not item for item in key):
+                raise ValueError("manifest identity binding has invalid route identity")
+            if key in identity_bindings:
+                raise ValueError("manifest identity bindings contain duplicates")
+            for field in (
+                "problem_id", "tensor_network_structure_id", "logical_plan_id",
+                "physical_plan_id", "executable_id", "environment_id",
+                "validation_policy_id",
+            ):
+                _required_sha(
+                    binding.get(field),
+                    f"manifest identity binding {field}",
+                    64,
+                )
+            if binding["environment_id"] != manifest_environment_id:
+                raise ValueError("manifest identity binding environment mismatch")
+            if binding["validation_policy_id"] != manifest_validation_id:
+                raise ValueError("manifest identity binding validation mismatch")
+            identity_bindings[key] = binding
+        if set(identity_bindings) != expected_matrix:
+            raise ValueError("wave identity bindings do not match calibration set exactly")
+        result = {
+            "experiment_id": experiment_id,
+            "collection": dict(collection),
+            "environment": environment,
+            "binary_bindings": binary_bindings,
+            "identity_bindings": identity_bindings,
+        }
+        if bind_stage_metadata:
+            expected_stage = dict(stage_metadata or {
+                "stage_id": WAVE_INITIAL_STAGE,
+                "round_ordinal": 0,
+                "prior_stage_hashes": [],
+                "selection_profile_sha256": None,
+                "timing_used_for_selection": False,
+            })
+            stage_id = expected_stage["stage_id"]
+            result.update(
+                {
+                    "round_id": _wave_stage_round_id(
+                        stage_id, expected_stage["round_ordinal"], experiment_id
+                    ),
+                    "stage_id": stage_id,
+                    "round_ordinal": expected_stage["round_ordinal"],
+                    "prior_stage_hashes": list(expected_stage["prior_stage_hashes"]),
+                    "selection_profile_sha256": expected_stage[
+                        "selection_profile_sha256"
+                    ],
+                    "timing_used_for_selection": expected_stage[
+                        "timing_used_for_selection"
+                    ],
+                    "profile_schema_version": WAVE_CALIBRATION_PROFILE,
+                }
+            )
+        return physical_source, run_id, result
     return physical_source, run_id, {
         "experiment_id": experiment_id,
         "collection": dict(collection),
@@ -1191,7 +2387,10 @@ def _manifest_calibration_contract(
 
 
 def _joined_backend_facts(
-    sample: Mapping[str, Any], session: Mapping[str, Any]
+    sample: Mapping[str, Any],
+    session: Mapping[str, Any],
+    *,
+    allow_null_overrides: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     sample_facts = dict(_mapping(sample.get("backend_facts"), "sample backend_facts"))
     terminal = dict(
@@ -1201,11 +2400,18 @@ def _joined_backend_facts(
     # the native rank session. They are both retained in their original records.
     scope_specific_fields = {"backend_id", "execution_class"}
     for field in (set(sample_facts) & set(terminal)) - scope_specific_fields:
+        if allow_null_overrides and (
+            sample_facts[field] is None or terminal[field] is None
+        ):
+            continue
         if sample_facts[field] != terminal[field]:
             raise ValueError(f"sample/session backend fact conflict: {field}")
     joined = dict(sample_facts)
     for field, value in terminal.items():
-        joined.setdefault(field, value)
+        if allow_null_overrides and joined.get(field) is None:
+            joined[field] = value
+        else:
+            joined.setdefault(field, value)
     return joined, terminal
 
 
@@ -1214,6 +2420,8 @@ def _require_backend_contract(
     session: Mapping[str, Any],
     facts: Mapping[str, Any],
     topology: Mapping[str, Any],
+    contract: Mapping[str, Any] | None = None,
+    binary_bindings: Mapping[str, Mapping[str, str]] | None = None,
 ) -> None:
     if session.get("status") != "success":
         raise ValueError("calibration contains a non-success session")
@@ -1255,7 +2463,11 @@ def _require_backend_contract(
         "active_dpus": dpu_count,
         "tasklets_per_dpu": tasklets,
         "rank_count": rank_count,
-        "request_transport": CALIBRATION_TRANSPORT,
+        "request_transport": (
+            contract["request_transport"]
+            if contract is not None
+            else CALIBRATION_TRANSPORT
+        ),
     }
     for field, value in expected_facts.items():
         if facts.get(field) != value:
@@ -1282,6 +2494,114 @@ def _require_backend_contract(
             raise ValueError(f"calibration sample validation {passed} is not true")
     if not isinstance(sample.get("output_sha256"), str):
         raise ValueError("calibration sample lacks output hash")
+    if contract is None:
+        return
+
+    if sample.get("failure") is not None or session.get("failure") is not None:
+        raise ValueError("wave calibration contains a failure record")
+    if session.get("session_protocol_id") != WAVE_SESSION_PROTOCOL:
+        raise ValueError("wave calibration uses an unexpected session protocol")
+    numeric_facts = _mapping(sample.get("numeric_facts"), "sample numeric facts")
+    if numeric_facts.get("numeric_policy") != contract["numeric_policy"]:
+        raise ValueError("sample numeric policy does not match wave contract")
+    for field, value in (
+        ("request_transport", contract["request_transport"]),
+        ("schedule_policy", contract["schedule_policy"]),
+        ("complex_launch_policy", WAVE_COMPLEX_LAUNCH_POLICY),
+        ("geometry_kernel_policy", contract["geometry_policy"]),
+        ("kernel_implementation_id", WAVE_KERNEL_IMPLEMENTATION),
+        ("physical_plan_consumed", True),
+        ("test_double_execution", False),
+        ("rank_response_timing_scope", "cohort_counters_on_first_node_v1"),
+        ("tasklet_row_sufficiency_passed", True),
+        ("dominant_work_wave_tasklet_row_sufficiency_passed", True),
+        ("execution_active_dpu_count", dpu_count),
+        ("execution_active_rank_count", 1),
+    ):
+        if facts.get(field) != value:
+            raise ValueError(f"sample wave fact {field} is not qualified")
+    for field in (
+        "execution_resource_admission_reasons",
+        "startup_resource_admission_reasons",
+    ):
+        if facts.get(field) != []:
+            raise ValueError(f"sample wave resource reasons are not empty: {field}")
+    if facts.get("active_ranks") != [0]:
+        raise ValueError("sample wave active rank set is not exactly one rank")
+    for field, value in (
+        ("request_transport", contract["request_transport"]),
+        ("schedule_policy", contract["schedule_policy"]),
+        ("complex_launch_policy", WAVE_COMPLEX_LAUNCH_POLICY),
+        ("geometry_kernel_policy", contract["geometry_policy"]),
+        ("kernel_implementation_id", WAVE_KERNEL_IMPLEMENTATION),
+        ("target_observed", "physical_hardware"),
+        ("physical_target_verified", True),
+        ("hardware_kernel_executed", True),
+        ("native_kernel_executed", True),
+        ("simulator_kernel_executed", False),
+        ("simulator_target_verified", False),
+        ("cpu_fallback_used", False),
+        ("ready_verified", True),
+        ("hardware_release_attempted", True),
+        ("hardware_release_confirmed", True),
+        ("hardware_release_succeeded", True),
+        ("hardware_release_verified", True),
+        ("test_double_execution", False),
+        ("backend_family", "upmem_sdk"),
+        ("kernel_provider", WAVE_KERNEL_IMPLEMENTATION),
+        ("kernel_strategy", WAVE_KERNEL_IMPLEMENTATION),
+        ("kernel_identity", WAVE_KERNEL_IMPLEMENTATION),
+        ("dispatch", "bulk_set_synchronous_v1"),
+        ("dispatch_mode", "bulk_set_synchronous_v1"),
+    ):
+        if terminal.get(field) != value:
+            raise ValueError(f"terminal wave fact {field} is not qualified")
+    if terminal.get("physical_profile") != "prepared_wave_v1":
+        raise ValueError("terminal physical profile is not prepared_wave_v1")
+    if terminal.get("hardware_profile") != "prepared_wave_v1":
+        raise ValueError("terminal hardware profile is not prepared_wave_v1")
+    if terminal.get("observed_rank_count") != 1:
+        raise ValueError("terminal rank count is not one")
+    if terminal.get("tasklets_per_dpu") != tasklets:
+        raise ValueError("terminal tasklet count does not match route")
+    if terminal.get("active_rank_indices") != [0]:
+        raise ValueError("terminal active rank set is not exactly one rank")
+    active_dpu_ids = terminal.get("active_dpu_ids")
+    if not isinstance(active_dpu_ids, list) or len(active_dpu_ids) != dpu_count:
+        raise ValueError("terminal active DPU set does not match route")
+    if terminal.get("startup_resource_admission_reasons") != []:
+        raise ValueError("terminal startup resource admission has reasons")
+    for field in (
+        "dpu_binary_path", "host_binary_path", "initialization_binary_path",
+        "source_root",
+    ):
+        if not isinstance(terminal.get(field), str) or not terminal[field]:
+            raise ValueError(f"terminal wave fact {field} is missing")
+    for field in (
+        "dpu_binary_sha256", "host_binary_sha256", "initialization_binary_sha256",
+        "strategy_config_hash",
+    ):
+        _required_sha(terminal.get(field), f"terminal wave fact {field}", 64)
+    strategy = _mapping(terminal.get("strategy_identity"), "terminal strategy identity")
+    for field, value in (
+        ("request_transport", contract["request_transport"]),
+        ("complex_launch_policy", WAVE_COMPLEX_LAUNCH_POLICY),
+        ("geometry_kernel_policy", contract["geometry_policy"]),
+        ("kernel_identity", WAVE_KERNEL_IMPLEMENTATION),
+    ):
+        if strategy.get(field) != value:
+            raise ValueError(f"terminal strategy identity {field} is not qualified")
+    if binary_bindings is None:
+        raise ValueError("wave calibration lacks frozen deployment binary bindings")
+    for field in ("dpu_binary", "host_binary", "initialization_binary"):
+        binding = _mapping(binary_bindings.get(field), f"wave binary binding {field}")
+        if terminal.get(f"{field}_path") != binding["path"]:
+            raise ValueError(f"terminal {field} path does not match deployment manifest")
+        if terminal.get(f"{field}_sha256") != binding["sha256"]:
+            raise ValueError(f"terminal {field} SHA does not match deployment manifest")
+    output_sha = _required_sha(sample.get("output_sha256"), "sample output_sha256", 64)
+    if facts.get("output_hash") != output_sha:
+        raise ValueError("sample/backend output identity mismatch")
 
 
 def _calibration_row(
@@ -1294,8 +2614,10 @@ def _calibration_row(
     physical_source: str,
     candidate_source: str,
     candidate_set_sha: str,
-    calibration_set_sha: str,
+    calibration_set_sha: str | None,
     raw_hashes: Mapping[str, Any],
+    contract: Mapping[str, Any] | None = None,
+    round_id: str | None = None,
 ) -> dict[str, Any]:
     measurement = _mapping(sample.get("measurement"), "sample measurement")
     if measurement.get("scope_id") != CALIBRATION_TIMING_SCOPE:
@@ -1402,6 +2724,19 @@ def _calibration_row(
         "active_rank_indices_json": _json_text(facts.get("active_rank_indices")),
         "requested_rank_paths_json": _json_text(raw_hashes["rank_paths"]),
     }
+    if contract is not None:
+        if not isinstance(round_id, str) or not round_id:
+            raise ValueError("wave calibration requires a private round identity")
+        row.update(
+            {
+                "profile_schema_version": WAVE_CALIBRATION_PROFILE,
+                "execution_profile": EXECUTION_PROFILE,
+                "execution_contract_json": _json_text(contract),
+                "score_id": contract["cost_model_id"],
+                "primary_quantity": WAVE_PRIMARY_QUANTITY,
+                "round_id": round_id,
+            }
+        )
     for field in (
         "kernel_s", "h2d_s", "d2h_s", "preparation_s", "planning_s", "lowering_s",
         "mapping_s", "slicing_s", "host_reduce_s", "rank_work_s",
@@ -1435,18 +2770,51 @@ def extract_calibration(
     dataset = _mapping(
         json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
     )
+    contract = execution_contract(dataset)
     calibration = _mapping(
         json.loads(calibration_path.read_text(encoding="utf-8")),
         "calibration candidate set",
     )
+    stage_metadata = _wave_stage_metadata(calibration) if contract is not None else None
     expected, cells, candidate_set_sha, candidate_source = _calibration_candidate_index(
         dataset, calibration
     )
+    calibration_set_sha = (
+        _file_sha256(calibration_path)
+        if contract is not None
+        else _sha256_bytes(_canonical_bytes(dict(calibration)))
+    )
+    raw_root = Path(raw_dir)
     manifest, samples, sessions = load_artifacts(raw_dir)
+    private_archive = None
+    if contract is not None:
+        private_archive = _wave_private_archive(
+            raw_root,
+            raw_root.parent / "preregistration" / "physical.yml.provenance.json",
+            manifest,
+        )
+        _validate_wave_calibration_archive_provenance(
+            private_archive,
+            dataset,
+            calibration,
+            stage_metadata,
+            contract,
+            candidate_set_sha=candidate_set_sha,
+            candidate_source=candidate_source,
+            calibration_set_sha=calibration_set_sha,
+        )
+    binary_manifest = (
+        private_archive["binary_manifest"] if private_archive is not None else None
+    )
     physical_source, run_id, manifest_contract = _manifest_calibration_contract(
-        manifest, expected
+        manifest,
+        expected,
+        contract,
+        binary_manifest,
+        stage_metadata=stage_metadata,
     )
     experiment_id = manifest_contract["experiment_id"]
+    round_id = manifest_contract.get("round_id")
     sessions_by_id: dict[str, Mapping[str, Any]] = {}
     for session in sessions:
         session_id = session.get("session_instance_id")
@@ -1458,8 +2826,6 @@ def extract_calibration(
         raise ValueError(
             "canonical evidence count does not match calibration set and block schedule"
         )
-    calibration_set_sha = _sha256_bytes(_canonical_bytes(dict(calibration)))
-    raw_root = Path(raw_dir)
     raw_hashes = {
         "manifest": _file_sha256(raw_root / "manifest.json"),
         "samples": _file_sha256(raw_root / "samples.jsonl"),
@@ -1467,6 +2833,7 @@ def extract_calibration(
         "rank_paths": manifest_contract["environment"].get("requested_rank_paths", []),
     }
     seen: set[tuple[str, str, int, str]] = set()
+    seen_session_ids: set[str] = set()
     rows: list[dict[str, Any]] = []
     observations: list[dict[str, Any]] = []
     for sample in samples:
@@ -1485,6 +2852,10 @@ def extract_calibration(
             raise ValueError(f"sample is outside the exact calibration set: {plan_id}")
         attempt_kind = sample.get("attempt_kind")
         block_id = sample.get("block_id")
+        if contract is not None and (
+            isinstance(block_id, bool) or not isinstance(block_id, int)
+        ):
+            raise ValueError("wave calibration block identity must be an integer")
         if (attempt_kind, block_id) not in {
             ("warmup", 0), ("measurement", 1), ("measurement", 2), ("measurement", 3)
         }:
@@ -1503,12 +2874,26 @@ def extract_calibration(
         session_id = sample.get("session_instance_id")
         if not isinstance(session_id, str) or session_id not in sessions_by_id:
             raise ValueError("sample references a missing session")
+        if contract is not None and session_id in seen_session_ids:
+            raise ValueError("wave calibration must use one fresh session per attempt")
+        seen_session_ids.add(session_id)
         session = sessions_by_id[session_id]
         for field in ("experiment_id", "run_id", "case_id", "plan_id", "route_id"):
             if session.get(field) != sample.get(field):
                 raise ValueError(f"sample/session {field} identity mismatch")
-        facts, terminal = _joined_backend_facts(sample, session)
-        _require_backend_contract(sample, session, facts, expected_item["topology"])
+        facts, terminal = _joined_backend_facts(
+            sample,
+            session,
+            allow_null_overrides=contract is not None,
+        )
+        _require_backend_contract(
+            sample,
+            session,
+            facts,
+            expected_item["topology"],
+            contract,
+            manifest_contract.get("binary_bindings", {}).get(route_id),
+        )
         identities = _mapping(sample.get("identities"), "sample identities")
         circuit = _mapping(expected_item["circuit"], "candidate circuit")
         candidate = _mapping(expected_item["candidate"], "candidate")
@@ -1522,6 +2907,25 @@ def extract_calibration(
         for field, value in identity_expected.items():
             if identities.get(field) != value:
                 raise ValueError(f"sample identity {field} does not match candidate")
+        if contract is not None:
+            for field, value in (
+                ("logical_plan_id", candidate["logical_plan_id"]),
+                ("physical_plan_id", topology["physical_plan_id"]),
+            ):
+                if facts.get(field) != value:
+                    raise ValueError(f"sample/backend {field} does not match candidate")
+            binding = manifest_contract["identity_bindings"].get(
+                (case_id, plan_id, route_id)
+            )
+            if binding is None:
+                raise ValueError("sample identity is outside manifest identity_bindings")
+            for field in (
+                "problem_id", "tensor_network_structure_id", "logical_plan_id",
+                "physical_plan_id", "executable_id", "environment_id",
+                "validation_policy_id",
+            ):
+                if identities.get(field) != binding[field]:
+                    raise ValueError(f"sample identity {field} does not match manifest")
         row = _calibration_row(
             sample=sample,
             session=session,
@@ -1533,9 +2937,18 @@ def extract_calibration(
             candidate_set_sha=candidate_set_sha,
             calibration_set_sha=calibration_set_sha,
             raw_hashes=raw_hashes,
+            contract=contract,
+            round_id=round_id,
         )
         rows.append(row)
-        observations.append(dict(row))
+        observation = dict(row)
+        if contract is not None:
+            observation["raw_artifact_sha256"] = {
+                "manifest.json": raw_hashes["manifest"],
+                "samples.jsonl": raw_hashes["samples"],
+                "sessions.jsonl": raw_hashes["sessions"],
+            }
+        observations.append(observation)
     expected_keys = {
         (str(item["cell_id"]), candidate_id, block, attempt)
         for (_case_id, _topology_id, candidate_id), item in expected.items()
@@ -1549,10 +2962,13 @@ def extract_calibration(
         raise ValueError(f"calibration observations are not exact (missing={missing}, extra={extra})")
     if set(sessions_by_id) != {str(sample["session_instance_id"]) for sample in samples}:
         raise ValueError("sessions are not in a one-to-one relation with samples")
+    if contract is not None and seen_session_ids != set(sessions_by_id):
+        raise ValueError("wave calibration sessions do not match the exact sample set")
     rows.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
     observations.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
     output_dir.mkdir(parents=True, exist_ok=True)
-    _write_csv(output_dir / "path_runtime_calibration.csv", rows, CALIBRATION_COLUMNS)
+    columns = WAVE_CALIBRATION_COLUMNS if contract is not None else CALIBRATION_COLUMNS
+    _write_csv(output_dir / "path_runtime_calibration.csv", rows, columns)
     result = {
         "schema_version": CALIBRATION_SCHEMA_VERSION,
         "source_sha": candidate_source,
@@ -1590,6 +3006,41 @@ def extract_calibration(
         "cells": [dict(value) for _, value in sorted(cells.items())],
         "observations": observations,
     }
+    if contract is not None:
+        result.update(
+            {
+                "profile_schema_version": WAVE_CALIBRATION_PROFILE,
+                "execution_profile": EXECUTION_PROFILE,
+                "execution_contract": dict(contract),
+                "score_id": contract["cost_model_id"],
+                "primary_quantity": WAVE_PRIMARY_QUANTITY,
+                "normalization": WAVE_NORMALIZATION,
+                "round_id": round_id,
+                "stage_id": manifest_contract["stage_id"],
+                "round_ordinal": manifest_contract["round_ordinal"],
+                "prior_stage_hashes": list(manifest_contract["prior_stage_hashes"]),
+                "selection_profile_sha256": manifest_contract[
+                    "selection_profile_sha256"
+                ],
+                "timing_used_for_selection": manifest_contract[
+                    "timing_used_for_selection"
+                ],
+                "stage_experiment_id": round_id,
+                "numeric_policy": contract["numeric_policy"],
+                "request_transport": contract["request_transport"],
+                "private_provenance": {
+                    "configuration_sha256": private_archive["configuration_sha256"],
+                    "normalized_configuration_sha256": private_archive[
+                        "normalized_configuration_sha256"
+                    ],
+                    "configuration_path": private_archive["configuration_path"],
+                    "provenance_path": private_archive["provenance_path"],
+                    "binary_manifest_path": private_archive["binary_manifest_path"],
+                    "checksums": dict(private_archive["private_hashes"]),
+                },
+                "execution_provenance": dict(private_archive["provenance"]),
+            }
+        )
     (output_dir / "path_runtime_calibration.json").write_bytes(_canonical_bytes(result))
     return result
 
@@ -1616,6 +3067,7 @@ def generate(
                 if item["circuit_id"] in requested
             ],
         }
+    feature_columns = _feature_columns(config)
     dataset, features, rankings, calibration, timings = build_dataset(
         config, candidate_partition=candidate_partition
     )
@@ -1650,7 +3102,7 @@ def generate(
         import io
 
         for path, rows, columns in (
-            (feature_path, features, FEATURE_COLUMNS),
+            (feature_path, features, feature_columns),
             (ranking_path, rankings, ranking_columns),
         ):
             stream = io.StringIO(newline="")
@@ -1660,7 +3112,7 @@ def generate(
             if path.read_bytes() != stream.getvalue().encode("utf-8"):
                 raise ValueError(f"{path.name} differs from deterministic recomputation")
     else:
-        _write_csv(feature_path, features, FEATURE_COLUMNS)
+        _write_csv(feature_path, features, feature_columns)
         _write_csv(ranking_path, rankings, ranking_columns)
         (output_dir / "planning_timing.json").write_bytes(_canonical_bytes(timings))
     return timings
@@ -1683,6 +3135,11 @@ def merge_shards(
         json.loads((path / "calibration_candidate_set.json").read_text())
         for path in shard_dirs
     ]
+    contract = execution_contract(config)
+    for dataset in datasets:
+        _validate_dataset_execution_contract(dataset, contract)
+    for calibration in calibrations:
+        _validate_calibration_execution_contract(calibration, contract)
     base = {key: value for key, value in datasets[0].items() if key != "circuits"}
     if base["preregistration_sha256"] != expected_preregistration:
         raise ValueError("candidate shard does not match preregistration")
@@ -1777,6 +3234,9 @@ def merge_shards(
     calibration_profile = _frozen_calibration_profile(config)
     for circuit in dataset["circuits"]:
         candidates = tuple(_candidate_from_record(item) for item in circuit["candidates"])
+        records_by_id = {
+            item["candidate_path_id"]: item for item in circuit["candidates"]
+        }
         for topology_id in topology_order:
             feasible = tuple(item for item in candidates if item.feasible_for(topology_id))
             greedy = next(item for item in feasible if item.is_greedy)
@@ -1785,14 +3245,28 @@ def merge_shards(
                 for item in feasible
             )
             model = choose_feature_model(normalized)
-            weights = equal_model_weights(model)
+            weights = _wave_equal_weights(model) if contract is not None else equal_model_weights(model)
+
+            def candidate_score(candidate: PathCandidate) -> float:
+                if contract is None:
+                    assert weights is not None
+                    return score_features(
+                        candidate.raw_for(topology_id),
+                        greedy.raw_for(topology_id),
+                        weights,
+                        model=model,
+                    )
+                return _wave_score(
+                    records_by_id[candidate.path_id],
+                    records_by_id[greedy.path_id],
+                    topology_id,
+                    weights,
+                )
+
             ordered = sorted(
                 feasible,
                 key=lambda item: (
-                    score_features(
-                        item.raw_for(topology_id), greedy.raw_for(topology_id),
-                        weights, model=model,
-                    ),
+                    candidate_score(item),
                     item.path_id,
                 ),
             )
@@ -1803,14 +3277,21 @@ def merge_shards(
                     "topology_id": topology_id,
                     "candidate_path_id": candidate.path_id,
                     "equal_weight_rank": rank,
-                    "equal_weight_score": score_features(
-                        candidate.raw_for(topology_id), greedy.raw_for(topology_id),
-                        weights, model=model,
-                    ),
+                    "equal_weight_score": candidate_score(candidate),
                     "feature_model": model.mode,
                 })
             if circuit["split"] in calibration_splits:
-                if calibration_profile is None:
+                if contract is not None:
+                    selected, roles = _wave_calibration_candidates(
+                        feasible,
+                        topology_id,
+                        limit=int(config["calibration"]["candidates_per_cell_maximum"]),
+                        model=model,
+                        greedy_path_id=greedy.path_id,
+                        records=records_by_id,
+                        return_roles=True,
+                    )
+                elif calibration_profile is None:
                     selected = select_calibration_candidates(
                         feasible,
                         topology_id,
@@ -1845,6 +3326,11 @@ def merge_shards(
         "timing_used_for_selection": False,
         "cells": calibration_cells,
     }
+    if contract is not None:
+        calibration["execution_profile"] = EXECUTION_PROFILE
+        calibration["execution_contract"] = dict(contract)
+        calibration["score_id"] = contract["cost_model_id"]
+        calibration["inactive_score_features"] = ["E_num", "P_wram"]
     if calibration_profile is not None:
         _, calibration_model, calibration_profile_sha = calibration_profile
         calibration["selection_profile_sha256"] = calibration_profile_sha
@@ -1857,7 +3343,11 @@ def merge_shards(
     (output_dir / "candidate_pool_hashes.json").write_bytes(
         _canonical_bytes(_candidate_pool_hashes(dataset))
     )
-    _write_csv(output_dir / "candidate_features.csv", feature_rows, FEATURE_COLUMNS)
+    _write_csv(
+        output_dir / "candidate_features.csv",
+        feature_rows,
+        _feature_columns(config),
+    )
     _write_csv(
         output_dir / "candidate_rankings.csv",
         ranking_rows,
@@ -1888,6 +3378,989 @@ def _candidate_from_record(record: dict[str, Any]) -> PathCandidate:
     )
 
 
+@lru_cache(maxsize=1)
+def _wave_fit_function() -> Any:
+    """Load the pure wave fitter without importing the qualifier."""
+
+    fitter_path = Path(__file__).with_name("fit_upmem_wave_paths.py")
+    spec = importlib.util.spec_from_file_location(
+        "_upmem_wave_paths_fitter", fitter_path
+    )
+    if spec is None or spec.loader is None:
+        raise ValueError("wave fitter module is unavailable")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception:
+        sys.modules.pop(spec.name, None)
+        raise
+    return module.fit_upmem_wave_paths
+
+
+def _wave_json_mapping(path: Path, field: str) -> dict[str, Any]:
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"{field} must be an extracted JSON object") from exc
+    return dict(_mapping(value, field))
+
+
+def _wave_lower_sha(value: object, field: str, length: int) -> str:
+    result = _required_sha(value, field, length)
+    if result != result.lower():
+        raise ValueError(f"{field} must use lowercase hexadecimal")
+    return result
+
+
+_WAVE_PILOT_FIELDS = (
+    "pilot_weights",
+    "migrated_pilot_weights",
+    "prior_pilot_weights",
+    "legacy_weights",
+    "pilot_profile",
+    "migrated_profile",
+    "reuse_prior_pilot_weights",
+    "reuse_prior_calibration_profile",
+    "old_pilot_weight_or_profile_imported",
+    "mix_lost_raw_calibration",
+)
+
+
+def _wave_stage_fit_inputs(
+    dataset: Mapping[str, Any],
+    calibration: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+) -> dict[str, Any]:
+    contract = execution_contract(dataset)
+    if contract is None:
+        raise ValueError("wave fitting requires an explicit execution contract")
+    _validate_dataset_execution_contract(dataset, contract)
+    _validate_calibration_execution_contract(calibration, contract)
+    stage = _wave_stage_metadata(calibration)
+    expected, cell_map, candidate_sha, candidate_source = _calibration_candidate_index(
+        dataset, calibration
+    )
+    candidate_source = _wave_lower_sha(candidate_source, "candidate source_sha", 40)
+    _wave_lower_sha(
+        dataset.get("preregistration_sha256"), "preregistration_sha256", 64
+    )
+    for field in _WAVE_PILOT_FIELDS:
+        if runtime.get(field) not in (None, False, "", [], {}):
+            raise ValueError("wave fitting rejects migrated pilot calibration data")
+        if calibration.get(field) not in (None, False, "", [], {}):
+            raise ValueError("wave fitting rejects migrated pilot calibration data")
+
+    calibration_sha = _sha256_bytes(_canonical_bytes(dict(calibration)))
+    runtime_fields = {
+        "schema_version": CALIBRATION_SCHEMA_VERSION,
+        "profile_schema_version": WAVE_CALIBRATION_PROFILE,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": WAVE_COST_MODEL_ID,
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "numeric_policy": contract["numeric_policy"],
+        "request_transport": contract["request_transport"],
+        "normalization": WAVE_NORMALIZATION,
+        "source_sha": candidate_source,
+        "candidate_generation_source_sha": candidate_source,
+        "physical_execution_source_sha": EXECUTION_SOURCE,
+        "candidate_set_sha256": candidate_sha,
+        "calibration_set_sha256": calibration_sha,
+        "stage_id": stage["stage_id"],
+        "round_ordinal": stage["round_ordinal"],
+        "prior_stage_hashes": stage["prior_stage_hashes"],
+        "selection_profile_sha256": stage["selection_profile_sha256"],
+        "timing_used_for_selection": stage["timing_used_for_selection"],
+    }
+    for field, value in runtime_fields.items():
+        if runtime.get(field) != value:
+            raise ValueError(f"wave runtime calibration has a mismatched {field}")
+    if runtime.get("physical_execution_source_sha") != contract["execution_source"]:
+        raise ValueError("wave runtime physical execution source is not frozen 459")
+
+    experiment_id = _wave_lower_sha(
+        runtime.get("experiment_id"), "wave calibration experiment_id", 64
+    )
+    round_id = _wave_stage_round_id(
+        stage["stage_id"], stage["round_ordinal"], experiment_id
+    )
+    if runtime.get("round_id") != round_id:
+        raise ValueError("wave runtime round does not match its calibration stage")
+    if runtime.get("stage_experiment_id") != round_id:
+        raise ValueError("wave runtime stage experiment identity does not match round")
+    if not isinstance(runtime.get("run_id"), str) or not runtime["run_id"]:
+        raise ValueError("wave runtime run_id must be nonempty")
+    collection = runtime.get("collection")
+    if collection != {
+        "warmup_blocks": 1,
+        "measurement_blocks": 3,
+        "blocks": [0, 1, 2, 3],
+        "attempts_per_candidate_cell": 4,
+    }:
+        raise ValueError("wave runtime calibration must use one warmup and three measurements")
+    if runtime.get("all_successful_physical_sessions") is not True:
+        raise ValueError("wave runtime calibration contains an unsuccessful session")
+    if runtime.get("all_resource_admission_passed") is not True:
+        raise ValueError("wave runtime calibration contains failed resource admission")
+    if runtime.get("all_accuracy_qualified") is not True:
+        raise ValueError("wave runtime calibration contains unqualified accuracy")
+    if runtime.get("fallback_used") is not False:
+        raise ValueError("wave runtime calibration contains fallback execution")
+    artifact_hashes = _mapping(
+        runtime.get("raw_artifact_sha256"), "wave runtime raw artifact hashes"
+    )
+    for name in ("manifest.json", "samples.jsonl", "sessions.jsonl"):
+        _wave_lower_sha(artifact_hashes.get(name), f"raw artifact {name}", 64)
+
+    circuit_splits = {
+        str(circuit["circuit_id"]): str(circuit.get("split"))
+        for circuit in dataset["circuits"]
+    }
+    if any(
+        circuit_splits[str(cell["circuit_id"])] != "training"
+        for cell in cell_map.values()
+    ):
+        raise ValueError("wave stage fitting is training-only")
+
+    observations = runtime.get("observations")
+    if not isinstance(observations, list):
+        raise ValueError("wave fitting requires extracted JSON observations")
+    expected_count = len(expected) * 4
+    for field, value in (
+        ("expected_cell_count", len(cell_map)),
+        ("expected_candidate_cell_count", len(expected)),
+        ("sample_count", expected_count),
+        ("session_count", expected_count),
+    ):
+        if runtime.get(field) != value:
+            raise ValueError(f"wave runtime {field} does not match calibration set")
+    if len(observations) != expected_count:
+        raise ValueError("wave runtime observation count does not match calibration set")
+
+    expected_by_cell_path = {
+        (str(item["cell_id"]), candidate_id): item
+        for (_circuit_id, _topology_id, candidate_id), item in expected.items()
+    }
+    runtime_run_id = runtime["run_id"]
+    expected_keys = {
+        (str(item["cell_id"]), candidate_id, round_id, block, attempt_type)
+        for (_circuit_id, _topology_id, candidate_id), item in expected.items()
+        for block, attempt_type in (
+            (0, "warmup"),
+            (1, "measurement"),
+            (2, "measurement"),
+            (3, "measurement"),
+        )
+    }
+    expected_rows: list[dict[str, Any]] = []
+    for (_circuit_id, _topology_id, candidate_id), item in sorted(expected.items()):
+        for block, attempt_type in (
+            (0, "warmup"),
+            (1, "measurement"),
+            (2, "measurement"),
+            (3, "measurement"),
+        ):
+            expected_rows.append(
+                {
+                    "cell_id": item["cell_id"],
+                    "candidate_path_id": candidate_id,
+                    "round_id": round_id,
+                    "block": block,
+                    "attempt_type": attempt_type,
+                    "split": "training",
+                }
+            )
+
+    observed_keys: set[tuple[str, str, str, int, str]] = set()
+    sample_ids: set[str] = set()
+    session_ids: set[str] = set()
+    for row_value in observations:
+        row = _mapping(row_value, "wave runtime observation")
+        cell_id = row.get("cell_id")
+        candidate_id = row.get("candidate_path_id")
+        if not isinstance(cell_id, str) or not isinstance(candidate_id, str):
+            raise ValueError("wave runtime observation identity is invalid")
+        item = expected_by_cell_path.get((cell_id, candidate_id))
+        if item is None:
+            raise ValueError("wave runtime observation is outside the calibration set")
+        topology_id = str(item["topology"].get("topology_id"))
+        attempt_type = row.get("attempt_type")
+        block = row.get("block")
+        if attempt_type not in {"warmup", "measurement"}:
+            raise ValueError("wave runtime observation has an invalid attempt type")
+        if attempt_type == "warmup" and block != 0:
+            raise ValueError("wave warmup must use block zero")
+        if attempt_type == "measurement" and block not in {1, 2, 3}:
+            raise ValueError("wave measurement must use blocks one through three")
+        key = (cell_id, candidate_id, round_id, block, attempt_type)
+        if key in observed_keys:
+            raise ValueError("wave runtime observations contain duplicate identities")
+        observed_keys.add(key)
+        sample_id = row.get("sample_id")
+        session_id = row.get("session_instance_id")
+        if not isinstance(sample_id, str) or not sample_id:
+            raise ValueError("wave runtime observation lacks sample_id")
+        if not isinstance(session_id, str) or not session_id:
+            raise ValueError("wave runtime observation lacks session_instance_id")
+        if sample_id in sample_ids:
+            raise ValueError("wave runtime observations reuse a sample_id")
+        if session_id in session_ids:
+            raise ValueError("wave runtime observations reuse a session_instance_id")
+        sample_ids.add(sample_id)
+        session_ids.add(session_id)
+        expected_row_fields = {
+            "split": "training",
+            "round_id": round_id,
+            "experiment_id": experiment_id,
+            "run_id": runtime_run_id,
+            "circuit_id": item["circuit"]["circuit_id"],
+            "topology_id": topology_id,
+            "plan_id": f"path_{candidate_id}",
+            "candidate_generation_source_sha": candidate_source,
+            "source_sha": candidate_source,
+            "physical_execution_source_sha": EXECUTION_SOURCE,
+            "candidate_set_sha256": candidate_sha,
+            "calibration_set_sha256": calibration_sha,
+            "profile_schema_version": WAVE_CALIBRATION_PROFILE,
+            "execution_profile": EXECUTION_PROFILE,
+            "score_id": WAVE_COST_MODEL_ID,
+            "primary_quantity": WAVE_PRIMARY_QUANTITY,
+            "timing_scope": CALIBRATION_TIMING_SCOPE,
+            "request_transport": contract["request_transport"],
+            "validation": "passed",
+            "fallback": "false",
+            "status": "success",
+            "logical_plan_id": item["candidate"]["logical_plan_id"],
+            "physical_plan_id": item["topology"]["physical_plan_id"],
+        }
+        for field, value in expected_row_fields.items():
+            if row.get(field) != value:
+                raise ValueError(f"wave runtime observation has a mismatched {field}")
+        contract_json = row.get("execution_contract_json")
+        try:
+            row_contract = json.loads(contract_json)
+        except (TypeError, json.JSONDecodeError) as exc:
+            raise ValueError("wave runtime observation lacks execution contract") from exc
+        if row_contract != dict(contract):
+            raise ValueError("wave runtime observation has a mismatched execution contract")
+        row_artifacts = row.get("raw_artifact_sha256")
+        if dict(_mapping(
+            row_artifacts, "wave runtime observation artifact hashes"
+        )) != dict(artifact_hashes):
+            raise ValueError("wave runtime observation artifact hashes do not match header")
+        open_s = _finite_nonnegative(row.get("session_open_s"), "session_open_s")
+        steady_s = _finite_nonnegative(row.get("total_wall_s"), "total_wall_s")
+        close_s = _finite_nonnegative(row.get("session_close_s"), "session_close_s")
+        inclusive = open_s + steady_s + close_s
+        if inclusive <= 0.0:
+            raise ValueError("session-inclusive time must be finite and strictly positive")
+        reported = _finite_nonnegative(
+            row.get("session_inclusive_s"), "session_inclusive_s"
+        )
+        if not math.isclose(reported, inclusive, rel_tol=0.0, abs_tol=1.0e-12):
+            raise ValueError("session-inclusive time does not equal raw timing components")
+
+    if observed_keys != expected_keys:
+        missing = sorted(expected_keys - observed_keys)
+        extra = sorted(observed_keys - expected_keys)
+        raise ValueError(
+            f"wave runtime observations are not exact (missing={missing}, extra={extra})"
+        )
+
+    cells_for_fit: dict[str, dict[str, Any]] = {}
+    for cell_id, cell in sorted(cell_map.items()):
+        circuit_id = str(cell["circuit_id"])
+        topology_id = str(cell["topology_id"])
+        raw_features: dict[str, dict[str, float]] = {}
+        for candidate_id in cell["candidate_path_ids"]:
+            item = expected[(circuit_id, topology_id, str(candidate_id))]
+            facts = _wave_facts_from_record(item["candidate"], topology_id)
+            raw_features[str(candidate_id)] = facts["raw"].as_mapping()
+        cells_for_fit[cell_id] = {
+            "cell_id": cell_id,
+            "greedy_path_id": str(cell["greedy_path_id"]),
+            "raw_features": raw_features,
+        }
+    return {
+        "cells": cells_for_fit,
+        "observations": [dict(row) for row in observations],
+        "expected_rows": expected_rows,
+        "experiment_id": experiment_id,
+        "run_id": runtime_run_id,
+        "round_id": round_id,
+        "candidate_sha": candidate_sha,
+        "candidate_source": candidate_source,
+        "calibration_sha": calibration_sha,
+        "artifact_hashes": dict(artifact_hashes),
+        "cell_map": {cell_id: dict(value) for cell_id, value in cell_map.items()},
+        "sample_ids": frozenset(sample_ids),
+        "session_ids": frozenset(session_ids),
+        "stage": stage,
+    }
+
+
+def _wave_initial_fit_inputs(
+    dataset: Mapping[str, Any],
+    calibration: Mapping[str, Any],
+    runtime: Mapping[str, Any],
+) -> tuple[
+    dict[str, dict[str, Any]],
+    list[dict[str, Any]],
+    list[dict[str, Any]],
+    str,
+    str,
+    str,
+    str,
+]:
+    """Retain the narrow initial-stage helper while sharing stage validation."""
+
+    values = _wave_stage_fit_inputs(dataset, calibration, runtime)
+    if values["stage"]["stage_id"] != WAVE_INITIAL_STAGE:
+        raise ValueError("wave initial fitting requires the initial training stage")
+    return (
+        values["cells"],
+        values["observations"],
+        values["expected_rows"],
+        values["experiment_id"],
+        values["round_id"],
+        values["candidate_sha"],
+        values["calibration_sha"],
+    )
+
+
+def validate_wave_stage_provenance(
+    profile: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Validate the private stage chain carried by a wave fit profile."""
+
+    stage_count = profile.get("stage_count")
+    adaptive_round_count = profile.get("adaptive_round_count")
+    if (
+        isinstance(stage_count, bool)
+        or not isinstance(stage_count, int)
+        or not 1 <= stage_count <= WAVE_MAX_ADAPTIVE_ROUNDS + 1
+        or isinstance(adaptive_round_count, bool)
+        or not isinstance(adaptive_round_count, int)
+        or adaptive_round_count != stage_count - 1
+    ):
+        raise ValueError("wave profile has an invalid stage count")
+    stage_hashes = profile.get("stage_calibration_sha256")
+    runtime_hashes = profile.get("stage_runtime_table_sha256")
+    stage_metadata = profile.get("stage_metadata")
+    if (
+        not isinstance(stage_hashes, list)
+        or len(stage_hashes) != stage_count
+        or not isinstance(runtime_hashes, list)
+        or len(runtime_hashes) != stage_count
+        or not isinstance(stage_metadata, list)
+        or len(stage_metadata) != stage_count
+    ):
+        raise ValueError("wave profile lacks exact stage metadata")
+    for index, digest in enumerate(stage_hashes):
+        _wave_lower_sha(digest, f"wave stage calibration hash {index}", 64)
+    for index, digest in enumerate(runtime_hashes):
+        _wave_lower_sha(digest, f"wave stage runtime hash {index}", 64)
+    if len(set(stage_hashes)) != len(stage_hashes):
+        raise ValueError("wave profile reuses a calibration stage hash")
+    if len(set(runtime_hashes)) != len(runtime_hashes):
+        raise ValueError("wave profile reuses a runtime stage hash")
+    experiments: set[str] = set()
+    runs: set[str] = set()
+    for index, value in enumerate(stage_metadata):
+        stage = _mapping(value, "wave profile stage metadata")
+        expected_stage_id = WAVE_INITIAL_STAGE if index == 0 else WAVE_ADAPTIVE_STAGE
+        stage_round_ordinal = stage.get("round_ordinal")
+        if (
+            stage.get("stage_id") != expected_stage_id
+            or isinstance(stage_round_ordinal, bool)
+            or not isinstance(stage_round_ordinal, int)
+            or stage_round_ordinal != index
+            or stage.get("calibration_set_sha256") != stage_hashes[index]
+            or stage.get("runtime_table_sha256") != runtime_hashes[index]
+            or stage.get("prior_stage_hashes") != stage_hashes[:index]
+        ):
+            raise ValueError("wave profile stage metadata is inconsistent")
+        experiment_id = _wave_lower_sha(
+            stage.get("experiment_id"), "wave stage experiment_id", 64
+        )
+        run_id = stage.get("run_id")
+        if not isinstance(run_id, str) or not run_id:
+            raise ValueError("wave stage run_id must be nonempty")
+        if experiment_id in experiments or run_id in runs:
+            raise ValueError("wave profile reuses a stage experiment or run")
+        if stage.get("round_id") != _wave_stage_round_id(
+            expected_stage_id, index, experiment_id
+        ):
+            raise ValueError("wave profile stage round identity is inconsistent")
+        if index == 0:
+            if stage.get("timing_used_for_selection") is not False:
+                raise ValueError("wave initial profile stage must not use timing selection")
+            if stage.get("selection_profile_sha256") not in (None, ""):
+                raise ValueError("wave initial profile stage cannot use a selection profile")
+        else:
+            if stage.get("timing_used_for_selection") is not True:
+                raise ValueError("wave adaptive profile stage must use timing selection")
+            _wave_lower_sha(
+                stage.get("selection_profile_sha256"),
+                "wave adaptive selection_profile_sha256",
+                64,
+            )
+        experiments.add(experiment_id)
+        runs.add(run_id)
+    if (
+        profile.get("calibration_set_sha256") != stage_hashes[0]
+        or profile.get("runtime_table_sha256") != runtime_hashes[0]
+    ):
+        raise ValueError("wave profile base stage hashes are inconsistent")
+    final = stage_metadata[-1]
+    final_stage_id = WAVE_INITIAL_STAGE if stage_count == 1 else WAVE_ADAPTIVE_STAGE
+    final_round_ordinal = profile.get("round_ordinal")
+    if (
+        profile.get("stage_id") != final_stage_id
+        or isinstance(final_round_ordinal, bool)
+        or not isinstance(final_round_ordinal, int)
+        or final_round_ordinal != stage_count - 1
+        or profile.get("prior_stage_hashes") != final["prior_stage_hashes"]
+        or profile.get("selection_profile_sha256") != final["selection_profile_sha256"]
+        or profile.get("timing_used_for_selection")
+        != final["timing_used_for_selection"]
+        or profile.get("experiment_id") != final["experiment_id"]
+        or profile.get("round_id") != final["round_id"]
+    ):
+        raise ValueError("wave profile final stage identity is inconsistent")
+    return {
+        "stage_count": stage_count,
+        "adaptive_round_count": adaptive_round_count,
+        "stage_calibration_sha256": list(stage_hashes),
+        "stage_runtime_table_sha256": list(runtime_hashes),
+        "stage_metadata": [dict(_mapping(value, "wave profile stage metadata"))
+                            for value in stage_metadata],
+    }
+
+
+def _wave_selection_profile(
+    profile_path: Path,
+    dataset: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    candidate_sha: str,
+    prior_stage_hashes: list[str],
+) -> tuple[dict[str, Any], str, WeightVector, FeatureModelDecision]:
+    profile = _wave_json_mapping(profile_path, "wave training selection profile")
+    profile_sha = _file_sha256(profile_path)
+    if profile_sha != _sha256_bytes(_canonical_bytes(profile)):
+        raise ValueError("wave training selection profile must use canonical JSON")
+    required = {
+        "schema_version": WAVE_CALIBRATION_PROFILE,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": WAVE_COST_MODEL_ID,
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "source_sha": dataset.get("source_sha"),
+        "candidate_generation_source_sha": dataset.get("source_sha"),
+        "physical_execution_source_sha": contract["execution_source"],
+        "candidate_set_sha256": candidate_sha,
+        "fit_splits": ["training"],
+    }
+    for field, value in required.items():
+        if profile.get(field) != value:
+            raise ValueError(f"wave training selection profile has a mismatched {field}")
+    provenance = validate_wave_stage_provenance(profile)
+    if provenance["stage_calibration_sha256"] != prior_stage_hashes:
+        raise ValueError("wave selection profile does not cover the prior stage set")
+    if provenance["stage_count"] != len(prior_stage_hashes):
+        raise ValueError("wave selection profile stage count does not match prior stages")
+    _wave_lower_sha(dataset.get("source_sha"), "source_sha", 40)
+    _wave_lower_sha(profile.get("physical_execution_source_sha"), "physical execution source", 40)
+    _wave_lower_sha(profile.get("candidate_generation_source_sha"), "candidate source", 40)
+    raw_weights = profile.get("weights")
+    if not isinstance(raw_weights, dict) or set(raw_weights) != set(FEATURE_NAMES):
+        raise ValueError("wave training selection profile weights are invalid")
+    if any(raw_weights[field] != 0 for field in ("E_num", "P_wram")):
+        raise ValueError("wave training selection profile activates an inactive feature")
+    try:
+        model = _model_from_profile(profile)
+        weights = WeightVector.from_values(
+            raw_weights, inactive=("E_num", "P_wram")
+        )
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ValueError("wave training selection profile model is invalid") from exc
+    if model.mode != profile.get("requested_model_form"):
+        raise ValueError("wave training selection profile model form is inconsistent")
+    if weights.numeric != 0.0 or weights.wram != 0.0:
+        raise ValueError("wave training selection profile activates an inactive feature")
+    return profile, profile_sha, weights, model
+
+
+def propose_wave_calibration_stage(
+    candidate_path: Path,
+    prior_calibration_paths: tuple[Path, ...],
+    profile_path: Path,
+    output_path: Path,
+    *,
+    round_ordinal: int,
+) -> dict[str, Any]:
+    """Build one deterministic adaptive training set from the frozen pool."""
+
+    if (
+        isinstance(round_ordinal, bool)
+        or not isinstance(round_ordinal, int)
+        or not 1 <= round_ordinal <= WAVE_MAX_ADAPTIVE_ROUNDS
+    ):
+        raise ValueError(
+            f"adaptive round_ordinal must be 1..{WAVE_MAX_ADAPTIVE_ROUNDS}"
+        )
+    if len(prior_calibration_paths) != round_ordinal:
+        raise ValueError("adaptive stage requires all prior calibration sets in order")
+    dataset = _mapping(
+        json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
+    )
+    contract = execution_contract(dataset)
+    if contract is None:
+        raise ValueError("adaptive wave calibration requires an explicit execution contract")
+    _validate_dataset_execution_contract(dataset, contract)
+    candidate_sha = _sha256_bytes(_canonical_bytes(dict(dataset)))
+
+    prior_calibrations: list[dict[str, Any]] = []
+    prior_hashes: list[str] = []
+    prior_cell_maps: list[dict[str, Any]] = []
+    for index, path_value in enumerate(prior_calibration_paths):
+        path = Path(path_value)
+        calibration = _wave_json_mapping(path, "prior wave calibration candidate set")
+        _calibration_candidate_index(dataset, calibration)
+        stage = _wave_stage_metadata(calibration, field="prior calibration")
+        expected_id = WAVE_INITIAL_STAGE if index == 0 else WAVE_ADAPTIVE_STAGE
+        if stage["stage_id"] != expected_id or stage["round_ordinal"] != index:
+            raise ValueError("prior wave calibration stages are not contiguous")
+        if stage["prior_stage_hashes"] != prior_hashes:
+            raise ValueError("prior wave calibration hash chain is inconsistent")
+        digest = _file_sha256(path)
+        if digest != _sha256_bytes(_canonical_bytes(calibration)):
+            raise ValueError("prior wave calibration candidate set must use canonical JSON")
+        prior_calibrations.append(calibration)
+        prior_hashes.append(digest)
+        prior_cell_maps.append({
+            str(item["cell_id"]): dict(item)
+            for item in calibration["cells"]
+        })
+
+    profile, profile_sha, weights, model = _wave_selection_profile(
+        Path(profile_path), dataset, contract, candidate_sha, prior_hashes
+    )
+    initial_cells = prior_calibrations[0].get("cells")
+    if not isinstance(initial_cells, list) or not initial_cells:
+        raise ValueError("initial wave calibration has no training cells")
+    initial_signatures = {
+        str(item["cell_id"]): (
+            str(item["circuit_id"]),
+            str(item["topology_id"]),
+            str(item["greedy_path_id"]),
+        )
+        for item in initial_cells
+    }
+    for prior_cells in prior_cell_maps[1:]:
+        signatures = {
+            cell_id: (
+                str(item["circuit_id"]),
+                str(item["topology_id"]),
+                str(item["greedy_path_id"]),
+            )
+            for cell_id, item in prior_cells.items()
+        }
+        if signatures != initial_signatures:
+            raise ValueError("prior adaptive calibration changed the training cell matrix")
+
+    selected_by_cell = profile.get("selected_path_ids")
+    if not isinstance(selected_by_cell, dict) or set(selected_by_cell) != set(initial_signatures):
+        raise ValueError("wave training selection profile lacks exact training cells")
+    candidate_speedups = profile.get("candidate_speedups")
+    if not isinstance(candidate_speedups, dict):
+        raise ValueError("wave training selection profile lacks measured candidate speedups")
+    for cell_id, selected_path_id in selected_by_cell.items():
+        measured = candidate_speedups.get(cell_id)
+        if (
+            not isinstance(selected_path_id, str)
+            or not isinstance(measured, dict)
+            or selected_path_id not in measured
+        ):
+            raise ValueError(
+                "wave training selection profile incumbent lacks measured speedup"
+            )
+
+    circuits = {
+        str(circuit["circuit_id"]): dict(circuit)
+        for circuit in dataset["circuits"]
+    }
+    calibration_cells: list[dict[str, Any]] = []
+    exhausted_cells: list[str] = []
+    for initial_cell in sorted(initial_cells, key=lambda item: str(item["cell_id"])):
+        cell = dict(initial_cell)
+        cell_id = str(cell["cell_id"])
+        circuit_id = str(cell["circuit_id"])
+        topology_id = str(cell["topology_id"])
+        circuit = circuits.get(circuit_id)
+        if circuit is None:
+            raise ValueError("adaptive calibration references an unknown circuit")
+        feasible = _wave_evaluation_pool(circuit, topology_id, contract)
+        by_id = {str(item["candidate_path_id"]): item for item in feasible}
+        greedy_id = str(cell["greedy_path_id"])
+        if greedy_id not in by_id:
+            raise ValueError("adaptive calibration cell lost its greedy candidate")
+        incumbent_id = selected_by_cell.get(cell_id)
+        if not isinstance(incumbent_id, str) or incumbent_id not in by_id:
+            raise ValueError("wave training selection profile incumbent is outside the fixed pool")
+        prior_ids: set[str] = set()
+        for prior_cells in prior_cell_maps:
+            prior_ids.update(
+                str(candidate_id)
+                for candidate_id in prior_cells[cell_id]["candidate_path_ids"]
+            )
+        if incumbent_id not in prior_ids:
+            raise ValueError("wave training selection profile incumbent was not measured")
+        prior_physical_ids = {
+            _wave_physical_plan_id(by_id[candidate_id], topology_id)
+            for candidate_id in prior_ids
+            if candidate_id in by_id
+        }
+        greedy = by_id[greedy_id]
+        ordered_new = sorted(
+            (
+                candidate
+                for candidate_id, candidate in by_id.items()
+                if candidate_id not in prior_ids
+                and _wave_physical_plan_id(candidate, topology_id)
+                not in prior_physical_ids
+            ),
+            key=lambda candidate: (
+                _wave_score(candidate, greedy, topology_id, weights),
+                str(candidate["candidate_path_id"]),
+            ),
+        )
+        new_id = (
+            str(ordered_new[0]["candidate_path_id"]) if ordered_new else None
+        )
+        roles = [
+            {"role": "greedy", "candidate_path_id": greedy_id},
+            {"role": "incumbent", "candidate_path_id": incumbent_id},
+            {"role": "new_fixed_pool_candidate", "candidate_path_id": new_id},
+        ]
+        selected: list[str] = []
+        selected_physical_ids: set[str] = set()
+        for role in roles:
+            candidate_id = role["candidate_path_id"]
+            if candidate_id is None:
+                continue
+            physical_id = _wave_physical_plan_id(by_id[candidate_id], topology_id)
+            if physical_id in selected_physical_ids:
+                continue
+            selected.append(candidate_id)
+            selected_physical_ids.add(physical_id)
+        if not selected or selected[0] != greedy_id:
+            raise ValueError("adaptive physical deduplication must retain greedy first")
+        exhausted = new_id is None
+        if exhausted:
+            exhausted_cells.append(cell_id)
+        calibration_cells.append(
+            {
+                "cell_id": cell_id,
+                "circuit_id": circuit_id,
+                "topology_id": topology_id,
+                "greedy_path_id": greedy_id,
+                "feature_model": cell.get("feature_model", asdict(model)),
+                "candidate_roles": roles,
+                "candidate_path_ids": selected,
+                "prior_candidate_path_ids": sorted(prior_ids),
+                "prior_physical_plan_ids": sorted(prior_physical_ids),
+                "no_more_candidate": exhausted,
+            }
+        )
+
+    result: dict[str, Any] = {
+        "schema_version": "upmem_path_calibration_candidate_set_v1",
+        "source_sha": dataset["source_sha"],
+        "candidate_set_sha256": candidate_sha,
+        "timing_used_for_selection": True,
+        "stage_id": WAVE_ADAPTIVE_STAGE,
+        "round_ordinal": round_ordinal,
+        "prior_stage_hashes": prior_hashes,
+        "selection_profile_sha256": profile_sha,
+        "selection_profile_model": asdict(model),
+        "selection_profile_source": "training_only_frozen_profile",
+        "selection_rule": "greedy_then_incumbent_then_best_score_unmeasured_fixed_pool",
+        "deduplicate_physical_choices": True,
+        "unused_deduplicated_slots_are_refilled": False,
+        "exhausted_cells": exhausted_cells,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": contract["cost_model_id"],
+        "inactive_score_features": ["E_num", "P_wram"],
+        "cells": calibration_cells,
+    }
+    output_path = Path(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(_canonical_bytes(result))
+    return result
+
+
+def _fit_wave_initial(
+    candidate_path: Path,
+    dataset: Mapping[str, Any],
+    calibration_path: Path,
+    runtime_path: Path,
+    output_dir: Path,
+    *,
+    samples: int,
+    seed: int,
+    model_form: str,
+    fit_splits: tuple[str, ...],
+) -> Any:
+    if fit_splits != ("training",):
+        raise ValueError("wave initial fitting accepts the training split only")
+    return fit_wave_stages(
+        candidate_path,
+        ((calibration_path, runtime_path),),
+        output_dir,
+        samples=samples,
+        seed=seed,
+        model_form=model_form,
+    )
+
+
+def fit_wave_stages(
+    candidate_path: Path,
+    stage_pairs: tuple[tuple[Path, Path], ...],
+    output_dir: Path,
+    *,
+    samples: int,
+    seed: int,
+    model_form: str = "six_term",
+) -> Any:
+    """Fit one initial and up to three explicit training wave stages."""
+
+    if model_form == "auto":
+        raise ValueError(
+            "wave model comparison is pending; choose six_term or grouped explicitly"
+        )
+    if model_form not in {"six_term", "grouped"}:
+        raise ValueError("wave model form must be six_term or grouped")
+    if not stage_pairs:
+        raise ValueError("wave fitting requires an initial calibration/runtime stage")
+    if len(stage_pairs) > WAVE_MAX_ADAPTIVE_ROUNDS + 1:
+        raise ValueError(
+            f"wave fitting accepts at most {WAVE_MAX_ADAPTIVE_ROUNDS} adaptive stages"
+        )
+    dataset = _mapping(
+        json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
+    )
+    contract = execution_contract(dataset)
+    if contract is None:
+        raise ValueError("wave fitting requires an explicit execution contract")
+    _validate_dataset_execution_contract(dataset, contract)
+
+    stage_values: list[dict[str, Any]] = []
+    stage_records: list[dict[str, Any]] = []
+    stage_calibration_hashes: list[str] = []
+    stage_runtime_hashes: list[str] = []
+    experiment_ids: set[str] = set()
+    run_ids: set[str] = set()
+    sample_ids: set[str] = set()
+    session_ids: set[str] = set()
+    merged_cells: dict[str, dict[str, Any]] = {}
+    initial_cell_signatures: dict[str, tuple[str, str, str]] | None = None
+    candidate_sha: str | None = None
+    candidate_source: str | None = None
+
+    for index, pair in enumerate(stage_pairs):
+        if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+            raise TypeError("each wave stage must be a (calibration_path, runtime_path) pair")
+        calibration_path, runtime_path = (Path(pair[0]), Path(pair[1]))
+        calibration = _wave_json_mapping(
+            calibration_path, "wave calibration candidate set"
+        )
+        runtime = _wave_json_mapping(runtime_path, "wave runtime calibration")
+        values = _wave_stage_fit_inputs(dataset, calibration, runtime)
+        calibration_sha = values["calibration_sha"]
+        if _file_sha256(calibration_path) != calibration_sha:
+            raise ValueError("wave calibration candidate set must use canonical JSON")
+        runtime_sha = _file_sha256(runtime_path)
+        if runtime_sha != _sha256_bytes(_canonical_bytes(runtime)):
+            raise ValueError("wave runtime calibration must use canonical JSON")
+        stage = values["stage"]
+        expected_stage_id = (
+            WAVE_INITIAL_STAGE if index == 0 else WAVE_ADAPTIVE_STAGE
+        )
+        expected_ordinal = index
+        if (
+            stage["stage_id"] != expected_stage_id
+            or stage["round_ordinal"] != expected_ordinal
+        ):
+            raise ValueError("wave stages must be initial then contiguous adaptive rounds")
+        if stage["prior_stage_hashes"] != stage_calibration_hashes:
+            raise ValueError("wave adaptive stage prior_stage_hashes do not match stage order")
+        if values["experiment_id"] in experiment_ids:
+            raise ValueError("wave stages must use distinct experiment_id values")
+        if values["run_id"] in run_ids:
+            raise ValueError("wave stages must use distinct run_id values")
+        if sample_ids.intersection(values["sample_ids"]):
+            raise ValueError("wave stages reuse sample identities")
+        if session_ids.intersection(values["session_ids"]):
+            raise ValueError("wave stages reuse session identities")
+        if candidate_sha is None:
+            candidate_sha = values["candidate_sha"]
+            candidate_source = values["candidate_source"]
+        elif (
+            values["candidate_sha"] != candidate_sha
+            or values["candidate_source"] != candidate_source
+        ):
+            raise ValueError("wave stages drift in candidate source or candidate set")
+
+        signatures = {
+            cell_id: (
+                str(cell["circuit_id"]),
+                str(cell["topology_id"]),
+                str(cell["greedy_path_id"]),
+            )
+            for cell_id, cell in values["cell_map"].items()
+        }
+        if initial_cell_signatures is None:
+            initial_cell_signatures = signatures
+        elif signatures != initial_cell_signatures:
+            raise ValueError("wave stages must preserve the exact training cell matrix")
+        for cell_id, cell in values["cells"].items():
+            previous = merged_cells.get(cell_id)
+            if previous is None:
+                merged_cells[cell_id] = {
+                    "cell_id": cell["cell_id"],
+                    "greedy_path_id": cell["greedy_path_id"],
+                    "raw_features": dict(cell["raw_features"]),
+                }
+                continue
+            if previous["greedy_path_id"] != cell["greedy_path_id"]:
+                raise ValueError("wave stages drift in greedy path identity")
+            for candidate_id, raw in cell["raw_features"].items():
+                if (
+                    candidate_id in previous["raw_features"]
+                    and previous["raw_features"][candidate_id] != raw
+                ):
+                    raise ValueError("wave stages drift in candidate wave features")
+                previous["raw_features"][candidate_id] = raw
+
+        experiment_ids.add(values["experiment_id"])
+        run_ids.add(values["run_id"])
+        sample_ids.update(values["sample_ids"])
+        session_ids.update(values["session_ids"])
+        stage_calibration_hashes.append(calibration_sha)
+        stage_runtime_hashes.append(runtime_sha)
+        stage_values.append(values)
+        stage_records.append(
+            {
+                **stage,
+                "experiment_id": values["experiment_id"],
+                "run_id": values["run_id"],
+                "round_id": values["round_id"],
+                "calibration_set_sha256": calibration_sha,
+                "runtime_table_sha256": runtime_sha,
+                "raw_artifact_sha256": values["artifact_hashes"],
+            }
+        )
+
+    assert candidate_sha is not None and candidate_source is not None
+    observations = [
+        row
+        for values in stage_values
+        for row in values["observations"]
+    ]
+    expected_rows = [
+        row
+        for values in stage_values
+        for row in values["expected_rows"]
+    ]
+    fit_function = _wave_fit_function()
+    result = fit_function(
+        merged_cells,
+        observations,
+        expected_rows,
+        split="training",
+        model_form=model_form,
+        seed=seed,
+        sample_count=samples,
+    )
+    contract = dict(contract)
+    preregistration_sha = _wave_lower_sha(
+        dataset.get("preregistration_sha256"), "preregistration_sha256", 64
+    )
+    source_sha = _wave_lower_sha(dataset.get("source_sha"), "source_sha", 40)
+    final_stage = stage_records[-1]
+    profile: dict[str, Any] = {
+        "schema_version": WAVE_CALIBRATION_PROFILE,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": contract,
+        "score_id": WAVE_COST_MODEL_ID,
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "numeric_policy": contract["numeric_policy"],
+        "normalization": WAVE_NORMALIZATION,
+        "source_sha": source_sha,
+        "source_sha_semantics": "candidate_generation_source_sha",
+        "candidate_generation_source_sha": source_sha,
+        "physical_execution_source_sha": EXECUTION_SOURCE,
+        "reporting_tool_source_sha": _source_sha(),
+        "preregistration_sha256": preregistration_sha,
+        "candidate_set_sha256": candidate_sha,
+        "calibration_set_sha256": stage_calibration_hashes[0],
+        "runtime_table_sha256": stage_runtime_hashes[0],
+        "stage_calibration_sha256": stage_calibration_hashes,
+        "stage_runtime_table_sha256": stage_runtime_hashes,
+        "stage_id": final_stage["stage_id"],
+        "round_ordinal": final_stage["round_ordinal"],
+        "experiment_id": final_stage["experiment_id"],
+        "round_id": final_stage["round_id"],
+        "prior_stage_hashes": list(final_stage["prior_stage_hashes"]),
+        "selection_profile_sha256": final_stage["selection_profile_sha256"],
+        "timing_used_for_selection": final_stage["timing_used_for_selection"],
+        "stage_count": len(stage_records),
+        "adaptive_round_count": len(stage_records) - 1,
+        "stage_metadata": stage_records,
+        "requested_model_form": model_form,
+        "fit_splits": ["training"],
+        "training_cell_ids": sorted(merged_cells),
+        "weights": result.weights.as_mapping(),
+        "feature_model": asdict(result.model),
+        "selected_path_ids": dict(result.selected_path_ids),
+        "cell_speedups": dict(result.cell_speedups),
+        "candidate_speedups": {
+            cell_id: dict(values)
+            for cell_id, values in result.candidate_speedups
+        },
+        "paired_observation_counts": [
+            list(value) for value in result.paired_observation_counts
+        ],
+        "geometric_mean_speedup": result.geometric_mean_speedup,
+        "worst_cell_speedup": result.worst_cell_speedup,
+        "minimum_cell_speedup": result.worst_cell_speedup,
+        "objective": result.objective,
+        "improved_cell_count": sum(
+            value > 1.0 for _, value in result.cell_speedups
+        ),
+        "weight_search_seed": seed,
+        "random_weight_samples": samples,
+        "evaluated_weight_vectors": result.evaluated_weight_vectors,
+        "weight_search_candidate_rows": 0,
+        "weight_search_candidates_semantics": "pure_wave_fitter_result",
+        "primary_objective": "geometric_mean_greedy_relative_speedup",
+    }
+    for field in ("workload_id", "workload_sha256", "workload_manifest_sha256"):
+        if field in dataset:
+            profile[field] = dataset[field]
+    output_dir.mkdir(parents=True, exist_ok=True)
+    profile_bytes = _canonical_bytes(profile)
+    (output_dir / "physical_speedup_fit_v1.json").write_bytes(profile_bytes)
+    (output_dir / "weight_search_summary.json").write_bytes(profile_bytes)
+    return result
+
+
 def fit(
     candidate_path: Path,
     calibration_path: Path,
@@ -1899,8 +4372,25 @@ def fit(
     model_form: str = "auto",
     fit_splits: tuple[str, ...] = ("training",),
 ) -> WeightFitResult:
-    dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
+    dataset = _mapping(
+        json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
+    )
+    contract = execution_contract(dataset)
+    if contract is not None:
+        return _fit_wave_initial(
+            candidate_path,
+            dataset,
+            calibration_path,
+            runtime_path,
+            output_dir,
+            samples=samples,
+            seed=seed,
+            model_form=model_form,
+            fit_splits=fit_splits,
+        )
+    _reject_unadapted_wave_dataset(dataset, "weight fitting")
     calibration = json.loads(calibration_path.read_text(encoding="utf-8"))
+    _validate_calibration_execution_contract(calibration, None)
     candidate_set_sha = _sha256_bytes(_canonical_bytes(dataset))
     if calibration.get("candidate_set_sha256") != candidate_set_sha:
         raise ValueError("calibration candidate-set identity does not match dataset")
@@ -2114,6 +4604,1055 @@ def _model_from_profile(profile: dict[str, Any]) -> FeatureModelDecision:
     )
 
 
+def _wave_profile_for_evaluation(
+    profile_path: Path,
+    dataset: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    candidate_sha: str,
+) -> tuple[dict[str, Any], str, WeightVector, FeatureModelDecision]:
+    profile = _wave_json_mapping(profile_path, "wave frozen profile")
+    profile_hash = _sha256_bytes(_canonical_bytes(profile))
+    required_fields = {
+        "schema_version": WAVE_CALIBRATION_PROFILE,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": WAVE_COST_MODEL_ID,
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "numeric_policy": contract["numeric_policy"],
+        "normalization": WAVE_NORMALIZATION,
+        "source_sha": dataset.get("source_sha"),
+        "candidate_generation_source_sha": dataset.get("source_sha"),
+        "physical_execution_source_sha": contract["execution_source"],
+        "candidate_set_sha256": candidate_sha,
+        "fit_splits": ["training"],
+    }
+    for field, value in required_fields.items():
+        if profile.get(field) != value:
+            raise ValueError(f"wave frozen profile has a mismatched {field}")
+    source_sha = _wave_lower_sha(dataset.get("source_sha"), "source_sha", 40)
+    _wave_lower_sha(
+        profile.get("candidate_generation_source_sha"),
+        "candidate_generation_source_sha",
+        40,
+    )
+    _wave_lower_sha(
+        profile.get("physical_execution_source_sha"),
+        "physical_execution_source_sha",
+        40,
+    )
+    _wave_lower_sha(
+        dataset.get("preregistration_sha256"), "preregistration_sha256", 64
+    )
+    if profile.get("preregistration_sha256") != dataset["preregistration_sha256"]:
+        raise ValueError("wave frozen profile preregistration identity does not match dataset")
+    for field in ("calibration_set_sha256", "runtime_table_sha256"):
+        _wave_lower_sha(profile.get(field), field, 64)
+    provenance = validate_wave_stage_provenance(profile)
+    stage_count = provenance["stage_count"]
+    stage_metadata = provenance["stage_metadata"]
+    if "reporting_tool_source_sha" in profile:
+        _wave_lower_sha(
+            profile.get("reporting_tool_source_sha"), "reporting_tool_source_sha", 40
+        )
+    experiment_id = _wave_lower_sha(
+        profile.get("experiment_id"), "wave profile experiment_id", 64
+    )
+    final_stage_id = WAVE_INITIAL_STAGE if stage_count == 1 else WAVE_ADAPTIVE_STAGE
+    if profile.get("round_id") != _wave_stage_round_id(
+        final_stage_id, stage_count - 1, experiment_id
+    ):
+        raise ValueError("wave frozen profile round identity is inconsistent")
+    final_stage = stage_metadata[-1]
+    if profile.get("prior_stage_hashes") != final_stage["prior_stage_hashes"]:
+        raise ValueError("wave frozen profile prior stage hashes are inconsistent")
+    if profile.get("selection_profile_sha256") != final_stage[
+        "selection_profile_sha256"
+    ]:
+        raise ValueError("wave frozen profile selection profile binding is inconsistent")
+    if profile.get("timing_used_for_selection") != final_stage[
+        "timing_used_for_selection"
+    ]:
+        raise ValueError("wave frozen profile timing-selection state is inconsistent")
+    for field in _WAVE_PILOT_FIELDS:
+        if profile.get(field) not in (None, False, "", [], {}):
+            raise ValueError("wave frozen profile contains migrated pilot weights or profile")
+    if profile.get("requested_model_form") not in {"six_term", "grouped"}:
+        raise ValueError("wave frozen profile requires an explicit model form")
+    try:
+        model = _model_from_profile(profile)
+    except (KeyError, TypeError, ValueError, IndexError) as exc:
+        raise ValueError("wave frozen profile feature model is invalid") from exc
+    if model.mode != profile["requested_model_form"] or not model.active_features:
+        raise ValueError("wave frozen profile model form is inconsistent")
+    if model.mode == "six_term":
+        allowed = set(FEATURE_NAMES[:4])
+    else:
+        allowed = set(GROUP_FEATURE_NAMES)
+    if not set(model.active_features) <= allowed:
+        raise ValueError("wave frozen profile activates an unsupported feature")
+    raw_weights = profile.get("weights")
+    if not isinstance(raw_weights, dict) or set(raw_weights) != set(FEATURE_NAMES):
+        raise ValueError("wave frozen profile weights must contain six canonical features")
+    for feature in ("E_num", "P_wram"):
+        value = raw_weights[feature]
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or value != 0:
+            raise ValueError(f"wave frozen profile {feature} weight must be zero")
+    try:
+        weights = WeightVector.from_values(
+            raw_weights, inactive=("E_num", "P_wram")
+        )
+    except (KeyError, TypeError, ValueError) as exc:
+        raise ValueError("wave frozen profile weights are invalid") from exc
+    if weights.numeric != 0.0 or weights.wram != 0.0:
+        raise ValueError("wave frozen profile E_num and P_wram weights must be zero")
+    if model.mode == "six_term":
+        if any(
+            float(raw_weights[feature]) != 0.0 and feature not in model.active_features
+            for feature in FEATURE_NAMES
+        ):
+            raise ValueError("wave frozen profile assigns weight to an inactive feature")
+    else:
+        grouped = {
+            "movement": weights.host_dpu + weights.mram_wram,
+            "compute": weights.dpu_work,
+            "coordination": weights.sync,
+        }
+        if any(value != 0.0 and feature not in model.active_features
+               for feature, value in grouped.items()):
+            raise ValueError("wave frozen profile assigns weight to an inactive feature")
+        if not math.isclose(
+            weights.host_dpu,
+            weights.mram_wram,
+            rel_tol=0.0,
+            abs_tol=1.0e-12,
+        ):
+            raise ValueError("wave grouped profile requires equal-half movement weights")
+    if profile.get("source_sha") != source_sha:
+        raise ValueError("wave frozen profile source does not match dataset")
+    return profile, profile_hash, weights, model
+
+
+def _wave_evaluation_pool(
+    circuit: Mapping[str, Any],
+    topology_id: str,
+    contract: Mapping[str, Any],
+) -> tuple[dict[str, Any], ...]:
+    candidates = circuit.get("candidates")
+    if not isinstance(candidates, list):
+        raise ValueError("wave evaluation circuit must contain candidates")
+    feasible: list[dict[str, Any]] = []
+    for candidate_value in candidates:
+        candidate = dict(_mapping(candidate_value, "wave evaluation candidate"))
+        matches = [
+            item for item in candidate.get("topologies", [])
+            if isinstance(item, Mapping) and item.get("topology_id") == topology_id
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"wave candidate {candidate.get('candidate_path_id')} must have one {topology_id} topology"
+            )
+        topology = dict(matches[0])
+        if topology.get("feasible") is not True:
+            continue
+        topology_spec = _mapping(topology.get("topology"), "wave topology resources")
+        _wave_topology_resources(topology_id, topology_spec)
+        admission = _mapping(
+            topology.get("resource_admission"), "wave resource admission"
+        )
+        if admission.get("collection_resource_admission_passed") is not True:
+            raise ValueError("wave evaluation candidate lacks passed resource admission")
+        memory = _mapping(topology.get("memory_admission"), "wave memory admission")
+        estimate = memory.get("declared_executor_memory_estimate_bytes")
+        budget = memory.get("configured_budget_bytes")
+        reserve = memory.get("configured_reserve_bytes")
+        required = memory.get("required_bytes")
+        if any(
+            isinstance(value, bool) or not isinstance(value, int) or value < 0
+            for value in (estimate, budget, reserve, required)
+        ):
+            raise ValueError("wave evaluation memory admission facts are invalid")
+        if (
+            memory.get("passed") is not True
+            or required != estimate + reserve
+            or required > budget
+            or topology.get("host_memory_estimate_bytes") != estimate
+        ):
+            raise ValueError("wave evaluation candidate lacks passed memory admission")
+        facts = _wave_facts_from_record(candidate, topology_id)
+        if topology.get("features") != facts["raw"].as_mapping():
+            raise ValueError("wave evaluation raw features do not match wave facts")
+        feasible.append(candidate)
+    if not feasible:
+        raise ValueError(f"no admitted wave candidates for {circuit.get('circuit_id')}/{topology_id}")
+    greedy = [candidate for candidate in feasible if candidate.get("is_greedy") is True]
+    if len(greedy) != 1:
+        raise ValueError(
+            f"wave evaluation requires exactly one feasible greedy candidate for "
+            f"{circuit.get('circuit_id')}/{topology_id}"
+        )
+    return tuple(feasible)
+
+
+def _wave_normalized_configuration(path: Path) -> tuple[dict[str, Any], str]:
+    """Load the archived YAML through the canonical experiment validator."""
+
+    normalized = json.loads(canonical_json(load_experiment_config(path)))
+    normalized_mapping = dict(_mapping(normalized, "normalized physical configuration"))
+    return normalized_mapping, _sha256_bytes(_canonical_bytes(normalized_mapping))
+
+
+def _wave_sha256sums(archive_root: Path) -> dict[str, str]:
+    """Read the fixed archive checksum file without mixing binary identities."""
+
+    path = archive_root / "SHA256SUMS"
+    try:
+        lines = path.read_text(encoding="ascii").splitlines()
+    except (OSError, UnicodeDecodeError) as exc:
+        raise ValueError("frozen preregistration SHA256SUMS is unreadable") from exc
+    checksums: dict[str, str] = {}
+    for line_number, line in enumerate(lines, start=1):
+        parts = line.split(maxsplit=1)
+        if len(parts) != 2:
+            raise ValueError(f"frozen preregistration SHA256SUMS line {line_number} is invalid")
+        digest = _wave_lower_sha(
+            parts[0], f"frozen preregistration checksum line {line_number}", 64
+        )
+        name = parts[1].strip()
+        if name.startswith("*"):
+            name = name[1:]
+        while name.startswith("./"):
+            name = name[2:]
+        if name.startswith("preregistration/"):
+            name = name[len("preregistration/"):]
+        if name in checksums:
+            raise ValueError(f"frozen preregistration SHA256SUMS duplicates {name}")
+        checksums[name] = digest
+    required = {"physical.yml", "physical.yml.provenance.json", "binary_sha256.json"}
+    if not required <= set(checksums):
+        missing = sorted(required - set(checksums))
+        raise ValueError(
+            "frozen preregistration SHA256SUMS lacks required files: "
+            f"{', '.join(missing)}"
+        )
+    return checksums
+
+
+def _wave_private_checksum(
+    checksums: Mapping[str, str], filename: str, path: Path
+) -> str:
+    digest = checksums.get(filename)
+    if digest is None:
+        raise ValueError(f"frozen preregistration checksum manifest lacks {filename}")
+    actual = _file_sha256(path)
+    if digest != actual:
+        raise ValueError(f"frozen preregistration checksum mismatch: {filename}")
+    return actual
+
+
+def _wave_private_archive(
+    raw_root: Path,
+    provenance_path: Path,
+    manifest: Mapping[str, Any],
+) -> dict[str, Any]:
+    """Verify the fixed prelaunch archive used by the physical runner."""
+
+    archive_root = raw_root.parent / "preregistration"
+    configuration_path = archive_root / "physical.yml"
+    archived_provenance_path = archive_root / "physical.yml.provenance.json"
+    binary_manifest_path = archive_root / "binary_sha256.json"
+    checksums_path = archive_root / "SHA256SUMS"
+    for path in (
+        configuration_path,
+        archived_provenance_path,
+        binary_manifest_path,
+        checksums_path,
+    ):
+        if not path.is_file():
+            raise ValueError(f"frozen preregistration archive lacks {path.name}")
+    supplied_path = Path(provenance_path)
+    try:
+        supplied_bytes = supplied_path.read_bytes()
+        archived_bytes = archived_provenance_path.read_bytes()
+    except OSError as exc:
+        raise ValueError("wave pretest provenance sidecar is unreadable") from exc
+    if supplied_bytes != archived_bytes:
+        raise ValueError(
+            "wave pretest provenance must be the fixed archived physical.yml sidecar"
+        )
+    provenance = _wave_json_mapping(
+        archived_provenance_path, "wave physical configuration provenance"
+    )
+    if archived_bytes != _canonical_bytes(provenance):
+        raise ValueError("wave physical configuration provenance is not canonical JSON")
+    checksums = _wave_sha256sums(archive_root)
+    binary_manifest = _load_frozen_wave_binary_manifest(raw_root)
+    private_hashes = {
+        "physical.yml": _wave_private_checksum(
+            checksums, "physical.yml", configuration_path
+        ),
+        "physical.yml.provenance.json": _wave_private_checksum(
+            checksums, "physical.yml.provenance.json", archived_provenance_path
+        ),
+        "binary_sha256.json": _wave_private_checksum(
+            checksums, "binary_sha256.json", binary_manifest_path
+        ),
+        "SHA256SUMS": _file_sha256(checksums_path),
+    }
+    normalized, normalized_sha = _wave_normalized_configuration(configuration_path)
+    configuration_sha = _file_sha256(configuration_path)
+    if provenance.get("configuration_sha256") != configuration_sha:
+        raise ValueError("wave provenance configuration_sha256 does not match physical.yml")
+    if provenance.get("normalized_configuration_sha256") != normalized_sha:
+        raise ValueError(
+            "wave provenance normalized_configuration_sha256 does not match physical.yml"
+        )
+    manifest_experiment = _mapping(
+        _mapping(manifest.get("configuration"), "manifest configuration").get("experiment"),
+        "manifest normalized experiment configuration",
+    )
+    manifest_normalized = json.loads(canonical_json(manifest_experiment))
+    if manifest_normalized != normalized:
+        raise ValueError(
+            "manifest.configuration.experiment does not match archived physical.yml"
+        )
+    manifest_normalized_sha = _sha256_bytes(_canonical_bytes(manifest_normalized))
+    if manifest_normalized_sha != normalized_sha:
+        raise ValueError("manifest normalized configuration hash does not match archive")
+    return {
+        "configuration_path": str(configuration_path),
+        "provenance_path": str(archived_provenance_path),
+        "binary_manifest_path": str(binary_manifest_path),
+        "configuration_sha256": configuration_sha,
+        "normalized_configuration_sha256": normalized_sha,
+        "binary_manifest": binary_manifest,
+        "checksums": checksums,
+        "private_hashes": private_hashes,
+        "provenance": provenance,
+    }
+
+
+def _validate_wave_calibration_archive_provenance(
+    archive: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    calibration: Mapping[str, Any],
+    stage_metadata: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    *,
+    candidate_set_sha: str,
+    candidate_source: str,
+    calibration_set_sha: str,
+) -> dict[str, Any]:
+    """Bind the archived sidecar to the exact calibration caller inputs."""
+
+    provenance = dict(
+        _mapping(archive.get("provenance"), "wave calibration archive provenance")
+    )
+    expected = {
+        "schema_version": "upmem_path_experiment_provenance_v1",
+        "source_sha": candidate_source,
+        "candidate_set_sha256": candidate_set_sha,
+        "preregistration_sha256": dataset.get("preregistration_sha256"),
+        "mode": "calibration",
+        "stage": dict(stage_metadata),
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": contract["cost_model_id"],
+        "numeric_policy": contract["numeric_policy"],
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "calibration_set_sha256": calibration_set_sha,
+    }
+    for field, value in expected.items():
+        if provenance.get(field) != value:
+            raise ValueError(
+                f"wave calibration archive provenance has a mismatched {field}"
+            )
+    _wave_lower_sha(provenance["source_sha"], "archive provenance source_sha", 40)
+    _wave_lower_sha(
+        provenance["candidate_set_sha256"],
+        "archive provenance candidate_set_sha256",
+        64,
+    )
+    _wave_lower_sha(
+        provenance["preregistration_sha256"],
+        "archive provenance preregistration_sha256",
+        64,
+    )
+    _wave_lower_sha(
+        provenance["calibration_set_sha256"],
+        "archive provenance calibration_set_sha256",
+        64,
+    )
+    optional_source = provenance.get("physical_execution_source_sha")
+    if optional_source is not None and optional_source != contract["execution_source"]:
+        raise ValueError(
+            "wave calibration archive provenance has a mismatched physical source"
+        )
+    _wave_stage_metadata(provenance["stage"], field="archive provenance stage")
+    if provenance["stage"] != dict(stage_metadata):
+        raise ValueError("wave calibration archive stage does not match calibration input")
+    if calibration.get("candidate_set_sha256") != candidate_set_sha:
+        raise ValueError("calibration candidate-set identity is not archive-bound")
+    return provenance
+
+
+def _wave_pretest_stage(
+    provenance: Mapping[str, Any],
+    *,
+    mode: str,
+    split: str,
+    profile_hash: str,
+) -> dict[str, Any]:
+    value = _mapping(provenance.get("stage"), "wave pretest provenance stage")
+    expected_stage_id = (
+        "development_confirmation" if mode == "confirmation" else split
+    )
+    required = {
+        "stage_id",
+        "round_ordinal",
+        "prior_stage_hashes",
+        "selection_profile_sha256",
+        "timing_used_for_selection",
+    }
+    if set(value) != required:
+        raise ValueError("wave pretest provenance stage tuple is incomplete")
+    if value["stage_id"] != expected_stage_id:
+        raise ValueError("wave pretest provenance stage does not match mode/split")
+    if (
+        isinstance(value["round_ordinal"], bool)
+        or not isinstance(value["round_ordinal"], int)
+        or value["round_ordinal"] != 0
+    ):
+        raise ValueError("wave pretest provenance stage round_ordinal must be zero")
+    if value["prior_stage_hashes"] != []:
+        raise ValueError("wave pretest provenance stage cannot have prior stages")
+    if value["selection_profile_sha256"] != profile_hash:
+        raise ValueError("wave pretest provenance stage profile hash is inconsistent")
+    if value["timing_used_for_selection"] is not False:
+        raise ValueError("wave pretest selection must be timing-independent")
+    return dict(value)
+
+
+def _wave_pretest_provenance(
+    provenance_path: Path,
+    provenance: Mapping[str, Any],
+    dataset: Mapping[str, Any],
+    contract: Mapping[str, Any],
+    *,
+    mode: str,
+    split: str,
+    candidate_sha: str,
+    profile_hash: str,
+    archive: Mapping[str, Any],
+) -> dict[str, Any]:
+    del provenance_path
+    expected = {
+        "schema_version": "upmem_path_experiment_provenance_v1",
+        "source_sha": dataset.get("source_sha"),
+        "candidate_set_sha256": candidate_sha,
+        "preregistration_sha256": dataset.get("preregistration_sha256"),
+        "mode": mode,
+        "selection_split": split,
+        "execution_target": "physical",
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": contract["cost_model_id"],
+        "numeric_policy": contract["numeric_policy"],
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "calibration_set_sha256": None,
+        "fitted_profile_sha256": profile_hash,
+    }
+    for field, value in expected.items():
+        if provenance.get(field) != value:
+            raise ValueError(f"wave pretest provenance has a mismatched {field}")
+    for field, length in (
+        ("source_sha", 40),
+        ("candidate_set_sha256", 64),
+        ("preregistration_sha256", 64),
+        ("configuration_sha256", 64),
+        ("normalized_configuration_sha256", 64),
+        ("fitted_profile_sha256", 64),
+    ):
+        _wave_lower_sha(provenance.get(field), f"wave provenance {field}", length)
+    if provenance["configuration_sha256"] != archive["configuration_sha256"]:
+        raise ValueError("wave provenance configuration hash is not archive-bound")
+    if provenance["normalized_configuration_sha256"] != archive[
+        "normalized_configuration_sha256"
+    ]:
+        raise ValueError("wave provenance normalized configuration hash is not archive-bound")
+    if not isinstance(provenance.get("profile_path"), str) or not provenance["profile_path"]:
+        raise ValueError("wave pretest provenance lacks profile_path")
+    selection_path = provenance.get("selection_path")
+    if mode == "confirmation" and selection_path is not None:
+        raise ValueError("confirmation provenance must not name a selection artifact")
+    if mode == "evaluation" and (
+        not isinstance(selection_path, str) or not selection_path
+    ):
+        raise ValueError("evaluation provenance requires selection_path")
+    selected = provenance.get("selected")
+    roles = provenance.get("selection_roles")
+    if not isinstance(selected, list) or not selected:
+        raise ValueError("wave pretest provenance lacks selected paths")
+    if not isinstance(roles, list) or not roles:
+        raise ValueError("wave pretest provenance lacks selection roles")
+    _wave_pretest_stage(provenance, mode=mode, split=split, profile_hash=profile_hash)
+    return dict(provenance)
+
+
+def _wave_pretest_selection(
+    dataset: Mapping[str, Any],
+    provenance: Mapping[str, Any],
+    profile: Mapping[str, Any],
+    weights: WeightVector,
+    model: FeatureModelDecision,
+    contract: Mapping[str, Any],
+    *,
+    mode: str,
+    split: str,
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    circuits = {
+        str(item["circuit_id"]): dict(_mapping(item, "wave pretest circuit"))
+        for item in dataset["circuits"]
+    }
+    expected_circuits = {
+        circuit_id for circuit_id, circuit in circuits.items()
+        if circuit.get("split") == split
+    }
+    selected_by_key: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for value in provenance["selected"]:
+        item = _mapping(value, "wave pretest selected path")
+        circuit_id = item.get("circuit_id")
+        topology_id = item.get("topology_id")
+        candidate_id = item.get("candidate_path_id")
+        if not all(isinstance(value, str) for value in (circuit_id, topology_id, candidate_id)):
+            raise ValueError("wave pretest selected path identity is invalid")
+        key = (circuit_id, topology_id, candidate_id)
+        if key in selected_by_key:
+            raise ValueError("wave pretest selected paths contain duplicates")
+        if circuit_id not in circuits or circuits[circuit_id].get("split") != split:
+            raise ValueError("wave pretest selected path has a mismatched circuit split")
+        if topology_id not in WAVE_TOPOLOGY_RESOURCES:
+            raise ValueError("wave pretest selected path has an unsupported topology")
+        for field in ("candidate_path_id", "logical_plan_id", "physical_plan_id"):
+            _wave_lower_sha(item.get(field), f"selected {field}", 64)
+        candidate = next(
+            (
+                dict(_mapping(candidate_value, "wave pretest candidate"))
+                for candidate_value in circuits[circuit_id]["candidates"]
+                if isinstance(candidate_value, Mapping)
+                and candidate_value.get("candidate_path_id") == candidate_id
+            ),
+            None,
+        )
+        if candidate is None:
+            raise ValueError("wave pretest selected path is outside candidate dataset")
+        if item["logical_plan_id"] != candidate.get("logical_plan_id"):
+            raise ValueError("wave pretest selected logical-plan identity is inconsistent")
+        topology = next(
+            (
+                dict(_mapping(topology_value, "wave pretest topology"))
+                for topology_value in candidate.get("topologies", [])
+                if isinstance(topology_value, Mapping)
+                and topology_value.get("topology_id") == topology_id
+            ),
+            None,
+        )
+        if topology is None or item["physical_plan_id"] != topology.get("physical_plan_id"):
+            raise ValueError("wave pretest selected physical-plan identity is inconsistent")
+        selected_by_key[key] = {"selected": dict(item), "candidate": candidate, "topology": topology}
+    if {key[0] for key in selected_by_key} != expected_circuits:
+        raise ValueError("wave pretest provenance does not cover the requested split")
+
+    role_by_key: dict[tuple[str, str, str], set[str]] = {}
+    for value in provenance["selection_roles"]:
+        item = _mapping(value, "wave pretest selection role")
+        values = (item.get("circuit_id"), item.get("topology_id"), item.get("candidate_path_id"))
+        if not all(isinstance(value, str) for value in values):
+            raise ValueError("wave pretest selection role identity is invalid")
+        key = values
+        role_values = item.get("roles")
+        if not isinstance(role_values, list) or not role_values or len(set(role_values)) != len(role_values):
+            raise ValueError("wave pretest selection roles are invalid")
+        if key not in selected_by_key:
+            raise ValueError("wave pretest role is outside selected paths")
+        if key in role_by_key:
+            raise ValueError("wave pretest selection roles contain duplicates")
+        role_by_key[key] = set(role_values)
+    if set(role_by_key) != set(selected_by_key):
+        raise ValueError("wave pretest roles do not cover selected paths exactly")
+    expected_role_names = {"greedy", "upmem_selected"} if mode == "confirmation" else {
+        "greedy", "minimum_flops", "upmem_selected"
+    }
+
+    expected: dict[tuple[str, str, str], dict[str, Any]] = {}
+    profile_selected = profile.get("selected_path_ids")
+    profile_measured = profile.get("candidate_speedups")
+    for (circuit_id, topology_id), cell_items in sorted(
+        ((key[:2], value) for key, value in selected_by_key.items()),
+        key=lambda value: value[0],
+    ):
+        del cell_items
+        circuit = circuits[circuit_id]
+        pool = _wave_evaluation_pool(circuit, topology_id, contract)
+        by_id = {str(item["candidate_path_id"]): item for item in pool}
+        greedy = [item for item in pool if item.get("is_greedy") is True]
+        if len(greedy) != 1:
+            raise ValueError("wave pretest requires exactly one feasible greedy candidate")
+        greedy_id = str(greedy[0]["candidate_path_id"])
+        cell_id = f"{circuit_id}:{topology_id}"
+        if mode == "confirmation":
+            if not isinstance(profile_measured, Mapping) or not isinstance(profile_selected, Mapping):
+                raise ValueError("confirmation requires frozen measured-pool profile fields")
+            measured_ids = profile_measured.get(cell_id)
+            if not isinstance(measured_ids, Mapping) or not measured_ids or not set(measured_ids) <= set(by_id):
+                raise ValueError("confirmation profile measured pool is invalid")
+            measured_candidates = [by_id[str(path_id)] for path_id in sorted(measured_ids)]
+            if greedy_id not in {str(item["candidate_path_id"]) for item in measured_candidates}:
+                raise ValueError("confirmation profile measured pool lacks greedy")
+            frozen_selected = profile_selected.get(cell_id)
+            expected_score_id = min(
+                (
+                    (_wave_score(item, greedy[0], topology_id, weights), str(item["candidate_path_id"]))
+                    for item in measured_candidates
+                ),
+                key=lambda value: (value[0], value[1]),
+            )[1]
+            if frozen_selected != expected_score_id:
+                raise ValueError("confirmation path does not match frozen pretest profile")
+        else:
+            flop_id = str(min(
+                pool,
+                key=lambda item: (
+                    _mapping(item.get("conventional_features"), "wave conventional features")["flops"],
+                    str(item["candidate_path_id"]),
+                ),
+            )["candidate_path_id"])
+            expected_score_id = min(
+                (
+                    (_wave_score(item, greedy[0], topology_id, weights), str(item["candidate_path_id"]))
+                    for item in pool
+                ),
+                key=lambda value: (value[0], value[1]),
+            )[1]
+        expected_role_ids = {
+            "greedy": greedy_id,
+            "upmem_selected": expected_score_id,
+        }
+        if mode == "evaluation":
+            expected_role_ids["minimum_flops"] = flop_id
+        expected_cell_keys = {
+            (circuit_id, topology_id, candidate_id)
+            for candidate_id in expected_role_ids.values()
+        }
+        actual_cell_keys = {
+            key for key in selected_by_key if key[:2] == (circuit_id, topology_id)
+        }
+        if actual_cell_keys != expected_cell_keys:
+            raise ValueError("wave pretest selected paths do not match frozen role set")
+        actual_roles = {
+            role for key in actual_cell_keys for role in role_by_key[key]
+        }
+        if actual_roles != expected_role_names:
+            raise ValueError("wave pretest selection roles are incomplete")
+        for role, candidate_id in expected_role_ids.items():
+            if role_by_key[(circuit_id, topology_id, candidate_id)] != {
+                role for role, expected_id in expected_role_ids.items() if expected_id == candidate_id
+            }:
+                raise ValueError("wave pretest role identity is inconsistent")
+        for candidate_id in sorted(expected_role_ids.values()):
+            item = selected_by_key[(circuit_id, topology_id, candidate_id)]
+            expected[(circuit_id, topology_id, candidate_id)] = {
+                "cell_id": cell_id,
+                "circuit": circuit,
+                "candidate": item["candidate"],
+                "topology": item["topology"],
+                "greedy_path_id": greedy_id,
+            }
+    return expected
+
+
+def extract_wave_pretest(
+    raw_dir: Path,
+    candidate_path: Path,
+    provenance_path: Path,
+    profile_path: Path,
+    output_dir: Path,
+    *,
+    mode: str,
+    split: str,
+) -> dict[str, Any]:
+    """Extract physical 1+5 confirmation or held-out wave observations."""
+
+    if mode not in {"confirmation", "evaluation"}:
+        raise ValueError("wave pretest mode must be confirmation or evaluation")
+    if (mode == "confirmation" and split != "training") or (
+        mode == "evaluation" and split not in {"validation", "test"}
+    ):
+        raise ValueError("wave pretest mode and split are incompatible")
+    dataset = _wave_json_mapping(candidate_path, "wave candidate dataset")
+    contract = execution_contract(dataset)
+    if contract is None:
+        raise ValueError("wave pretest extraction requires an explicit execution contract")
+    _validate_dataset_execution_contract(dataset, contract)
+    candidate_sha = _sha256_bytes(_canonical_bytes(dataset))
+    profile, profile_hash, weights, model = _wave_profile_for_evaluation(
+        profile_path, dataset, contract, candidate_sha
+    )
+    if _file_sha256(profile_path) != profile_hash:
+        raise ValueError("wave frozen profile must use canonical JSON")
+    manifest, samples, sessions = load_artifacts(raw_dir)
+    archive = _wave_private_archive(Path(raw_dir), provenance_path, manifest)
+    provenance = _wave_pretest_provenance(
+        provenance_path,
+        archive["provenance"],
+        dataset,
+        contract,
+        mode=mode,
+        split=split,
+        candidate_sha=candidate_sha,
+        profile_hash=profile_hash,
+        archive=archive,
+    )
+    expected = _wave_pretest_selection(
+        dataset,
+        provenance,
+        profile,
+        weights,
+        model,
+        contract,
+        mode=mode,
+        split=split,
+    )
+    physical_source, run_id, manifest_contract = _manifest_calibration_contract(
+        manifest,
+        expected,
+        contract,
+        archive["binary_manifest"],
+        measurement_blocks=WAVE_PRETEST_MEASUREMENT_BLOCKS,
+        bind_stage_metadata=False,
+    )
+    experiment_id = manifest_contract["experiment_id"]
+    round_id = f"{provenance['stage']['stage_id']}:{experiment_id}"
+    sessions_by_id: dict[str, Mapping[str, Any]] = {}
+    for session in sessions:
+        session_id = session.get("session_instance_id")
+        if not isinstance(session_id, str) or session_id in sessions_by_id:
+            raise ValueError("wave pretest sessions must have unique identities")
+        sessions_by_id[session_id] = session
+    expected_count = len(expected) * (1 + WAVE_PRETEST_MEASUREMENT_BLOCKS)
+    if len(samples) != expected_count or len(sessions) != expected_count:
+        raise ValueError("wave pretest evidence count does not match the exact 1+5 set")
+    raw_root = Path(raw_dir)
+    raw_hashes = {
+        "manifest": _file_sha256(raw_root / "manifest.json"),
+        "samples": _file_sha256(raw_root / "samples.jsonl"),
+        "sessions": _file_sha256(raw_root / "sessions.jsonl"),
+        "rank_paths": manifest_contract["environment"].get("requested_rank_paths", []),
+    }
+    seen: set[tuple[str, str, int, str]] = set()
+    seen_sessions: set[str] = set()
+    rows: list[dict[str, Any]] = []
+    observations: list[dict[str, Any]] = []
+    for sample in samples:
+        if sample.get("experiment_id") != experiment_id or sample.get("run_id") != run_id:
+            raise ValueError("wave pretest sample experiment/run identity does not match manifest")
+        case_id = sample.get("case_id")
+        route_id = sample.get("route_id")
+        plan_id = sample.get("plan_id")
+        if not isinstance(case_id, str) or not isinstance(route_id, str):
+            raise ValueError("wave pretest sample case/route identity is invalid")
+        if not isinstance(plan_id, str) or not plan_id.startswith("path_"):
+            raise ValueError("wave pretest sample plan identity is invalid")
+        candidate_id = plan_id.removeprefix("path_")
+        expected_item = expected.get((case_id, route_id, candidate_id))
+        if expected_item is None:
+            raise ValueError("wave pretest sample is outside the exact selected path set")
+        attempt = sample.get("attempt_kind")
+        block = sample.get("block_id")
+        if isinstance(block, bool) or not isinstance(block, int):
+            raise ValueError("wave pretest block identity must be an integer")
+        if (attempt, block) == ("warmup", 0):
+            pass
+        elif attempt == "measurement" and 1 <= block <= WAVE_PRETEST_MEASUREMENT_BLOCKS:
+            pass
+        else:
+            raise ValueError("wave pretest sample is outside the exact 1+5 schedule")
+        key = (str(expected_item["cell_id"]), candidate_id, block, str(attempt))
+        if key in seen:
+            raise ValueError("wave pretest observations contain duplicate attempts")
+        seen.add(key)
+        if sample.get("status") != "success":
+            raise ValueError("wave pretest contains a non-success sample")
+        session_id = sample.get("session_instance_id")
+        if not isinstance(session_id, str) or session_id not in sessions_by_id:
+            raise ValueError("wave pretest sample references a missing session")
+        if session_id in seen_sessions:
+            raise ValueError("wave pretest requires one fresh session per attempt")
+        seen_sessions.add(session_id)
+        session = sessions_by_id[session_id]
+        for field in ("experiment_id", "run_id", "case_id", "plan_id", "route_id"):
+            if session.get(field) != sample.get(field):
+                raise ValueError(f"wave pretest sample/session {field} identity mismatch")
+        facts, terminal = _joined_backend_facts(
+            sample, session, allow_null_overrides=True
+        )
+        _require_backend_contract(
+            sample,
+            session,
+            facts,
+            expected_item["topology"],
+            contract,
+            manifest_contract["binary_bindings"].get(route_id),
+        )
+        validation = _mapping(sample.get("validation"), "wave pretest validation")
+        if (
+            validation.get("policy_reference_applicable") is not True
+            or validation.get("policy_reference_passed") is not True
+        ):
+            raise ValueError("wave pretest sample lacks a passed policy replay")
+        identities = _mapping(sample.get("identities"), "wave pretest identities")
+        circuit = _mapping(expected_item["circuit"], "wave pretest circuit")
+        candidate = _mapping(expected_item["candidate"], "wave pretest candidate")
+        topology = _mapping(expected_item["topology"], "wave pretest topology")
+        identity_expected = {
+            "problem_id": circuit["problem_id"],
+            "tensor_network_structure_id": circuit["tensor_network_structure_id"],
+            "logical_plan_id": candidate["logical_plan_id"],
+            "physical_plan_id": topology["physical_plan_id"],
+        }
+        for field, value in identity_expected.items():
+            if identities.get(field) != value:
+                raise ValueError(f"wave pretest sample identity {field} does not match candidate")
+        for field, value in (
+            ("logical_plan_id", candidate["logical_plan_id"]),
+            ("physical_plan_id", topology["physical_plan_id"]),
+        ):
+            if facts.get(field) != value:
+                raise ValueError(f"wave pretest backend {field} does not match candidate")
+        binding = manifest_contract["identity_bindings"].get((case_id, plan_id, route_id))
+        if binding is None:
+            raise ValueError("wave pretest sample identity is outside manifest bindings")
+        for field in (
+            "problem_id", "tensor_network_structure_id", "logical_plan_id",
+            "physical_plan_id", "executable_id", "environment_id",
+            "validation_policy_id",
+        ):
+            if identities.get(field) != binding[field]:
+                raise ValueError(f"wave pretest sample identity {field} does not match manifest")
+        row = _calibration_row(
+            sample=sample,
+            session=session,
+            facts=facts,
+            terminal=terminal,
+            expected_item=expected_item,
+            physical_source=physical_source,
+            candidate_source=str(dataset["source_sha"]),
+            candidate_set_sha=candidate_sha,
+            calibration_set_sha=None,
+            raw_hashes=raw_hashes,
+            contract=contract,
+            round_id=round_id,
+        )
+        inclusive = row["session_open_s"] + row["total_wall_s"] + row["session_close_s"]
+        if not math.isfinite(inclusive) or inclusive <= 0.0:
+            raise ValueError("wave pretest session-inclusive time must be positive")
+        if row["session_inclusive_s"] != inclusive:
+            raise ValueError("wave pretest session-inclusive time is inconsistent")
+        rows.append(row)
+        observation = dict(row)
+        observation["raw_artifact_sha256"] = {
+            "manifest.json": raw_hashes["manifest"],
+            "samples.jsonl": raw_hashes["samples"],
+            "sessions.jsonl": raw_hashes["sessions"],
+        }
+        observations.append(observation)
+    expected_keys = {
+        (str(item["cell_id"]), candidate_id, block, attempt)
+        for (_case_id, _topology_id, candidate_id), item in expected.items()
+        for block, attempt in (
+            [(0, "warmup")]
+            + [
+                (index, "measurement")
+                for index in range(1, WAVE_PRETEST_MEASUREMENT_BLOCKS + 1)
+            ]
+        )
+    }
+    if seen != expected_keys:
+        raise ValueError("wave pretest observations do not match the exact 1+5 set")
+    if seen_sessions != set(sessions_by_id):
+        raise ValueError("wave pretest sessions do not match the exact sample set")
+    rows.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
+    observations.sort(key=lambda row: (row["cell_id"], row["candidate_path_id"], row["block"]))
+    private_provenance = {
+        "configuration_sha256": archive["configuration_sha256"],
+        "normalized_configuration_sha256": archive["normalized_configuration_sha256"],
+        "configuration_path": archive["configuration_path"],
+        "provenance_path": archive["provenance_path"],
+        "binary_manifest_path": archive["binary_manifest_path"],
+        "checksums": dict(archive["private_hashes"]),
+    }
+    result: dict[str, Any] = {
+        "schema_version": WAVE_PRETEST_SCHEMA,
+        "mode": mode,
+        "split": split,
+        "stage": dict(provenance["stage"]),
+        "round_id": round_id,
+        "source_sha": dataset["source_sha"],
+        "candidate_generation_source_sha": dataset["source_sha"],
+        "physical_execution_source_sha": physical_source,
+        "candidate_set_sha256": candidate_sha,
+        "calibration_set_sha256": None,
+        "fitted_profile_sha256": profile_hash,
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": contract["cost_model_id"],
+        "numeric_policy": contract["numeric_policy"],
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "normalization": WAVE_NORMALIZATION,
+        "experiment_id": experiment_id,
+        "run_id": run_id,
+        "collection": {
+            "warmup_blocks": 1,
+            "measurement_blocks": WAVE_PRETEST_MEASUREMENT_BLOCKS,
+            "blocks": list(range(WAVE_PRETEST_MEASUREMENT_BLOCKS + 1)),
+            "attempts_per_candidate_cell": 1 + WAVE_PRETEST_MEASUREMENT_BLOCKS,
+        },
+        "expected_cell_count": len({item["cell_id"] for item in expected.values()}),
+        "expected_candidate_cell_count": len(expected),
+        "sample_count": len(samples),
+        "session_count": len(sessions),
+        "all_successful_physical_sessions": True,
+        "all_resource_admission_passed": True,
+        "all_accuracy_qualified": True,
+        "all_policy_replays_passed": True,
+        "fallback_used": False,
+        "timing_used_for_selection": False,
+        "raw_artifact_sha256": {
+            "manifest.json": raw_hashes["manifest"],
+            "samples.jsonl": raw_hashes["samples"],
+            "sessions.jsonl": raw_hashes["sessions"],
+        },
+        "private_provenance": private_provenance,
+        "execution_provenance": dict(provenance),
+        "binary_bindings": manifest_contract["binary_bindings"],
+        "environment": manifest_contract["environment"],
+        "selected": [dict(item) for item in provenance["selected"]],
+        "selection_roles": [dict(item) for item in provenance["selection_roles"]],
+        "raw_samples": [dict(item) for item in samples],
+        "raw_sessions": [dict(item) for item in sessions],
+        "observations": observations,
+    }
+    output_dir = Path(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
+    _write_csv(
+        output_dir / "path_runtime_wave_pretest.csv", rows, WAVE_CALIBRATION_COLUMNS
+    )
+    (output_dir / "path_runtime_wave_pretest.json").write_bytes(_canonical_bytes(result))
+    return result
+
+
+def _evaluate_wave_profile(
+    dataset: Mapping[str, Any],
+    profile_path: Path,
+    output_path: Path,
+    *,
+    split: str,
+) -> dict[str, Any]:
+    contract = execution_contract(dataset)
+    if contract is None:
+        raise ValueError("wave evaluation requires an explicit execution contract")
+    _validate_dataset_execution_contract(dataset, contract)
+    candidate_sha = _sha256_bytes(_canonical_bytes(dict(dataset)))
+    profile, profile_hash, weights, model = _wave_profile_for_evaluation(
+        profile_path, dataset, contract, candidate_sha
+    )
+    selections: list[dict[str, Any]] = []
+    for circuit in dataset["circuits"]:
+        if circuit.get("split") != split:
+            continue
+        for topology_id in WAVE_TOPOLOGY_RESOURCES:
+            feasible = _wave_evaluation_pool(circuit, topology_id, contract)
+            greedy = next(candidate for candidate in feasible if candidate["is_greedy"] is True)
+            selected_id, selected_score = min(
+                (
+                    (
+                        candidate["candidate_path_id"],
+                        _wave_score(candidate, greedy, topology_id, weights),
+                    )
+                    for candidate in feasible
+                ),
+                key=lambda item: (item[1], item[0]),
+            )
+            selected = next(
+                candidate
+                for candidate in feasible
+                if candidate["candidate_path_id"] == selected_id
+            )
+            flop_best = min(
+                feasible,
+                key=lambda candidate: (
+                    _mapping(
+                        candidate.get("conventional_features"),
+                        "wave conventional features",
+                    )["flops"],
+                    candidate["candidate_path_id"],
+                ),
+            )
+            selected_facts = _wave_facts_from_record(selected, topology_id)
+            greedy_facts = _wave_facts_from_record(greedy, topology_id)
+            selections.append(
+                {
+                    "circuit_id": circuit["circuit_id"],
+                    "split": split,
+                    "topology_id": topology_id,
+                    "greedy_path_id": greedy["candidate_path_id"],
+                    "minimum_flops_path_id": flop_best["candidate_path_id"],
+                    "upmem_selected_path_id": selected_id,
+                    "upmem_score": selected_score,
+                    "explanation": [
+                        row.as_mapping()
+                        for row in explain_score(
+                            selected_facts["raw"],
+                            greedy_facts["raw"],
+                            weights,
+                            model=model,
+                        )
+                    ],
+                }
+            )
+    if not selections:
+        raise ValueError(f"candidate dataset contains no {split} circuits")
+    result = {
+        "schema_version": "upmem_path_frozen_selection_v1",
+        "execution_profile": EXECUTION_PROFILE,
+        "execution_contract": dict(contract),
+        "score_id": WAVE_COST_MODEL_ID,
+        "primary_quantity": WAVE_PRIMARY_QUANTITY,
+        "timing_scope": CALIBRATION_TIMING_SCOPE,
+        "numeric_policy": contract["numeric_policy"],
+        "normalization": WAVE_NORMALIZATION,
+        "source_sha": dataset["source_sha"],
+        "source_sha_semantics": "candidate_generation_source_sha",
+        "candidate_generation_source_sha": dataset["source_sha"],
+        "physical_execution_source_sha": contract["execution_source"],
+        "reporting_tool_source_sha": profile.get("reporting_tool_source_sha"),
+        "preregistration_sha256": dataset["preregistration_sha256"],
+        "candidate_set_sha256": candidate_sha,
+        "fitted_profile_sha256": profile_hash,
+        "split": split,
+        "timing_used_for_selection": False,
+        "weights": profile["weights"],
+        "feature_model": profile["feature_model"],
+        "selections": selections,
+    }
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_bytes(_canonical_bytes(result))
+    return result
+
+
 def evaluate_frozen_profile(
     candidate_path: Path,
     profile_path: Path,
@@ -2125,7 +5664,17 @@ def evaluate_frozen_profile(
 
     if split not in {"validation", "test"}:
         raise ValueError("frozen-profile evaluation is limited to validation or test")
-    dataset = json.loads(candidate_path.read_text(encoding="utf-8"))
+    dataset = _mapping(
+        json.loads(candidate_path.read_text(encoding="utf-8")), "candidate dataset"
+    )
+    contract = execution_contract(dataset)
+    if contract is not None:
+        if split not in {"validation", "test"}:
+            raise ValueError("frozen-profile evaluation is limited to validation or test")
+        return _evaluate_wave_profile(
+            dataset, profile_path, output_path, split=split
+        )
+    _reject_unadapted_wave_dataset(dataset, "frozen-profile evaluation")
     profile = json.loads(profile_path.read_text(encoding="utf-8"))
     candidate_sha = _sha256_bytes(_canonical_bytes(dataset))
     if profile["candidate_set_sha256"] != candidate_sha:
@@ -2227,6 +5776,21 @@ def main() -> None:
         action="append",
         default=[],
     )
+    stages_parser = subparsers.add_parser("fit-wave-stages")
+    stages_parser.add_argument("--candidate-paths", type=Path, required=True)
+    stages_parser.add_argument(
+        "--stage",
+        nargs=2,
+        action="append",
+        metavar=("CALIBRATION", "RUNTIME"),
+        required=True,
+    )
+    stages_parser.add_argument("--output-dir", type=Path, required=True)
+    stages_parser.add_argument("--samples", type=int, default=100_000)
+    stages_parser.add_argument("--seed", type=int, default=20260903)
+    stages_parser.add_argument(
+        "--model-form", choices=("six_term", "grouped"), default="six_term"
+    )
     extract_parser = subparsers.add_parser(
         "extract-calibration", aliases=("extract",)
     )
@@ -2269,6 +5833,16 @@ def main() -> None:
             seed=args.seed,
             model_form=args.model_form,
             fit_splits=tuple(args.fit_split or ("training",)),
+        )
+        print(json.dumps({"weights": result.weights.as_mapping(), "geometric_mean_speedup": result.geometric_mean_speedup}, sort_keys=True))
+    elif args.command == "fit-wave-stages":
+        result = fit_wave_stages(
+            args.candidate_paths,
+            tuple((Path(calibration), Path(runtime)) for calibration, runtime in args.stage),
+            args.output_dir,
+            samples=args.samples,
+            seed=args.seed,
+            model_form=args.model_form,
         )
         print(json.dumps({"weights": result.weights.as_mapping(), "geometric_mean_speedup": result.geometric_mean_speedup}, sort_keys=True))
     elif args.command in {"extract-calibration", "extract"}:
