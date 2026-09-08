@@ -295,3 +295,35 @@ No corrected instance sizes or gate sequences have been adopted by this
 handoff. The existing 792-attempt ceiling is not permission to execute the
 unresolved workload. Source-backed replacements must pass the same software,
 numerical, memory, SDK and evidence gates before physical calibration.
+
+### QASM Preparation Support
+
+The private path-preparation scripts now accept a `qasm_file` definition:
+
+```json
+{
+  "kind": "qasm_file",
+  "name": null,
+  "path": "relative/to/implementation/source.qasm",
+  "parameters": {"qasm_sha256": "<64 lowercase hexadecimal characters>"}
+}
+```
+
+Relative source paths resolve from the implementation root, not the process
+working directory. The raw-byte hash is checked before and after parsing and
+again when the source is copied into the experiment bundle. Isolated Cotengra
+workers receive the complete definition and verify the same source. The input
+must already be an explicitly prepared unitary OpenQASM 2.0 file with one
+`qreg q[N]` and at most one `qelib1.inc` include; unsupported declarations,
+measurements, resets and classical control are rejected, not silently removed.
+
+Qualification copies each source to `qasm/<sha256>/<basename>` next to the
+generated config. The public config uses a relative path and empty parameters;
+the private hash remains in the dataset and preparation provenance. Copy the
+entire bundle, including this QASM subtree, for remote execution and bind all
+its bytes in the stage checksums. File paths and preparation hashes do not
+replace the existing canonical operation/problem/plan identities.
+
+This support uses the existing circuit parser and leaves the frozen executor,
+DPU code and public evidence schemas unchanged. It closes a preparation gap;
+it does not lift the workload-fidelity hold or adopt any replacement circuit.

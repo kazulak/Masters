@@ -45,6 +45,7 @@ from upmem_path_heuristic import (  # noqa: E402
     EXECUTION_PROFILE,
     WAVE_ADAPTIVE_STAGE,
     _circuit_from_definition,
+    _resolve_qasm_path,
     _validate_calibration_execution_contract,
     _validate_dataset_execution_contract,
     _require_wave_execution_coverage,
@@ -106,6 +107,35 @@ def _candidate_map(dataset: dict[str, Any]) -> dict[tuple[str, str], dict[str, A
 
 def _circuit_map(dataset: dict[str, Any]) -> dict[str, dict[str, Any]]:
     return {circuit["circuit_id"]: circuit for circuit in dataset["circuits"]}
+
+
+def _prepared_circuit_definition(
+    definition: Mapping[str, Any]
+) -> tuple[dict[str, Any], dict[str, str] | None]:
+    """Return public circuit fields and private staged-source identity."""
+
+    if definition.get("kind") != "qasm_file":
+        return {**dict(definition), "path": None}, None
+    _circuit_from_definition(definition)
+    source_path = _resolve_qasm_path(definition.get("path"))
+    parameters = dict(definition.get("parameters", {}))
+    digest = parameters.pop("qasm_sha256", None)
+    if not isinstance(digest, str):
+        raise ValueError("qasm_file source lacks its private qasm_sha256")
+    prepared_path = Path("qasm") / digest / source_path.name
+    return (
+        {
+            "kind": "qasm_file",
+            "name": None,
+            "path": prepared_path.as_posix(),
+            "parameters": parameters,
+        },
+        {
+            "source_path": str(source_path),
+            "prepared_path": prepared_path.as_posix(),
+            "qasm_sha256": digest,
+        },
+    )
 
 
 def _profile_model(profile: dict[str, Any]) -> FeatureModelDecision:
@@ -1312,10 +1342,15 @@ def prepare_config(
             "execution target is only configurable for evaluation mode"
         )
     selected = sorted(set(selected))
-    cases = {
-        circuit_id: {"circuit": {**circuit_map[circuit_id]["circuit"], "path": None}}
-        for circuit_id in sorted({item[0] for item in selected})
-    }
+    cases: dict[str, dict[str, Any]] = {}
+    qasm_sources: list[dict[str, str]] = []
+    for circuit_id in sorted({item[0] for item in selected}):
+        public_definition, source_binding = _prepared_circuit_definition(
+            circuit_map[circuit_id]["circuit"]
+        )
+        cases[circuit_id] = {"circuit": public_definition}
+        if source_binding is not None:
+            qasm_sources.append({"circuit_id": circuit_id, **source_binding})
     plans = {}
     matrix = []
     for circuit_id, topology_id, candidate_id in selected:
@@ -1410,6 +1445,24 @@ def prepare_config(
             route_id.removeprefix("upmem_") for route_id in item["route_ids"]
         ]
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    for binding in qasm_sources:
+        source_path = Path(binding["source_path"])
+        target_path = output_path.resolve().parent / binding["prepared_path"]
+        payload = source_path.read_bytes()
+        if hashlib.sha256(payload).hexdigest() != binding["qasm_sha256"]:
+            raise ValueError(
+                f"qasm_file source changed while preparing {binding['circuit_id']}"
+            )
+        if target_path.resolve() == source_path.resolve():
+            continue
+        if target_path.exists():
+            if target_path.read_bytes() != payload:
+                raise ValueError(
+                    f"qasm_file basename collision in output bundle: {target_path.name}"
+                )
+        else:
+            target_path.parent.mkdir(parents=True, exist_ok=True)
+            target_path.write_bytes(payload)
     output_path.write_text(
         yaml.safe_dump(config, sort_keys=False, allow_unicode=False), encoding="utf-8"
     )
@@ -1473,6 +1526,7 @@ def prepare_config(
             }
             for circuit_id, topology_id, candidate_id in selected
         ],
+        **({"qasm_source_bindings": qasm_sources} if qasm_sources else {}),
     }
     output_path.with_suffix(output_path.suffix + ".provenance.json").write_bytes(
         _canonical_bytes(provenance)

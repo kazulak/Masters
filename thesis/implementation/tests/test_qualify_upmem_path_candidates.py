@@ -11,6 +11,9 @@ import numpy as np
 import pytest
 import yaml
 
+from quantum_bench.circuits import load_circuit
+from quantum_bench.evidence import problem_id
+
 
 SCRIPT = Path(__file__).resolve().parents[1] / "scripts" / "qualify_upmem_path_candidates.py"
 SPEC = importlib.util.spec_from_file_location("qualify_upmem_path_candidates", SCRIPT)
@@ -428,6 +431,200 @@ def test_prepare_config_preserves_declared_circuit_kind(
     )
 
     assert config["cases"]["quest-edc"]["circuit"]["kind"] == "quest_compatible"
+
+
+def test_prepare_config_stages_qasm_and_reloads_same_problem_identity(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.qasm"
+    source.write_text(
+        "OPENQASM 2.0;\n"
+        'include "qelib1.inc";\n'
+        "qreg q[2];\n"
+        "h q[0];\n"
+        "cx q[0],q[1];\n",
+        encoding="utf-8",
+    )
+    definition = {
+        "kind": "qasm_file",
+        "name": None,
+        "path": str(source),
+        "parameters": {
+            "qasm_sha256": hashlib.sha256(source.read_bytes()).hexdigest()
+        },
+    }
+    private_spec = qualify._circuit_from_definition(definition)
+    private_problem_id = problem_id(qualify.make_simulation_job(private_spec))
+    candidate_id = "a" * 64
+    dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
+        "circuits": [
+            {
+                "circuit_id": "qasm-source",
+                "split": "validation",
+                "circuit": definition,
+                "problem_id": private_problem_id,
+                "candidates": [_candidate(candidate_id, greedy=True, seed=None, host=100)],
+            }
+        ],
+    }
+    dataset_path = tmp_path / "dataset.json"
+    selection_path = tmp_path / "selection.json"
+    profile_path = tmp_path / "profile.json"
+    output_path = tmp_path / "bundle" / "evaluation.yml"
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    selection_path.write_text("{}", encoding="utf-8")
+    profile_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        qualify,
+        "_evaluation_selection",
+        lambda **kwargs: (
+            [("qasm-source", "1dpu_t8", candidate_id)],
+            {("qasm-source", "1dpu_t8", candidate_id): ("greedy",)},
+            None,
+        ),
+    )
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, candidate: (object(), {}))
+
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        profile_path=profile_path,
+        output_path=output_path,
+        mode="evaluation",
+        split="validation",
+    )
+
+    digest = definition["parameters"]["qasm_sha256"]
+    prepared_path = f"qasm/{digest}/source.qasm"
+    public = config["cases"]["qasm-source"]["circuit"]
+    assert public == {
+        "kind": "qasm_file",
+        "name": None,
+        "path": prepared_path,
+        "parameters": {},
+    }
+    staged = output_path.parent / prepared_path
+    assert staged.read_bytes() == source.read_bytes()
+    provenance = json.loads(
+        output_path.with_suffix(output_path.suffix + ".provenance.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    assert provenance["qasm_source_bindings"] == [
+        {
+            "circuit_id": "qasm-source",
+            "source_path": str(source.resolve()),
+            "prepared_path": prepared_path,
+            "qasm_sha256": digest,
+        }
+    ]
+
+    loaded = qualify.load_experiment_config(output_path)
+    loaded_spec = load_circuit(loaded["cases"]["qasm-source"], output_path.parent)
+    assert problem_id(qualify.make_simulation_job(loaded_spec)) == private_problem_id
+    assert loaded["cases"]["qasm-source"]["circuit"]["name"] is None
+
+    relocated = tmp_path / "relocated" / "evaluation.yml"
+    relocated.parent.mkdir()
+    relocated.write_bytes(output_path.read_bytes())
+    relocated_staged = relocated.parent / prepared_path
+    relocated_staged.parent.mkdir(parents=True)
+    relocated_staged.write_bytes(staged.read_bytes())
+    relocated_config = qualify.load_experiment_config(relocated)
+    relocated_spec = load_circuit(relocated_config["cases"]["qasm-source"], relocated.parent)
+    assert problem_id(qualify.make_simulation_job(relocated_spec)) == private_problem_id
+
+    source.write_text("OPENQASM 2.0;\nqreg q[2];\nx q[0];\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="qasm_sha256"):
+        qualify.prepare_config(
+            dataset_path=dataset_path,
+            selection_path=selection_path,
+            profile_path=profile_path,
+            output_path=tmp_path / "changed" / "evaluation.yml",
+            mode="evaluation",
+            split="validation",
+        )
+
+
+def test_prepare_config_disambiguates_same_basename_qasm_sources(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    first = tmp_path / "first" / "source.qasm"
+    second = tmp_path / "second" / "source.qasm"
+    first.parent.mkdir()
+    second.parent.mkdir()
+    first.write_text("OPENQASM 2.0;\nqreg q[1];\nh q[0];\n", encoding="utf-8")
+    second.write_text("OPENQASM 2.0;\nqreg q[1];\nx q[0];\n", encoding="utf-8")
+
+    def definition(path: Path) -> dict[str, object]:
+        return {
+            "kind": "qasm_file",
+            "name": None,
+            "path": str(path),
+            "parameters": {"qasm_sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+        }
+
+    first_id = "a" * 64
+    second_id = "b" * 64
+    dataset = {
+        "source_sha": "1" * 40,
+        "preregistration_sha256": "2" * 64,
+        "circuits": [
+            {
+                "circuit_id": "first-qasm",
+                "split": "validation",
+                "circuit": definition(first),
+                "candidates": [_candidate(first_id, greedy=True, seed=None, host=100)],
+            },
+            {
+                "circuit_id": "second-qasm",
+                "split": "validation",
+                "circuit": definition(second),
+                "candidates": [_candidate(second_id, greedy=True, seed=None, host=100)],
+            },
+        ],
+    }
+    dataset_path = tmp_path / "dataset.json"
+    selection_path = tmp_path / "selection.json"
+    profile_path = tmp_path / "profile.json"
+    output_path = tmp_path / "bundle" / "evaluation.yml"
+    dataset_path.write_bytes(qualify._canonical_bytes(dataset))
+    selection_path.write_text("{}", encoding="utf-8")
+    profile_path.write_text("{}", encoding="utf-8")
+    monkeypatch.setattr(
+        qualify,
+        "_evaluation_selection",
+        lambda **kwargs: (
+            [
+                ("first-qasm", "1dpu_t8", first_id),
+                ("second-qasm", "1dpu_t8", second_id),
+            ],
+            {
+                ("first-qasm", "1dpu_t8", first_id): ("greedy",),
+                ("second-qasm", "1dpu_t8", second_id): ("greedy",),
+            },
+            None,
+        ),
+    )
+    monkeypatch.setattr(qualify, "_regenerate", lambda circuit, candidate: (object(), {}))
+
+    config = qualify.prepare_config(
+        dataset_path=dataset_path,
+        selection_path=selection_path,
+        profile_path=profile_path,
+        output_path=output_path,
+        mode="evaluation",
+        split="validation",
+    )
+
+    first_path = config["cases"]["first-qasm"]["circuit"]["path"]
+    second_path = config["cases"]["second-qasm"]["circuit"]["path"]
+    assert Path(first_path).name == Path(second_path).name == "source.qasm"
+    assert first_path != second_path
+    assert (output_path.parent / first_path).read_bytes() == first.read_bytes()
+    assert (output_path.parent / second_path).read_bytes() == second.read_bytes()
 
 
 @pytest.mark.parametrize("split", ("validation", "test"))

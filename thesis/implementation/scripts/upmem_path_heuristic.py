@@ -16,12 +16,17 @@ import math
 import multiprocessing
 from pathlib import Path
 import queue as queue_module
+import re
 import subprocess
 import sys
 import time
 from typing import Any
 
-from quantum_bench.circuits import builtin_circuit, quest_compatible_circuit
+from quantum_bench.circuits import (
+    builtin_circuit,
+    parse_openqasm2,
+    quest_compatible_circuit,
+)
 from quantum_bench.evidence import (
     canonical_json,
     load_artifacts,
@@ -30,7 +35,7 @@ from quantum_bench.evidence import (
 )
 from quantum_bench.experiment import load_experiment_config
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
-from quantum_bench.model import ContractNode, make_simulation_job
+from quantum_bench.model import ContractNode, make_simulation_job, validate_circuit_spec
 from quantum_bench.planning import plan_cotengra, plan_opt_einsum
 from quantum_bench.upmem.path_heuristic import (
     COST_MODEL_ID,
@@ -208,6 +213,52 @@ def _version(package: str) -> str:
         return "unavailable"
 
 
+def _resolve_qasm_path(path: object) -> Path:
+    if not isinstance(path, str) or not path.strip():
+        raise ValueError("qasm_file path must be a nonempty string")
+    candidate = Path(path).expanduser()
+    if not candidate.is_absolute():
+        candidate = ROOT / candidate
+    return candidate.resolve()
+
+
+def _qasm_source(definition: Mapping[str, Any]) -> tuple[Path, str]:
+    parameters = definition.get("parameters", {})
+    if not isinstance(parameters, Mapping):
+        raise ValueError("qasm_file circuit parameters must be an object")
+    if set(parameters) != {"qasm_sha256"}:
+        raise ValueError("qasm_file parameters must contain only qasm_sha256")
+    expected = parameters.get("qasm_sha256")
+    if (
+        not isinstance(expected, str)
+        or len(expected) != 64
+        or expected != expected.lower()
+        or any(character not in "0123456789abcdef" for character in expected)
+    ):
+        raise ValueError("qasm_file parameters require a lowercase qasm_sha256")
+    path = _resolve_qasm_path(definition.get("path"))
+    payload = path.read_bytes()
+    actual = _sha256_bytes(payload)
+    if actual != expected:
+        raise ValueError("qasm_file qasm_sha256 does not match source bytes")
+    # The legacy parser skips declarations; constrain this private input route.
+    lines = [line.split("//", 1)[0].strip() for line in payload.decode("utf-8").splitlines()]
+    lines = [line for line in lines if line]
+    if not lines or re.fullmatch(r"OPENQASM\s+2\.0\s*;", lines[0]) is None:
+        raise ValueError("qasm_file requires an OpenQASM 2.0 declaration")
+    if any(line.startswith("OPENQASM") for line in lines[1:]):
+        raise ValueError("qasm_file has duplicate or unsupported version declarations")
+    includes = [line for line in lines if line.startswith("include")]
+    if len(includes) > 1 or any(
+        re.fullmatch(r'include\s+"qelib1\.inc"\s*;', line) is None for line in includes
+    ):
+        raise ValueError("qasm_file only supports one optional qelib1.inc include")
+    registers = [line for line in lines if line.startswith("qreg")]
+    if len(registers) != 1 or re.fullmatch(r"qreg\s+q\[\d+\]\s*;", registers[0]) is None:
+        raise ValueError("qasm_file requires exactly one qreg q[N] declaration")
+    return path, expected
+
+
 def _circuit_from_definition(definition: Mapping[str, Any]) -> Any:
     """Construct the declared circuit kind without changing legacy defaults."""
 
@@ -218,10 +269,19 @@ def _circuit_from_definition(definition: Mapping[str, Any]) -> Any:
     parameters = definition.get("parameters", {})
     if not isinstance(kind, str) or not kind:
         raise ValueError("circuit definition kind must be a nonempty string")
-    if not isinstance(name, str) or not name:
-        raise ValueError("circuit definition name must be a nonempty string")
     if not isinstance(parameters, Mapping):
         raise ValueError("circuit definition parameters must be an object")
+    if kind == "qasm_file":
+        if name is not None:
+            raise ValueError("qasm_file circuit name must be null")
+        path, expected = _qasm_source(definition)
+        circuit = parse_openqasm2(path)
+        if _sha256_bytes(path.read_bytes()) != expected:
+            raise ValueError("qasm_file source changed while parsing")
+        validate_circuit_spec(circuit)
+        return circuit
+    if not isinstance(name, str) or not name:
+        raise ValueError("circuit definition name must be a nonempty string")
     normalized_parameters = dict(parameters)
     if kind == "builtin":
         return builtin_circuit(name, normalized_parameters)
@@ -596,15 +656,21 @@ def _cotengra_trial_worker(
     seed: int,
     queue: Any,
     circuit_kind: str = "builtin",
+    circuit_definition: Mapping[str, Any] | None = None,
 ) -> None:
     try:
-        circuit = _circuit_from_definition(
-            {
+        definition = (
+            dict(circuit_definition)
+            if circuit_definition is not None
+            else {
                 "kind": circuit_kind,
                 "name": circuit_name,
                 "parameters": circuit_parameters,
             }
         )
+        if isinstance(definition.get("parameters"), Mapping):
+            definition["parameters"] = dict(definition["parameters"])
+        circuit = _circuit_from_definition(definition)
         network, _ = lower_tensor_network(make_simulation_job(circuit))
         path, provenance = plan_cotengra(
             network,
@@ -626,6 +692,7 @@ def _isolated_cotengra_trial(
     objective: str,
     methods: str,
     seed: int,
+    circuit_definition: Mapping[str, Any] | None = None,
 ) -> tuple[Any, dict[str, str]]:
     # The supported UPMEM hosts are Linux. Fork keeps imports and immutable
     # circuit metadata copy-on-write while still releasing each optimizer tree
@@ -642,6 +709,7 @@ def _isolated_cotengra_trial(
             seed,
             queue,
             circuit_kind,
+            circuit_definition,
         ),
     )
     process.start()
@@ -699,11 +767,12 @@ def _candidate_paths(
                 raise ValueError("isolated trials require a circuit definition")
             candidate_path, provenance = _isolated_cotengra_trial(
                 circuit_kind=str(circuit_definition.get("kind", "builtin")),
-                circuit_name=str(circuit_definition["name"]),
+                circuit_name=str(circuit_definition.get("name")),
                 circuit_parameters=dict(circuit_definition["parameters"]),
                 objective=str(generation["cotengra_objective"]),
                 methods=str(generation["cotengra_method"]),
                 seed=seed,
+                circuit_definition=dict(circuit_definition),
             )
         else:
             candidate_path, provenance = plan_cotengra(

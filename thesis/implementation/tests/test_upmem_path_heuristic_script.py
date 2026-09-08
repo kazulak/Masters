@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 from copy import deepcopy
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -78,6 +79,122 @@ def test_unknown_circuit_kind_is_rejected() -> None:
         )
 
 
+def _qasm_definition(path: Path, content: str) -> dict[str, object]:
+    path.write_text(content, encoding="utf-8")
+    return {
+        "kind": "qasm_file",
+        "name": None,
+        "path": str(path),
+        "parameters": {"qasm_sha256": hashlib.sha256(path.read_bytes()).hexdigest()},
+    }
+
+
+def test_qasm_source_is_root_resolved_hash_bound_and_keeps_gate_order(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.qasm"
+    source.write_text(
+        "OPENQASM 2.0;\n"
+        'include "qelib1.inc";\n'
+        "qreg q[2];\n"
+        "h q[0];\n"
+        "x q[1];\n"
+        "cx q[0],q[1];\n",
+        encoding="utf-8",
+    )
+    definition = _qasm_definition(source, source.read_text(encoding="utf-8"))
+    definition["path"] = "source.qasm"
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+    spec = script._circuit_from_definition(definition)
+
+    assert [(item.gate, item.wires) for item in spec.operations] == [
+        ("h", (0,)),
+        ("x", (1,)),
+        ("cx", (0, 1)),
+    ]
+    original_problem_id = script.problem_id(script.make_simulation_job(spec))
+    source.write_text(
+        "OPENQASM 2.0;\n"
+        'include "qelib1.inc";\n'
+        "qreg q[2];\n"
+        "x q[1];\n"
+        "h q[0];\n"
+        "cx q[0],q[1];\n",
+        encoding="utf-8",
+    )
+    reordered = dict(definition)
+    reordered["parameters"] = dict(definition["parameters"])
+    reordered["parameters"]["qasm_sha256"] = hashlib.sha256(
+        source.read_bytes()
+    ).hexdigest()
+    reordered_spec = script._circuit_from_definition(reordered)
+    assert script.problem_id(script.make_simulation_job(reordered_spec)) != original_problem_id
+
+
+@pytest.mark.parametrize("source", [
+    "OPENQASM 3.0;\nqreg q[1];\nh q[0];\n",
+    "qreg q[1];\nh q[0];\n",
+    'OPENQASM 2.0;\ninclude "unknown.inc";\nqreg q[1];\nh q[0];\n',
+    'OPENQASM 2.0;\ninclude "qelib1.inc";\ninclude "qelib1.inc";\nqreg q[1];\n',
+    "OPENQASM 2.0;\nOPENQASM 2.0;\nqreg q[1];\n",
+    "OPENQASM 2.0;\nqreg q[1];\nqreg q[2];\nh q[0];\n",
+    "OPENQASM 2.0;\nqreg other[1];\nh q[0];\n",
+])
+def test_qasm_source_rejects_unsupported_declarations(tmp_path: Path, source: str) -> None:
+    with pytest.raises(ValueError, match="qasm_file"):
+        script._circuit_from_definition(_qasm_definition(tmp_path / "source.qasm", source))
+
+
+def test_qasm_source_hash_change_is_rejected(tmp_path: Path) -> None:
+    source = tmp_path / "source.qasm"
+    definition = _qasm_definition(
+        source,
+        "OPENQASM 2.0;\nqreg q[1];\nh q[0];\n",
+    )
+    source.write_text("OPENQASM 2.0;\nqreg q[1];\nx q[0];\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="qasm_sha256"):
+        script._circuit_from_definition(definition)
+
+
+def test_qasm_source_change_during_parse_is_rejected(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "source.qasm"
+    definition = _qasm_definition(
+        source,
+        "OPENQASM 2.0;\nqreg q[1];\nh q[0];\n",
+    )
+    original_parse = script.parse_openqasm2
+
+    def parse_then_mutate(path: Path):
+        parsed = original_parse(path)
+        path.write_text("OPENQASM 2.0;\nqreg q[1];\nx q[0];\n", encoding="utf-8")
+        return parsed
+
+    monkeypatch.setattr(script, "parse_openqasm2", parse_then_mutate)
+    with pytest.raises(ValueError, match="changed while parsing"):
+        script._circuit_from_definition(definition)
+
+
+@pytest.mark.parametrize(
+    "unsupported_line",
+    ("measure q[0] -> c[0];", "reset q[0];", "if(c==1) x q[0];"),
+)
+def test_qasm_source_rejects_non_unitary_or_classical_operations(
+    tmp_path: Path, unsupported_line: str
+) -> None:
+    with pytest.raises(
+        ValueError,
+        match="unsupported gate|Unsupported QASM line|Unsupported numeric expression",
+    ):
+        script._circuit_from_definition(
+            _qasm_definition(
+                tmp_path / "source.qasm",
+                "OPENQASM 2.0;\nqreg q[1];\n" + unsupported_line + "\n",
+            )
+        )
+
+
 def test_isolated_cotengra_child_receives_declared_circuit_kind(monkeypatch) -> None:
     monkeypatch.setattr(
         script,
@@ -111,6 +228,52 @@ def test_isolated_cotengra_child_receives_declared_circuit_kind(monkeypatch) -> 
     )
     assert seen == ["quest_compatible"]
     assert len(candidates) == 1
+
+
+def test_isolated_cotengra_child_receives_complete_qasm_definition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    source = tmp_path / "child.qasm"
+    definition = _qasm_definition(
+        source,
+        "OPENQASM 2.0;\nqreg q[1];\nh q[0];\n",
+    )
+    definition["path"] = "child.qasm"
+    monkeypatch.setattr(script, "ROOT", tmp_path)
+
+    def child_worker(
+        circuit_name,
+        circuit_parameters,
+        objective,
+        methods,
+        seed,
+        queue,
+        circuit_kind,
+        circuit_definition,
+    ) -> None:
+        try:
+            assert circuit_kind == "qasm_file"
+            assert circuit_definition["path"] == "child.qasm"
+            assert circuit_definition["parameters"]["qasm_sha256"] == definition[
+                "parameters"
+            ]["qasm_sha256"]
+            script._circuit_from_definition(circuit_definition)
+            queue.put(([[(0, 1)]], "child-planner", None))
+        except BaseException as exc:
+            queue.put((None, None, f"{type(exc).__name__}:{exc}"))
+
+    monkeypatch.setattr(script, "_cotengra_trial_worker", child_worker)
+    path, provenance = script._isolated_cotengra_trial(
+        circuit_kind="qasm_file",
+        circuit_name="None",
+        circuit_parameters=dict(definition["parameters"]),
+        objective="flops",
+        methods="greedy",
+        seed=7,
+        circuit_definition=definition,
+    )
+    assert path == [[(0, 1)]]
+    assert provenance == {"planner_config_hash": "child-planner"}
 
 
 def test_execution_contract_is_explicit_and_legacy_inputs_are_not_migrated() -> None:
