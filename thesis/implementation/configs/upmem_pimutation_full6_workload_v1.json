@@ -1,0 +1,245 @@
+{
+  "schema_version": "upmem_pimutation_full6_workload_v1",
+  "workload_id": "upmem_pimutation_full6_workload_v1",
+  "status": "workload_definitions_frozen",
+  "decision_status": "workload_definitions_frozen",
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md section 11",
+  "primary_reference": "https://arxiv.org/html/2503.00668v1",
+  "decision": {
+    "summary": "Use all six quest-compatible families at n=16 repeat_layers=1 for training and five at n=18 repeat_layers=2 plus EDC at n=15 repeat_layers=1 for parameter-heldout testing.",
+    "same_families_in_both_splits": true,
+    "distinct_definition_identities": true,
+    "heldout_dimension": "mixed parameter-heldout identities: five families change to n=18 and repeat_layers=2; EDC uses the admissible n=15 repeat_layers=1 exception; not family-heldout and not an exact unmodified PIMutation Table 2 instance",
+    "repeat_layers_2_prior_record": "none located in the bounded local and remote metadata audit; this is not global untouched certification",
+    "edc_test_size_exception": "EDC n=15 repeat_layers=1 was selected after the uniform n=18/r2 and n=16/r2 EDC probes failed the planning identity-expansion gate; this is not positivity tuning",
+    "paper_instance_status": "exact paper instances remain unverified; quest-compatible is the repository generator kind",
+    "rejected_uniform_proposals": [
+      {
+        "proposal_id": "all_six_n18_repeat2",
+        "affected_family": "EDC",
+        "affected_parameters": {"n_qubits": 18, "repeat_layers": 2},
+        "status": "rejected_before_timing",
+        "semantic_identity_expansion_units_lower_bound": 1048852,
+        "preregistered_bound": 1000000,
+        "measurement_semantics": "early-cutoff lower bound, not an exact full-DAG total",
+        "gate_interpretation": "planning identity-expansion preparation-safety gate, not DPU/WRAM/MRAM admission",
+        "physical_attempts": 0,
+        "cap_raise_interpretation": "does not show that raising the bound would admit the workload"
+      },
+      {
+        "proposal_id": "all_six_n16_repeat2",
+        "affected_family": "EDC",
+        "affected_parameters": {"n_qubits": 16, "repeat_layers": 2},
+        "status": "rejected_before_timing",
+        "semantic_identity_expansion_units_lower_bound": 1048820,
+        "preregistered_bound": 1000000,
+        "measurement_semantics": "early-cutoff lower bound above the preregistered boundary, not an exact full-DAG total",
+        "gate_interpretation": "planning identity-expansion preparation-safety gate, not DPU/WRAM/MRAM admission",
+        "physical_attempts": 0,
+        "cap_raise_interpretation": "does not show that raising the bound would admit the workload"
+      }
+    ],
+    "optional_families": "deferred"
+  },
+  "provenance": {
+    "generator_source": {
+      "path": "thesis/implementation/src/quantum_bench/circuits.py",
+      "sha256": "9092807e727911689a4e261a6929eb73d38fd00f374c113deec57404850a036e",
+      "hash_semantics": "SHA-256 of raw source bytes"
+    },
+    "evidence_files": [
+      {
+        "path": "thesis/implementation/runs/p6-preparation/pimutation-full6-reconciliation-v1/exposure-local.json",
+        "sha256": "e959ba331c56f42c18baa79169a2c213efce76504748c184f7ea7e0efb4085ef",
+        "purpose": "bounded local generator/execution exposure table"
+      },
+      {
+        "path": "thesis/implementation/runs/p6-preparation/pimutation-full6-reconciliation-v1/exposure-remote.json",
+        "sha256": "fa95659ffb0eccaaa0809f7829a8891240371dd4c3e69d3514fab4a366dd7ed0",
+        "purpose": "bounded remote manifest/config exposure table"
+      },
+      {
+        "path": "thesis/implementation/runs/p6-preparation/pimutation-full6-reconciliation-v1/exposure-parameters.json",
+        "sha256": "16b26b6f98b7e0c4a321b22167cf659c0890d028632561d5c9e095ab05a3276e",
+        "purpose": "exact repeat_layers and legacy parameter audit"
+      },
+      {
+        "path": "thesis/implementation/docs/archive/architecture-reset-2026/THESIS_BENCHMARK_MATRIX.md",
+        "sha256": "c4476128b1219bfe3fa9dd368f6f3d4a1b63a8d8e5a1f5d62f31d0c144ae75b7",
+        "purpose": "historical 42-grid context only"
+      },
+      {
+        "path": "thesis/implementation/runs/p6-preparation/pimutation-full6-reconciliation-v1/greedy-test-edc15-r1-feasibility.json",
+        "sha256": "552f4ee6058307bf1f4a8d8c35ac57a33bf8a890c5919d2c884391ce8f103505",
+        "purpose": "bounded EDC n15 repeat1 planning feasibility; no timing"
+      }
+    ],
+    "canonical_core_apis": [
+      "quantum_bench.circuits.quest_compatible_circuit",
+      "quantum_bench.circuits.manifest",
+      "quantum_bench.model.make_simulation_job",
+      "quantum_bench.evidence.problem_id"
+    ],
+    "operation_identity_domain": "quantum_bench.problem_id.v1",
+    "operation_identity_scope": "canonical gate semantics and query with empty simulation parameters; no TN path, candidate, timing, dtype, or executor identity"
+  },
+  "execution_context": {
+    "execution_profile": "kernel_schedule_system_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "execution_contract": {
+      "schedule_policy": "static_dag_waves_v1",
+      "request_transport": "packed_wave_v1",
+      "fuse_complex": true,
+      "geometry_policy": "panel_only_v1",
+      "numeric_policy": "split_complex_float32_v1",
+      "cost_model_id": "upmem_slr_wave_cost_v1",
+      "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+    },
+    "topologies": [
+      {"topology_id": "1dpu_t8", "dpu_count": 1, "rank_count": 1, "tasklets_per_dpu": 8},
+      {"topology_id": "4dpu_t8", "dpu_count": 4, "rank_count": 1, "tasklets_per_dpu": 8}
+    ],
+    "host_memory_policy": {
+      "declared_executor_budget_bytes": 536870912,
+      "reserve_bytes": 0,
+      "bound_type": "declared_executor_admission_not_rss_bound"
+    }
+  },
+  "instances": [
+    {
+      "instance_id": "pimutation_full6_train_qrng_n16_r1",
+      "split": "training",
+      "family": "QRNG",
+      "circuit": {"kind": "quest_compatible", "name": "QRNG", "parameters": {"n_qubits": 16, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_qrng_16q", "n_qubits": 16, "depth_proxy": 16, "gate_set": ["h"], "gate_counts": {"1q": 16, "2q": 0, "total": 16, "by_gate": {"h": 16}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "a6045ec53af50fc5f8824a569b60bab08db30c38359d182f807eb0ac140b9e9f"}}
+    },
+    {
+      "instance_id": "pimutation_full6_train_bv_n16_r1",
+      "split": "training",
+      "family": "BV",
+      "circuit": {"kind": "quest_compatible", "name": "BV", "parameters": {"n_qubits": 16, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_bv_16q", "n_qubits": 16, "depth_proxy": 47, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 32, "2q": 15, "total": 47, "by_gate": {"cx": 15, "h": 31, "x": 1}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "9f765c1150b5971420ec5771f639009649d48011264c771eebd22cd2366b23f2"}}
+    },
+    {
+      "instance_id": "pimutation_full6_train_xor_n16_r1",
+      "split": "training",
+      "family": "XOR",
+      "circuit": {"kind": "quest_compatible", "name": "XOR", "parameters": {"n_qubits": 16, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_xor_16q", "n_qubits": 16, "depth_proxy": 15, "gate_set": ["cx"], "gate_counts": {"1q": 0, "2q": 15, "total": 15, "by_gate": {"cx": 15}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "9740a124fa210e68b259ee8204318518ea5e12384ef1a4b710acead6ad61b1b6"}}
+    },
+    {
+      "instance_id": "pimutation_full6_train_bb84_n16_r1",
+      "split": "training",
+      "family": "BB84",
+      "circuit": {"kind": "quest_compatible", "name": "BB84", "parameters": {"n_qubits": 16, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_bb84_16q", "n_qubits": 16, "depth_proxy": 32, "gate_set": ["h", "x"], "gate_counts": {"1q": 32, "2q": 0, "total": 32, "by_gate": {"h": 16, "x": 16}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "029cbcc1a5f5cc921538191f1ec0eab0eaf283ec8855b34fd3c4b6ad443e7c28"}}
+    },
+    {
+      "instance_id": "pimutation_full6_train_edc_n16_r1",
+      "split": "training",
+      "family": "EDC",
+      "circuit": {"kind": "quest_compatible", "name": "EDC", "parameters": {"n_qubits": 16, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_edc_16q", "n_qubits": 16, "depth_proxy": 62, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 32, "2q": 30, "total": 62, "by_gate": {"cx": 30, "h": 16, "x": 16}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "2d56402bfaa7d6d4de84ecfec2fafd0d0f3cc56bd21b2131f33d2ee2220ce47a"}}
+    },
+    {
+      "instance_id": "pimutation_full6_train_hs_n16_r1",
+      "split": "training",
+      "family": "HiddenSubgroup",
+      "circuit": {"kind": "quest_compatible", "name": "HS", "parameters": {"allocated_qubits": 16, "logical_qubits": 8, "depth": 1, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_hs_16q", "n_qubits": 16, "depth_proxy": 64, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 48, "2q": 16, "total": 64, "by_gate": {"cx": 16, "h": 32, "x": 16}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "78795d600b4e1cf7418708f241df6c7ede9581291b574b9b703adbe0058aeab0"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_qrng_n18_r2",
+      "split": "test",
+      "family": "QRNG",
+      "circuit": {"kind": "quest_compatible", "name": "QRNG", "parameters": {"n_qubits": 18, "repeat_layers": 2}},
+      "canonical_circuit": {"name": "quest_qrng_18q", "n_qubits": 18, "depth_proxy": 36, "gate_set": ["h"], "gate_counts": {"1q": 36, "2q": 0, "total": 36, "by_gate": {"h": 36}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "cb7b21d5ad7a3100d31166cc0e98d0e933d2e4bfcd690242a3c4377f5f8c6a71"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_bv_n18_r2",
+      "split": "test",
+      "family": "BV",
+      "circuit": {"kind": "quest_compatible", "name": "BV", "parameters": {"n_qubits": 18, "repeat_layers": 2}},
+      "canonical_circuit": {"name": "quest_bv_18q", "n_qubits": 18, "depth_proxy": 106, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 72, "2q": 34, "total": 106, "by_gate": {"cx": 34, "h": 70, "x": 2}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "770904e0258a3cd71523b2494d3076c5fb2fa095612aaf6f242b738c970021db"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_xor_n18_r2",
+      "split": "test",
+      "family": "XOR",
+      "circuit": {"kind": "quest_compatible", "name": "XOR", "parameters": {"n_qubits": 18, "repeat_layers": 2}},
+      "canonical_circuit": {"name": "quest_xor_18q", "n_qubits": 18, "depth_proxy": 34, "gate_set": ["cx"], "gate_counts": {"1q": 0, "2q": 34, "total": 34, "by_gate": {"cx": 34}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "2c6179f0609fdbc46b27343eb4c13f2887af2d74ffa9bbe699cb2721d5fd5e59"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_bb84_n18_r2",
+      "split": "test",
+      "family": "BB84",
+      "circuit": {"kind": "quest_compatible", "name": "BB84", "parameters": {"n_qubits": 18, "repeat_layers": 2}},
+      "canonical_circuit": {"name": "quest_bb84_18q", "n_qubits": 18, "depth_proxy": 72, "gate_set": ["h", "x"], "gate_counts": {"1q": 72, "2q": 0, "total": 72, "by_gate": {"h": 36, "x": 36}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "8874950f694b39ce3706b11f474a4182f9132767e7da5d5c804bbcbd817e79fe"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_edc_n15_r1",
+      "split": "test",
+      "family": "EDC",
+      "circuit": {"kind": "quest_compatible", "name": "EDC", "parameters": {"n_qubits": 15, "repeat_layers": 1}},
+      "canonical_circuit": {"name": "quest_edc_15q", "n_qubits": 15, "depth_proxy": 58, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 30, "2q": 28, "total": 58, "by_gate": {"cx": 28, "h": 15, "x": 15}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "fea43ee6674bb142e28992be699105db85bb67ca942fff806024ef6ef17f332d"}}
+    },
+    {
+      "instance_id": "pimutation_full6_test_hs_n18_r2",
+      "split": "test",
+      "family": "HiddenSubgroup",
+      "circuit": {"kind": "quest_compatible", "name": "HS", "parameters": {"allocated_qubits": 18, "logical_qubits": 9, "depth": 1, "repeat_layers": 2}},
+      "canonical_circuit": {"name": "quest_hs_18q", "n_qubits": 18, "depth_proxy": 144, "gate_set": ["cx", "h", "x"], "gate_counts": {"1q": 108, "2q": 36, "total": 144, "by_gate": {"cx": 36, "h": 72, "x": 36}}, "operation_identity": {"domain": "quantum_bench.problem_id.v1", "problem_id": "d5cc4204743731bf96dbb3f14963366ec0e25457206479d50442afc72ead5003"}}
+    }
+  ],
+  "execution_and_memory": {
+    "topologies_frozen_by_existing_contract": ["1dpu_t8", "4dpu_t8"],
+    "numeric_policy": "split_complex_float32_v1",
+    "rank_count": 1,
+    "host_memory_budget_bytes": 536870912,
+    "host_memory_reserve_bytes": 0,
+    "memory_bound_type": "declared_executor_admission_not_rss_bound",
+    "physical_budget": {
+      "status": "defined_protocol_not_physical_admission",
+      "final_budget": null,
+      "new_attempt_ceiling": 792,
+      "historical_development_attempts": 92,
+      "aggregate_p6_attempt_ceiling_including_historical_development": 884,
+      "adaptive_round_count": 1,
+      "separate_validation_physical_stage": false,
+      "physical_stage_elapsed_ceiling_s": 86400,
+      "attempt_rows": "defined in upmem_pimutation_full6_path_study_v1; physical admission remains pending",
+      "no_budget_inferred_from_old_92_or_historical_42_grid": true
+    }
+  },
+  "future_candidate_strategy": {
+    "status": "deferred_until_workload_qualification",
+    "reference": "existing opt_einsum greedy",
+    "cotengra_engine": "cotengra",
+    "cotengra_method": "greedy",
+    "cotengra_objective": "flops",
+    "master_seed": 20260902,
+    "one_trial_searches": 64,
+    "fixed_pool_size_before_feasibility_filter": 65,
+    "full_pool_strategy": "one opt_einsum greedy reference plus 64 cotengra one-trial candidates",
+    "candidate_generation_after_timing": false,
+    "deduplicated_slots_refilled": false,
+    "candidate_pool_materialized": false
+  },
+  "preserved_prior_development": {
+    "p6_92_attempt_record": "thesis/implementation/runs/p6-preparation/",
+    "final_fit_eligible": false,
+    "role": "development-only historical evidence",
+    "raw_records_modified": false,
+    "silently_retargeted": false,
+    "old_physical_budget_reused": false
+  },
+  "qualification_requirements": {
+    "source_binding": "pending clean source and dependency qualification",
+    "canonical_identity_replay": "recompute all 12 operation identities from this manifest before any timing",
+    "candidate_and_plan_hashes": "required later before physical preparation",
+    "all_six_families_retained": true,
+    "low_headroom_or_infeasible_cases": "record facts; do not omit or replace after timing",
+    "paper_exactness": "not claimed by gate counts or local generator naming",
+    "historical_42_grid": "context only, not a final campaign freeze"
+  }
+}

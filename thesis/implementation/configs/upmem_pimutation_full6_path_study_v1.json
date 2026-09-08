@@ -1,0 +1,624 @@
+{
+  "schema_version": "upmem_path_heuristic_preregistration_v1",
+  "study_id": "upmem_pimutation_full6_path_study_v1",
+  "status": "workload_definitions_frozen",
+  "source_qualification_status": "verified_in_ci_pending_runtime_and_physical_qualification",
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md",
+  "execution_profile": "kernel_schedule_system_v1",
+  "study_source_commit": "cde6a68aa386d4363f9519c86b16d38c066908f5",
+  "workload_manifest": {
+    "path": "thesis/implementation/configs/upmem_pimutation_full6_workload_v1.json",
+    "workload_id": "upmem_pimutation_full6_workload_v1",
+    "status": "workload_definitions_frozen"
+  },
+  "execution_contract": {
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": true,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": "split_complex_float32_v1",
+    "cost_model_id": "upmem_slr_wave_cost_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+  },
+  "execution_policy": {
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": true,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": "split_complex_float32_v1",
+    "cost_model_id": "upmem_slr_wave_cost_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "intermediate_policy": "host_roundtrip_v1",
+    "host_memory_reserve_bytes": 0
+  },
+  "score_id": "upmem_slr_wave_cost_v1",
+  "numeric_policy": "split_complex_float32_v1",
+  "rank_count": 1,
+  "host_memory_admission_bytes": 536870912,
+  "host_memory_policy": {
+    "declared_executor_budget_bytes": 536870912,
+    "reserve_bytes": 0,
+    "bound_type": "declared_executor_admission_not_rss_bound",
+    "route_options_override": false
+  },
+  "candidate_generation": {
+    "physical_lowering_timeout_s": 60.0,
+    "cotengra_method": "greedy",
+    "cotengra_objective": "flops",
+    "master_seed": 20260902,
+    "maximum_planned_work_units": 400,
+    "maximum_semantic_identity_expansion_units": 1000000,
+    "one_trial_searches": 64,
+    "opt_einsum_reference": "greedy"
+  },
+  "candidate_pool": {
+    "status": "pending_lead_review_generation_and_physical_selection",
+    "membership_frozen_before_timing": true,
+    "construction": [
+      "one opt_einsum greedy reference",
+      "64 cotengra one-trial candidates using the existing generator strategy"
+    ],
+    "size_before_feasibility_filter": 65,
+    "proposal_strategy": "training_only_adaptive_selection_from_fixed_pool",
+    "adaptive_proposal_roles": [
+      "greedy",
+      "incumbent",
+      "new_fixed_pool_candidate"
+    ],
+    "new_proposal_rule": "select the next as-yet-unmeasured feasible member of the fixed pool with the lowest current training-fitted score; freeze that score and its ordering before the adaptive batch; tie by candidate_path_id",
+    "incumbent_rule": "use the model-selected training incumbent under the primary aggregate objective and worst-cell tie-break, never the fastest raw observation",
+    "new_surrogate_model": false,
+    "initial_selection_score": "existing _wave_equal_weights feature-model projection with E_num and P_wram inactive, evaluated by _wave_score; freeze selected roles and weights before initial timing",
+    "candidate_generation_after_first_timing": false,
+    "physical_deduplication": "count each physical choice once per workload_topology_cell",
+    "deduplication_effect": "unused slots remain unused; no post-timing refill"
+  },
+  "calibration": {
+    "candidate_roles": [
+      "greedy",
+      "minimum_flops",
+      "minimum_peak_intermediate",
+      "minimum_writes",
+      "equal_wave_cost",
+      "feature_diverse"
+    ],
+    "candidates_per_cell_maximum": 6,
+    "measurement_blocks": 3,
+    "splits": ["training"],
+    "warmup_blocks": 1,
+    "selection_timing_used": false,
+    "feature_diversity_rule": "one feasible candidate farthest from greedy in normalized eligible feature space; tie by candidate_path_id; deduplicate all six role choices without refill",
+    "deduplicate_physical_choices": true
+  },
+  "model_forms": ["six_term", "grouped"],
+  "model_comparison": {
+    "data_split": "training_only",
+    "fold_unit": "leave_one_circuit_instance_out_with_both_topologies_together",
+    "evaluation_pool": "physically_measured_candidates_in_omitted_instance",
+    "bootstrap_resamples": 2000,
+    "bootstrap_seed": 20260904,
+    "bootstrap_unit": "complete paired block within each physical round",
+    "confidence_level": 0.95,
+    "stability_resamples": 200,
+    "stability_fit_sample_count": 1000,
+    "stability_seed": 20260905,
+    "stability_interpretation": "bounded conditional fold-refit diagnostic; not full-search uncertainty or a model-selection objective",
+    "selection_rule": "choose six_term only if the lower percentile bound of cross-validated log geometric speedup relative to grouped is strictly positive and its observed worst-cell speedup is not lower; otherwise choose grouped",
+    "interpretation": "training-only model-choice evidence; adaptive measured pools make the comparison conditional development evidence, not unbiased generalization of adaptive search",
+    "report_selection_agreement": true,
+    "no_validation_or_test_timing": true
+  },
+  "score": {
+    "semantic_id": "upmem_slr_wave_cost_v1",
+    "correlation_rejection_threshold": 0.98,
+    "normalization_epsilon_natural_units": 1,
+    "normalization": "log((candidate+1)/(greedy+1))",
+    "weight_search_samples": 100000,
+    "weight_search_seed": 20260903,
+    "inactive_terms": ["E_num", "P_wram"],
+    "cell_weighting": "equal_cells",
+    "cell_weight_definition": "pi_j = 1 / number_of_preregistered_cells",
+    "primary_objective": "geometric_mean_repeated_block_speedup",
+    "tie_break": "highest_worst_cell_repeated_block_speedup",
+    "no_raw_time_pooling": true,
+    "no_hardware_per_weight_vector": true,
+    "no_fastest_observation_selection": true
+  },
+  "topologies": [
+    {
+      "dpu_count": 1,
+      "rank_count": 1,
+      "topology_id": "1dpu_t8",
+      "tasklets_per_dpu": 8
+    },
+    {
+      "dpu_count": 4,
+      "rank_count": 1,
+      "topology_id": "4dpu_t8",
+      "tasklets_per_dpu": 8
+    }
+  ],
+  "physical_environment": {
+    "affinity": [0],
+    "host": "safari-baguette1",
+    "rank_path": "/dev/dpu_rank1",
+    "transport": "packed_wave_v1"
+  },
+  "circuits": [
+    {
+      "circuit_id": "pimutation_full6_train_qrng_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "QRNG",
+        "parameters": {"n_qubits": 16, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_train_bv_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "BV",
+        "parameters": {"n_qubits": 16, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_train_xor_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "XOR",
+        "parameters": {"n_qubits": 16, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_train_bb84_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "BB84",
+        "parameters": {"n_qubits": 16, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_train_edc_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "EDC",
+        "parameters": {"n_qubits": 16, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_train_hs_n16_r1",
+      "split": "training",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "HS",
+        "parameters": {
+          "allocated_qubits": 16,
+          "logical_qubits": 8,
+          "depth": 1,
+          "repeat_layers": 1
+        }
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_qrng_n18_r2",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "QRNG",
+        "parameters": {"n_qubits": 18, "repeat_layers": 2}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_bv_n18_r2",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "BV",
+        "parameters": {"n_qubits": 18, "repeat_layers": 2}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_xor_n18_r2",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "XOR",
+        "parameters": {"n_qubits": 18, "repeat_layers": 2}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_bb84_n18_r2",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "BB84",
+        "parameters": {"n_qubits": 18, "repeat_layers": 2}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_edc_n15_r1",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "EDC",
+        "parameters": {"n_qubits": 15, "repeat_layers": 1}
+      }
+    },
+    {
+      "circuit_id": "pimutation_full6_test_hs_n18_r2",
+      "split": "test",
+      "circuit": {
+        "kind": "quest_compatible",
+        "name": "HS",
+        "parameters": {
+          "allocated_qubits": 18,
+          "logical_qubits": 9,
+          "depth": 1,
+          "repeat_layers": 2
+        }
+      }
+    }
+  ],
+  "declared_workload": [
+    {
+      "circuit_id": "pimutation_full6_train_qrng_n16_r1",
+      "classification": "training_instance",
+      "family": "QRNG",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_train_bv_n16_r1",
+      "classification": "training_instance",
+      "family": "BV",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_train_xor_n16_r1",
+      "classification": "training_instance",
+      "family": "XOR",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_train_bb84_n16_r1",
+      "classification": "training_instance",
+      "family": "BB84",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_train_edc_n16_r1",
+      "classification": "training_instance",
+      "family": "EDC",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_train_hs_n16_r1",
+      "classification": "training_instance",
+      "family": "HiddenSubgroup",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "training"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_qrng_n18_r2",
+      "classification": "parameter_heldout_test_instance",
+      "family": "QRNG",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_bv_n18_r2",
+      "classification": "parameter_heldout_test_instance",
+      "family": "BV",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_xor_n18_r2",
+      "classification": "parameter_heldout_test_instance",
+      "family": "XOR",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_bb84_n18_r2",
+      "classification": "parameter_heldout_test_instance",
+      "family": "BB84",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_edc_n15_r1",
+      "classification": "parameter_heldout_test_instance",
+      "family": "EDC",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    },
+    {
+      "circuit_id": "pimutation_full6_test_hs_n18_r2",
+      "classification": "parameter_heldout_test_instance",
+      "family": "HiddenSubgroup",
+      "candidate_source": "pending_source_qualification",
+      "historical_optimization_status": "not_admitted_from_prior_fit",
+      "split": "test"
+    }
+  ],
+  "adaptive_search": {
+    "proposal_model_form": "six_term",
+    "maximum_rounds": 1,
+    "rounds_are_training_only": true,
+    "per_round_unique_paths_per_cell": 3,
+    "per_round_roles": [
+      "greedy",
+      "incumbent",
+      "new_fixed_pool_candidate"
+    ],
+    "proposal_input": "previous_training_measurements_only",
+    "proposal_rule": "lowest_current_training_fitted_score_then_candidate_path_id",
+    "score_frozen_before_each_batch": true,
+    "new_surrogate_model": false,
+    "incumbent_rule": "primary_aggregate_model_selection_with_worst_cell_tie",
+    "validation_or_test_timing_used_for_proposals": false,
+    "same_round_controls": true,
+    "deduplicate_physical_choices": true,
+    "unused_deduplicated_slots_are_refilled": false,
+    "never_refill_after_timing": true,
+    "no_positive_chasing": true
+  },
+  "budget": {
+    "attempt_ceiling": 792,
+    "historical_development_attempts": 92,
+    "aggregate_p6_attempt_ceiling_including_historical_development": 884,
+    "physical_stage_elapsed_ceiling_s": 86400,
+    "elapsed_accounting": "cumulative monotonic wall time while new physical stages run; excludes occupancy waits, offline analysis, and archival verification",
+    "elapsed_limit_action": "stop collection, preserve and retrieve partial evidence, release resources; no retries, replacements, or budget refill",
+    "attempts_include_warmups_and_measurements": true,
+    "attempts_include_failed_or_incomplete_samples": true,
+    "deduplication_leaves_unused_attempts": true,
+    "never_refill_after_timing": true,
+    "hardware_per_weight_vector": false,
+    "maximum_adaptive_rounds": 1,
+    "no_separate_validation_physical_stage": true,
+    "stages": [
+      {
+        "stage_id": "initial_training",
+        "split": "training",
+        "instances": [
+          "pimutation_full6_train_qrng_n16_r1",
+          "pimutation_full6_train_bv_n16_r1",
+          "pimutation_full6_train_xor_n16_r1",
+          "pimutation_full6_train_bb84_n16_r1",
+          "pimutation_full6_train_edc_n16_r1",
+          "pimutation_full6_train_hs_n16_r1"
+        ],
+        "topologies": ["1dpu_t8", "4dpu_t8"],
+        "unique_paths_per_cell": 6,
+        "warmup_blocks": 1,
+        "measurement_blocks": 3,
+        "attempts": 288,
+        "formula": "6 instances * 2 topologies * 6 unique paths * (1 warmup + 3 measurements)"
+      },
+      {
+        "stage_id": "adaptive_training",
+        "split": "training",
+        "instances": [
+          "pimutation_full6_train_qrng_n16_r1",
+          "pimutation_full6_train_bv_n16_r1",
+          "pimutation_full6_train_xor_n16_r1",
+          "pimutation_full6_train_bb84_n16_r1",
+          "pimutation_full6_train_edc_n16_r1",
+          "pimutation_full6_train_hs_n16_r1"
+        ],
+        "topologies": ["1dpu_t8", "4dpu_t8"],
+        "maximum_rounds": 1,
+        "unique_paths_per_cell_per_round": 3,
+        "roles_per_round": [
+          "greedy",
+          "incumbent",
+          "new_fixed_pool_candidate"
+        ],
+        "warmup_blocks": 1,
+        "measurement_blocks": 3,
+        "attempts": 144,
+        "formula": "1 round * 6 instances * 2 topologies * 3 unique paths * (1 warmup + 3 measurements)"
+      },
+      {
+        "stage_id": "development_confirmation",
+        "split": "training",
+        "instances": [
+          "pimutation_full6_train_qrng_n16_r1",
+          "pimutation_full6_train_bv_n16_r1",
+          "pimutation_full6_train_xor_n16_r1",
+          "pimutation_full6_train_bb84_n16_r1",
+          "pimutation_full6_train_edc_n16_r1",
+          "pimutation_full6_train_hs_n16_r1"
+        ],
+        "topologies": ["1dpu_t8", "4dpu_t8"],
+        "arms": ["greedy", "upmem_selected"],
+        "warmup_blocks": 1,
+        "measurement_blocks": 5,
+        "attempts": 144,
+        "formula": "6 instances * 2 topologies * 2 arms * (1 warmup + 5 measurements)"
+      },
+      {
+        "stage_id": "test",
+        "split": "test",
+        "instances": [
+          "pimutation_full6_test_qrng_n18_r2",
+          "pimutation_full6_test_bv_n18_r2",
+          "pimutation_full6_test_xor_n18_r2",
+          "pimutation_full6_test_bb84_n18_r2",
+          "pimutation_full6_test_edc_n15_r1",
+          "pimutation_full6_test_hs_n18_r2"
+        ],
+        "topologies": ["1dpu_t8", "4dpu_t8"],
+        "path_roles": ["greedy", "minimum_flops", "upmem_selected"],
+        "warmup_blocks": 1,
+        "measurement_blocks": 5,
+        "attempts": 216,
+        "formula": "6 instances * 2 topologies * 3 arms * (1 warmup + 5 measurements)"
+      }
+    ]
+  },
+  "freeze_order": {
+    "initial_candidate_config_freeze": {
+      "before_any_physical_execution": true,
+      "freezes": [
+        "candidate generator fields, seed, and search budget",
+        "fixed candidate-pool construction and deduplication rule",
+        "execution profile, schedule, transport, geometry, numeric, topology, and memory admission contract",
+        "six-family workload definitions, splits, finite budgets, and attempt accounting",
+        "source and environment qualification inputs"
+      ],
+      "does_not_freeze": [
+        "training-fitted weights",
+        "model choice",
+        "pretest profile",
+        "adaptive incumbent or next proposal"
+      ]
+    },
+    "pretest_profile_freeze": {
+      "after_physical_stages": [
+        "initial_training",
+        "adaptive_training"
+      ],
+      "after_offline_model_comparison": true,
+      "before_physical_stages": [
+        "development_confirmation",
+        "test"
+      ],
+      "fitted_profile_pending_after_training": true,
+      "fitted_profile_required_before_calibration": false,
+      "pretest_profile_frozen_before_any_physical_execution": false,
+      "freezes": [
+        "pretest profile",
+        "training-fitted weights",
+        "model form",
+        "heldout path-role mapping"
+      ]
+    }
+  },
+  "timing_policy": {
+    "scope_id": "steady_execution_v1",
+    "primary_quantity": "session_inclusive_s",
+    "primary_formula": "session_inclusive_s = session_open_s + steady_execution_s + session_close_s",
+    "primary_fit_scope_id": "steady_execution_v1",
+    "secondary_quantity": "steady_execution_s",
+    "session_boundary": "the existing steady_execution_s interval is enclosed by fresh session open/allocation and session release; runtime integrity checks and hashing inside the session remain included",
+    "excluded_from_execution_timing": [
+      "candidate generation",
+      "path lowering",
+      "external reference computation",
+      "external correctness comparison",
+      "external manifest, report, and evidence hashing and writing"
+    ],
+    "included_in_execution_timing": [
+      "runtime integrity checks and hashing performed inside the session"
+    ],
+    "report_steady_side_view": true,
+    "report_full_job_side_view": true,
+    "steady_side_view_is_primary": false,
+    "no_positive_chasing": true
+  },
+  "validation_and_test": {
+    "measurement_blocks": 5,
+    "paths": ["greedy", "minimum_flops", "upmem_selected"],
+    "warmup_blocks": 1,
+    "timing_may_change_candidates_or_model": false,
+    "frozen_pretest_before_test": true,
+    "pretest_profile_freeze_after_training_before_heldout": true,
+    "pretest_profile_freeze_before_any_physical_execution": false,
+    "development_confirmation_split": "training",
+    "development_confirmation_uses_frozen_pretest_profile": true,
+    "no_separate_validation_physical_stage": true,
+    "test_is_not_a_proposal_source": true,
+    "test_finalization": "candidate and config hashes are frozen before initial physical execution; perform training-only LOO model comparison and freeze the fitted pretest profile and weights after initial and adaptive training before training confirmation or test sessions"
+  },
+  "holdout_policy": {
+    "unit": "instance",
+    "family_holdout_claim": false,
+    "same_six_families_in_training_and_test": true,
+    "distinct_definition_identity_required": true,
+    "heldout_dimension": "n_qubits and repeat_layers parameter identity",
+    "test_status": "parameter_heldout_workload_definitions_frozen_pending_pool_and_physical_qualification",
+    "paper_exact_instance_claim": false,
+    "no_global_untouched_claim": true,
+    "no_budget_refill_after_exposure_reclassification": true,
+    "mixed_parameter_holdout": true,
+    "edc_size_exception": "EDC test is n=15, repeat_layers=1; the other five test instances are n=18, repeat_layers=2",
+    "uniform_n18_r2_and_n16_r2_edc_probes": "rejected before timing at the planning identity-expansion gate; lower bounds are not exact full-DAG totals"
+  },
+  "qualification_gates": [
+    "lead review of this draft",
+    "source qualification for the exact study source and runtime identity",
+    "focused CPU and software correctness qualification",
+    "strict SDK correctness qualification before any physical claim",
+    "candidate generation and physical-plan hashes before timing",
+    "external freeze packet binds raw workload-manifest SHA-256, preregistration SHA-256 and candidate-pool SHA-256; verify definitions and execution contract agree before admission",
+    "frozen pretest manifest and two-copy retention verification"
+  ],
+  "physical_gate": {
+    "status": "blocked_until_qualification_and_freeze",
+    "claims_before_gate": "none beyond this proposed protocol and bounded metadata exposure audit",
+    "hardware_execution_by_this_task": false,
+    "candidate_execution_by_this_task": false,
+    "old_physical_calibration_reused": false
+  },
+  "evidence_policy": {
+    "primary_optimization_evidence": "new session-inclusive measurements under the frozen wave contract only",
+    "correctness_observed_is_proof_of_optimization_unseen": false,
+    "historical_development_92_permitted_uses": [
+      "separate attempt ledger",
+      "exposure audit",
+      "historical context"
+    ],
+    "exclude_historical_92_from_final_fit": true,
+    "mix_prior_pilot_records_into_new_fit": false,
+    "reuse_prior_pilot_weights": false,
+    "reuse_prior_pilot_profile": false,
+    "mix_lost_raw_calibration": false,
+    "candidate_hashes_required_before_physical_claim": true
+  },
+  "identity_requirements": {
+    "execution_profile": "kernel_schedule_system_v1",
+    "score_id": "upmem_slr_wave_cost_v1",
+    "study_source_commit": "cde6a68aa386d4363f9519c86b16d38c066908f5",
+    "candidate_generation_source_sha256": "pending_candidate_generation",
+    "candidate_pool_sha256": "pending_candidate_generation",
+    "calibration_set_sha256": "pending_candidate_generation",
+    "analysis_profile_identity": "pending_training_only_loo_model_comparison",
+    "pretest_profile_sha256": "pending_profile_freeze_after_training",
+    "fitted_weight_vector_sha256": "pending_training_fit",
+    "execution_source_commit": "459935f586fdd16c82013838e6d27a12604c3093",
+    "accepted_executor_tag": "thesis-upmem-kernel-schedule-system-v1",
+    "two_copy_retention_required": true
+  },
+  "source_lineage": {
+    "accepted_executor_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "accepted_executor_tag": "thesis-upmem-kernel-schedule-system-v1",
+    "study_source_commit": "cde6a68aa386d4363f9519c86b16d38c066908f5",
+    "prior_v2_config": "thesis/implementation/configs/upmem_final_system_path_study_v2.json",
+    "prior_v2_config_role": "preserved_historical_draft_not_modified",
+    "prior_192_attempt_configuration_active": false,
+    "old_pilot_weight_or_profile_imported": false
+  }
+}
