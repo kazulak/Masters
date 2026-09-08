@@ -1466,6 +1466,21 @@ schedule-aware cost adapter must pass software/review gates before freezing the
 physical configuration. Separate mechanism speedups must not be multiplied into
 an invented combined result. The executor/profile is not yet frozen.
 
+### Test-Only Scalar Reference
+
+The bounded scalar-MRAM ablation uses
+`tests/native/upmem_scalar_reference_dpu.c` through the existing wave probe.
+It retains the wave control/completion contract, four-product order, cyclic
+tasklet row ownership and helper-final synchronization. Each tasklet uses a
+private eight-byte MRAM transfer buffer instead of the shared WRAM panel.
+This is a test binary, not an additional production dispatch policy.
+
+Six local SDK-simulator checks pass, including exact output/untouched-arena
+comparison with the panel binary for the fixed M=N=K=32/T8 ablation shape,
+odd/tail geometry, signed float32, int8, idle and malformed controls. Simulator
+timing supplies no performance claim. The budgeted eight-attempt physical
+comparison is still pending; no result or adoption is implied by these tests.
+
 ## Qualification and Archival
 
 Changed executable checkpoints need full pinned pytest/Ruff/diff checks,
