@@ -327,3 +327,45 @@ replace the existing canonical operation/problem/plan identities.
 This support uses the existing circuit parser and leaves the frozen executor,
 DPU code and public evidence schemas unchanged. It closes a preparation gap;
 it does not lift the workload-fidelity hold or adopt any replacement circuit.
+
+### Final Admission Disposition
+
+QASM preparation source `4997f34813bd3e09dc80cdd6f0b747c532486e2f` passed
+1,938 local tests, Ruff and exact-head CI `34287524578`. Source reconciliation
+remains a separate gate; do not rerun this software qualification simply because
+the workload decision is unresolved.
+
+The bounded primary-source review found:
+
+- BV: the pinned QASMBench `medium/bv_n14/bv_n14.qasm` implements the all-ones
+  oracle with X on the ancilla before H and terminal measurements. Register
+  renaming, barrier removal and terminal-measurement removal can preserve its
+  pre-measurement unitary. The source has 28 single-qubit gates and 13 CNOTs.
+- QRNG and HS: the pinned sources discussed above permit explicitly identified
+  pre-measurement adaptations. HS still cannot be described as an exact
+  PIMutation instance merely by citing QASMBench.
+- BB84: `small/bb84_n8/bb84_n8.qasm` has interleaved measurements and later
+  gates on previously measured wires. Stripping all measurements is not a
+  valid unitary adaptation. A family-aligned preparation would need explicitly
+  chosen bit/basis strings and a declared protocol boundary.
+- EDC: `small/qec_sm_n5/qec_sm_n5.qasm` measures syndrome ancillas and applies
+  measurement-conditioned X corrections. It cannot be converted by deleting
+  measurements/control. The paper's actual code, layout, encoder, syndrome
+  extraction, error scenario and query boundary are not established.
+- XOR: the exact RevLib circuit/version, Boolean function, wire layout and
+  ancilla convention used by the paper remain unestablished. An independently
+  specified reversible parity circuit would be family-aligned, not proven
+  identical to the authors' instance.
+
+All QASMBench paths above refer to the pinned commit
+`357b942396d5c2b7cbc1c229c585a6ef5ccaebac`. The resolution requires either
+the authors' actual artifact or an explicit decision to use separately
+identified, source-backed constructions of all six families. No family may be
+dropped to avoid this decision. The pending distinction is experiment scope,
+not permission to upload, download, or use already authorized hardware.
+
+Do not reuse the dummy circuits' memory-admission results for corrected gate
+sequences. Recompute feasibility for corrected definitions before freezing
+candidate pools. Previously observed repeat-one QRNG sizes also require an
+honest exposure classification; returning to repeat one does not make them
+globally untouched. No new physical data or fitting was performed in this audit.
