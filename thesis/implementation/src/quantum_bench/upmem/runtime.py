@@ -52,6 +52,12 @@ from quantum_bench.upmem.plan import (
     physical_plan_id,
     validate_upmem_plan,
 )
+from quantum_bench.upmem.execution_features import (
+    DEFAULT_HOST_MEMORY_BUDGET_BYTES,
+    _cheap_prepared_memory_bound,
+    _cohort_snapshot_from_controls,
+    _declared_executor_memory_estimate,
+)
 from quantum_bench.upmem.native_session import V4Session
 from quantum_bench.upmem.packed_wave import WaveOperation, wave_snapshot_sizes
 from quantum_bench.upmem.wave_protocol import CONTROL, COMPLETION, IDLE, FOUR_PRODUCT_KERNELS, OUTER_KERNELS
@@ -3787,14 +3793,46 @@ def _execution_resource_admission(
     }
 
 
-def _admit_prepared_snapshots(dag, plan, *, fuse_complex, geometry_policy):
-    """Reject oversized transport snapshots before opening the native session."""
+def _validate_host_memory_options(budget_bytes, reserve_bytes):
+    if type(budget_bytes) is not int or budget_bytes <= 0:
+        raise ValueError("host_memory_budget_bytes must be a positive integer")
+    if type(reserve_bytes) is not int or reserve_bytes < 0:
+        raise ValueError("host_memory_reserve_bytes must be a nonnegative integer")
+    return budget_bytes, reserve_bytes
+
+
+def _admit_prepared_snapshots(
+    dag, plan, *, fuse_complex, geometry_policy,
+    host_memory_budget_bytes=DEFAULT_HOST_MEMORY_BUDGET_BYTES,
+    host_memory_reserve_bytes=0,
+):
+    """Reject over-budget prepared execution before native/session allocation."""
+    budget_bytes, reserve_bytes = _validate_host_memory_options(
+        host_memory_budget_bytes, host_memory_reserve_bytes
+    )
     if plan.topology.rank_count != 1:
         raise UnsupportedExecution(stage="preflight", reason="prepared waves require one rank",
                                    capability="rank_topology")
+    try:
+        cheap_bound = _cheap_prepared_memory_bound(dag, plan)
+    except ValueError as exc:
+        raise UnsupportedExecution(
+            stage="preflight", reason=f"prepared memory precheck: {exc}",
+            capability="prepared_wave_snapshot_limit",
+        ) from exc
+    if cheap_bound + reserve_bytes > budget_bytes:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason=(
+                "declared executor memory estimate exceeds host budget: "
+                f"estimate={cheap_bound} reserve={reserve_bytes} budget={budget_bytes}"
+            ),
+            capability="prepared_wave_host_memory",
+        )
     nodes = {node.node_id: node for node in dag.nodes}
     stages = (plan.stages if plan.schedule_policy == "static_dag_waves_v1" else
               tuple(stage for stage, _ in _session_stage_nodes(plan, nodes)))
+    cohorts = []
     for stage in stages:
         if stage.kind == "host_reduce":
             continue
@@ -3804,11 +3842,25 @@ def _admit_prepared_snapshots(dag, plan, *, fuse_complex, geometry_policy):
             numeric_mode=int(plan.numeric_policy == _NUMERIC_POLICY_INT8),
             request_start=0, fuse=fuse_complex, geometry_policy=geometry_policy)
         try:
-            wave_snapshot_sizes(len(stage.node_ids), controls)
+            envelope, result = wave_snapshot_sizes(len(stage.node_ids), controls)
         except ValueError as exc:
-            raise UnsupportedExecution(stage="preflight",
-                                       reason=f"prepared cohort {stage.stage_id}: {exc}",
-                                       capability="prepared_wave_snapshot_limit") from exc
+            raise UnsupportedExecution(
+                stage="preflight", reason=f"prepared cohort {stage.stage_id}: {exc}",
+                capability="prepared_wave_snapshot_limit",
+            ) from exc
+        cohorts.append(_cohort_snapshot_from_controls(stage, controls, envelope, result))
+    estimate = int(_declared_executor_memory_estimate(
+        dag, int(plan.numeric_policy == _NUMERIC_POLICY_INT8), cohorts
+    )["declared_executor_memory_estimate_bytes"])
+    if estimate + reserve_bytes > budget_bytes:
+        raise UnsupportedExecution(
+            stage="preflight",
+            reason=(
+                "declared executor memory estimate exceeds host budget: "
+                f"estimate={estimate} reserve={reserve_bytes} budget={budget_bytes}"
+            ),
+            capability="prepared_wave_host_memory",
+        )
 
 
 def open_upmem(
@@ -3819,6 +3871,8 @@ def open_upmem(
     timeout_s: float = 120.0,
     fuse_complex: bool = False,
     geometry_policy: str = "panel_only_v1",
+    host_memory_budget_bytes: int = DEFAULT_HOST_MEMORY_BUDGET_BYTES,
+    host_memory_reserve_bytes: int = 0,
 ) -> UpmemSession:
     """Open one persistent session for a validated final UPMEM plan."""
 
@@ -3861,7 +3915,11 @@ def open_upmem(
         )
     _validate_final_resources(resources)
     if prepared_waves:
-        _admit_prepared_snapshots(dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy)
+        _admit_prepared_snapshots(
+            dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy,
+            host_memory_budget_bytes=host_memory_budget_bytes,
+            host_memory_reserve_bytes=host_memory_reserve_bytes,
+        )
     try:
         if resources.session_opener is not None:
             low_level = resources.session_opener(
@@ -3934,6 +3992,8 @@ def open_upmem_simulator(
     timeout_s: float = 120.0,
     fuse_complex: bool = False,
     geometry_policy: str = "panel_only_v1",
+    host_memory_budget_bytes: int = DEFAULT_HOST_MEMORY_BUDGET_BYTES,
+    host_memory_reserve_bytes: int = 0,
 ) -> UpmemSession:
     """Open the active ABI-v4 route through the SDK simulator only.
 
@@ -3986,7 +4046,11 @@ def open_upmem_simulator(
         )
     _validate_final_resources(resources)
     if prepared_waves:
-        _admit_prepared_snapshots(dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy)
+        _admit_prepared_snapshots(
+            dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy,
+            host_memory_budget_bytes=host_memory_budget_bytes,
+            host_memory_reserve_bytes=host_memory_reserve_bytes,
+        )
     try:
         engine = UpmemV4Executor(
             session_root=Path(resources.session_root),

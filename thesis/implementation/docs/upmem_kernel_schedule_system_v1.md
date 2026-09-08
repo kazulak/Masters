@@ -1468,6 +1468,7 @@ an invented combined result. The executor/profile is not yet frozen.
 
 ### Test-Only Scalar Reference
 
+
 The bounded scalar-MRAM ablation uses
 `tests/native/upmem_scalar_reference_dpu.c` through the existing wave probe.
 It retains the wave control/completion contract, four-product order, cyclic
@@ -1480,6 +1481,28 @@ comparison with the panel binary for the fixed M=N=K=32/T8 ablation shape,
 odd/tail geometry, signed float32, int8, idle and malformed controls. Simulator
 timing supplies no performance claim. The budgeted eight-attempt physical
 comparison is still pending; no result or adoption is implied by these tests.
+
+### Declared Host-Memory Admission
+
+Prepared-wave sessions reject plans whose declared executor-buffer estimate plus
+reserve exceeds the configured budget, before constructing a native session.
+The CLI uses the opener defaults: 512 MiB budget and zero reserve. An initial
+cheap check avoids control expansion when retained declared arrays alone exceed
+that budget; the existing snapshot/control limits remain enforced separately.
+
+The estimate combines declared inputs, retained executor buffers and the maximum
+preparation, submission, assembly or reduction workspace. It respects sequential
+node preparation, previous-node lane overlap within a cohort, and one-lane int8
+tile casts. The same arithmetic supplies inspection facts and runtime admission;
+session opening does not run the more expensive local-traffic feature profiler.
+
+This is not a complete process-RSS bound. Python objects, unitemized NumPy
+temporaries, allocator/SDK storage, process stacks/page cache and caller backing
+beyond declared tensor sizes remain excluded. A reserve is a margin, not proof
+of those costs. Earlier references to a complete host bound are not established
+by this estimate; physical preflight still requires available host memory and
+the final report must retain this limitation. No allocator or scheduling policy
+was changed to implement the guard.
 
 ## Qualification and Archival
 

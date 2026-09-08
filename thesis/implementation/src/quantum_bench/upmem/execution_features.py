@@ -14,7 +14,7 @@ from math import prod
 
 import numpy as np
 
-from quantum_bench.model import ContractNode, ContractionDAG
+from quantum_bench.model import ContractNode, ContractionDAG, ReduceNode
 from quantum_bench.upmem.packed_wave import wave_snapshot_sizes
 from quantum_bench.upmem.plan import (
     UpmemPlan,
@@ -67,6 +67,12 @@ _LOCAL_FIELDS = (
 _DISPATCH_SOURCE = "native/upmem/runtime/dpu_wave.c"
 _PANEL_SOURCE = "native/upmem/runtime/panel_compute.h"
 _OUTER_SOURCE = "native/upmem/runtime/outer_compute.h"
+# This is the configured default admission ceiling, not a process-RSS limit.
+# It is the existing packed-wave snapshot ceiling.
+DEFAULT_HOST_MEMORY_BUDGET_BYTES = 512 * 1024 * 1024
+# native/upmem/runtime/host.c: malloc(256u * 256u * sizeof(uint32_t)).
+NATIVE_OUTPUT_BUFFER_BYTES = 256 * 256 * 4
+HOST_MEMORY_SCOPE = "declared_prepared_wave_executor_bytes_v1"
 
 
 def extract_execution_features(
@@ -114,13 +120,11 @@ def extract_execution_features(
                 geometry_policy=geometry_policy,
             )
             envelope_bytes, result_bytes = wave_snapshot_sizes(len(cohort_stage.node_ids), controls)
-            cohort_snapshots.append({
-                "cohort_id": cohort_stage.stage_id,
-                "node_ids": cohort_stage.node_ids,
-                "input_envelope_bytes": envelope_bytes,
-                "response_snapshot_bytes": result_bytes,
-                "control_count": len(controls) * topology.dpu_count,
-            })
+            cohort_snapshots.append(
+                _cohort_snapshot_from_controls(
+                    cohort_stage, controls, envelope_bytes, result_bytes,
+                )
+            )
             for cohort_wave_index, (control_wave, lane) in enumerate(
                 zip(controls, generic_lanes, strict=True)
             ):
@@ -177,7 +181,158 @@ def extract_execution_features(
         "waves": waves,
         "totals": totals,
         "static_memory": static_memory,
-        "host_buffers": _retained_host_buffers(dag, numeric_mode, cohort_snapshots),
+        "host_buffers": _declared_executor_memory_estimate(
+            dag, numeric_mode, cohort_snapshots,
+        ),
+    }
+
+
+def _cheap_prepared_memory_bound(dag: ContractionDAG, plan: UpmemPlan) -> int:
+    """Return a lower bound; caller must provide a validated final plan."""
+    numeric_mode = _NUMERIC_MODES[plan.numeric_policy]
+    inputs = sum(prod(t.shape) * np.dtype(t.dtype).itemsize for t in dag.tensors)
+    outputs = sum(prod(node.output.shape) * 8 for node in dag.nodes)
+    encoded = 0
+    for node in dag.nodes:
+        if isinstance(node, ContractNode):
+            b, m, k, n = canonical_label_geometry(
+                node.left.labels, node.left.shape, node.right.labels,
+                node.right.shape, node.output_labels,
+            )
+            encoded += 2 * (1 if numeric_mode else 4) * b * k * (m + n)
+    return inputs + outputs + encoded + prod(dag.output.shape) * 8
+
+
+def _cohort_snapshot_from_controls(stage, controls, envelope_bytes, result_bytes):
+    inputs = [sum(length for _, length in c.planes[:4]) for w in controls for c in w]
+    outputs = [sum(length for _, length in c.planes[4:]) for w in controls for c in w]
+    aggregate_product_elements = {node_id: 0 for node_id in stage.node_ids}
+    max_tile_output_elements = {node_id: 0 for node_id in stage.node_ids}
+    for wave in controls:
+        for control in wave:
+            if control.flags == IDLE:
+                continue
+            product_count = 4 if control.kernel in FOUR_PRODUCT_KERNELS else 1
+            node_id = stage.work_units[control.tile_id].node_id
+            aggregate_product_elements[node_id] += control.m * control.n * product_count
+            max_tile_output_elements[node_id] = max(
+                max_tile_output_elements[node_id], control.m * control.n
+            )
+    return {
+        "cohort_id": stage.stage_id, "node_ids": stage.node_ids,
+        "input_envelope_bytes": envelope_bytes,
+        "response_snapshot_bytes": result_bytes,
+        "control_count": len(controls) * len(controls[0]),
+        "wave_count": len(controls), "input_payload_bytes": sum(inputs),
+        "live_wave_payload_bytes": sum(inputs), "output_payload_bytes": sum(outputs),
+        "max_tile_output_elements": max(
+            (c.m * c.n for w in controls for c in w if c.flags != IDLE), default=0
+        ),
+        # Aggregate over all four lanes; the int64 copy for one lane is
+        # aggregate_product_elements * 2 bytes. Four lane outputs overlap.
+        "int8_assembly_cast_bytes_by_node": {
+            node_id: elements * 2
+            for node_id, elements in aggregate_product_elements.items()
+        },
+        "max_tile_output_elements_by_node": max_tile_output_elements,
+    }
+
+
+def _declared_executor_memory_estimate(dag, numeric_mode, cohorts):
+    """Estimate source-identifiable executor bytes for a validated plan."""
+    retained = _retained_host_buffers(dag, numeric_mode, cohorts)
+    storage = {tensor.id: np.dtype(tensor.dtype).itemsize for tensor in dag.tensors}
+    storage.update({node.output.id: 8 for node in dag.nodes})
+    terms = {}
+    for node in dag.nodes:
+        if not isinstance(node, ContractNode):
+            continue
+        b, m, k, n = canonical_label_geometry(
+            node.left.labels, node.left.shape, node.right.labels,
+            node.right.shape, node.output_labels,
+        )
+        component = 8 if numeric_mode else 4
+        canonical = component * b * k * (m + n)
+        materialized = (prod(node.left.shape) * storage[node.left.tensor_id]
+                        + prod(node.right.shape) * storage[node.right.tensor_id])
+        # lower_binary_contraction runs real and imag; each can hold a
+        # reduction result and a contiguous reorder before canonicalization.
+        transform = 2 * 2 * component * (prod(node.left.shape) + prod(node.right.shape))
+        complex_temp = max(b * m * k, b * k * n) * (16 if numeric_mode else 8)
+        output = prod(node.output.shape)
+        lane = 8 if numeric_mode else 4
+        # decode_complex_products: int64 real/imag, float64 scaled real/imag,
+        # and one complex64 result for int8; float32 real/imag plus complex64.
+        decode = output * ((2 * 8 + 2 * 8 + 8) if numeric_mode else (2 * 4 + 8))
+        terms[node.node_id] = (canonical, canonical + materialized + transform + complex_temp,
+                               output, lane, decode)
+    preparation = submit = assembly = int8_cast_workspace = 0
+    for cohort in cohorts:
+        current = [terms[node_id] for node_id in cohort["node_ids"]]
+        canonical = sum(item[0] for item in current)
+        preparation = max(
+            preparation,
+            canonical + max(item[1] - item[0] for item in current),
+        )
+        payload = int(cohort["live_wave_payload_bytes"])
+        envelope = int(cohort["input_envelope_bytes"])
+        descriptor = 2 * (envelope - payload)
+        # packed_wave.py:428-459 retains descriptor parts and the final
+        # envelope; native_session.py:765-766 deletes that envelope before
+        # native dispatch.
+        submit = max(submit, canonical + payload + envelope
+                     + max(descriptor, NATIVE_OUTPUT_BUFFER_BYTES))
+        tile_by_node = cohort.get("max_tile_output_elements_by_node", {})
+        # Four lane arrays, two full assembly arrays, two tile accumulators,
+        # then the dtype-specific decode arrays above.
+        previous_lane_bytes = 0
+        cast_bytes_by_node = cohort["int8_assembly_cast_bytes_by_node"]
+        for node_id, item in zip(cohort["node_ids"], current, strict=True):
+            cast_bytes_per_lane = (
+                int(cast_bytes_by_node[node_id]) if numeric_mode else 0
+            )
+            cast_bytes = cast_bytes_per_lane
+            int8_cast_workspace = max(int8_cast_workspace, cast_bytes)
+            tile = int(tile_by_node.get(node_id, cohort["max_tile_output_elements"]))
+            current_assembly = (
+                4 * item[2] * item[3]
+                + 2 * item[2] * item[3]
+                + 2 * tile * item[3]
+                + item[4]
+                + cast_bytes
+            )
+            # The previous loop iteration's `lanes` tuple remains alive while
+            # the next tuple-comprehension RHS assembles the current node.
+            assembly = max(assembly, canonical + previous_lane_bytes + current_assembly)
+            previous_lane_bytes = 4 * item[2] * item[3]
+    reduce_workspace = max((prod(node.output.shape) * 8 for node in dag.nodes
+                            if isinstance(node, ReduceNode)), default=0)
+    workspace = max(preparation, submit, assembly, reduce_workspace)
+    persistent = int(retained["caller_input_declared_bytes"]) + int(retained["retained_executor_bulk_bytes"])
+    return {
+        **retained,
+        "declared_executor_memory_scope": HOST_MEMORY_SCOPE,
+        "declared_executor_memory_estimate_bytes": persistent + workspace,
+        "declared_executor_persistent_bytes": persistent,
+        "declared_executor_peak_workspace_bytes": workspace,
+        "declared_executor_preparation_workspace_bytes": preparation,
+        "declared_executor_submit_workspace_bytes": submit,
+        "declared_executor_assembly_workspace_bytes": assembly,
+        "declared_executor_int8_assembly_cast_workspace_bytes": int8_cast_workspace,
+        "declared_executor_reduce_workspace_bytes": reduce_workspace,
+        "declared_executor_live_array_workspace_bytes": max(preparation, assembly, reduce_workspace),
+        "declared_executor_live_payload_bytes": max((int(c["live_wave_payload_bytes"]) for c in cohorts), default=0),
+        "declared_executor_descriptor_packing_workspace_bytes": max(
+            (2 * (int(c["input_envelope_bytes"]) - int(c["live_wave_payload_bytes"]))
+             for c in cohorts), default=0
+        ),
+        "declared_executor_snapshot_workspace_bytes": max((int(c["input_envelope_bytes"]) + NATIVE_OUTPUT_BUFFER_BYTES for c in cohorts), default=0),
+        "native_input_snapshot_bytes": retained["max_input_envelope_bytes"],
+        "native_output_buffer_bytes": NATIVE_OUTPUT_BUFFER_BYTES,
+        "declared_executor_memory_formula": "caller_input_declared + retained_executor_bulk + max(preparation, submit, assembly, host_reduce)",
+        "declared_executor_memory_is_rss": False,
+        "declared_executor_memory_exclusions": "Python/interpreter objects, unitemized NumPy temporaries, allocator overhead, SDK/provider storage, native process RSS/stacks/page cache, and caller backing beyond declared tensor bytes",
+        "configured_reserve_is_margin_only": True,
     }
 
 
@@ -695,4 +850,7 @@ def _dma_aligned(offset: int, payload: int) -> bool:
     return offset % 8 == 0 and payload % 8 == 0 and 8 <= payload <= 2048
 
 
-__all__ = ["extract_execution_features"]
+__all__ = [
+    "DEFAULT_HOST_MEMORY_BUDGET_BYTES",
+    "extract_execution_features",
+]
