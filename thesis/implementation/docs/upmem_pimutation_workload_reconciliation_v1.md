@@ -243,3 +243,55 @@ for the established pre-measurement full-statevector query. Preserve all six
 families. Do not solve this mismatch by relabeling the current shapes, selecting
 only convenient families, or changing kernels. No new pool, physical timing,
 or weight fit was produced under these definitions.
+
+## Bounded Provenance Trace and Correction Handoff
+
+The native family builders first appear in thesis commit
+`f0c7fd589f399d3999fc457c0a075ef3da8da245`. Its commit message explicitly
+describes dummy circuit builders. QuEST's submodule revision authenticates the
+simulator engine, not these circuit definitions. Local Python/native agreement
+therefore cannot independently authenticate a PIMutation workload.
+
+| Family | Located primary evidence | Unresolved boundary |
+| --- | --- | --- |
+| BB84 | PIMutation's algorithm citation and Table 2 | authors' basis/data choices and gate sequence |
+| BV | PIMutation's algorithm citation and Table 2 | authors' oracle and preparation; local builder explicitly is not textbook phase-kickback |
+| EDC | PIMutation's algorithm citation and Table 2 | authors' encoder/syndrome circuit and input preparation |
+| HS | pinned QASMBench HS4 QASM cited above | authors' transformation from the source to the different Table 2 gate count |
+| QRNG | pinned QASMBench QRNG4 QASM | exact authors' scaling artifact; one H per wire is source-consistent |
+| XOR | PIMutation's algorithm citation and Table 2 | authors' logical input preparation and wiring |
+
+The [pinned QRNG4 source](https://github.com/pnnl/QASMBench/blob/357b942396d5c2b7cbc1c229c585a6ef5ccaebac/small/qrng_n4/qrng_n4.qasm)
+contains one H per wire followed only by terminal measurements. Removing those
+measurements for an explicitly declared pre-measurement full-statevector query
+is distinct from doubling the unitary circuit. The paper and the authors'
+[conference slides](https://www.aspdac.com/aspdac2025/archive/pdf/3D-3.pdf),
+plus a bounded exact-title/GitHub repository search, did not yield an
+author-linked implementation artifact. This is a bounded search result, not
+proof that no artifact exists.
+
+Minimal correction route, subject to resolving the source/family-alignment
+decision:
+
+1. Preserve the existing shape generators and frozen records as historical
+   development inputs. Do not silently redefine `quest_compatible`.
+2. Use explicitly source-backed, parameterized family definitions. Keep all
+   six families; distinguish a family-aligned study from exact paper reproduction.
+3. For published QASM, preserve upstream provenance and produce a separately
+   identified pre-measurement file. Remove terminal measurements only; reject
+   mid-circuit measurement, reset and classical control rather than erasing them.
+4. Extend the existing private candidate resolver to accept `qasm_file` and
+   retain the file in the generated qualification config. The current resolver
+   only accepts builtin/quest-compatible kinds; `prepare_config` currently
+   writes `path: None`. The existing core QASM reader accepts the prepared
+   unitary subset; no new parser framework is needed.
+5. Test gate order, small-state output, source hash, file relocation, isolated
+   candidate-worker loading and prepared-config path retention. Verify the
+   frozen wave execution contract remains unchanged.
+6. Create new definition and candidate identities only after this review.
+   Independently bind workload, config, QASM and pool hashes before admission.
+
+No corrected instance sizes or gate sequences have been adopted by this
+handoff. The existing 792-attempt ceiling is not permission to execute the
+unresolved workload. Source-backed replacements must pass the same software,
+numerical, memory, SDK and evidence gates before physical calibration.
