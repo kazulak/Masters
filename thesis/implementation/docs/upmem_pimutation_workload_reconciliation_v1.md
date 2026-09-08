@@ -5,6 +5,13 @@ definitions and their training/test roles only. It does not freeze the physical
 admission, candidate pool, fitted pretest profile, or physical execution, and
 it does not authorize SDK or physical execution.
 
+**Fidelity hold (after definition commit `1e14dd7`):** the recorded definitions
+are not yet accepted as the final PIMutation workload. Do not generate their
+candidate pools, calibrate, or fit weights. Source comparison below establishes
+a mismatch in HS and a changed QRNG computation in the repeat-two proposal.
+Keep the definition commit and prior evidence intact; correct workload semantics
+under a new explicit source/definition identity before lifting this hold.
+
 ## Purpose
 
 The current six-instance P6 path record is a development study. Its 92-attempt
@@ -199,3 +206,40 @@ remain pending lead review/commit and later qualification. The old 92-attempt
 record is development-only, excluded from the final fit, and its raw records
 remain unchanged. Optional families remain deferred; all six required families
 stay in both splits.
+
+## Source-Fidelity Review After Definition Freeze
+
+Software qualification of `1e14dd7bb63b9f530c2542dbe5daeb763de7df2a` passed:
+1,922 local tests in 211.61 seconds, Ruff, and hosted CI run
+`34284570809`. This proves software consistency, not paper fidelity. The local
+JUnit artifact `runs/p6-preparation/pytest-pimutation-full6-definition.xml` has
+SHA-256 `66b2e3865e14c47e86c297d0588578c8c75608d72a67e1c0349ed530044f7503`.
+
+PIMutation Table 2 cites QASMBench for HS and QRNG. The inspected primary
+reference is [QASMBench HS4](https://github.com/pnnl/QASMBench/blob/357b942396d5c2b7cbc1c229c585a6ef5ccaebac/small/hs4_n4/hs4_n4.qasm),
+pinned to `357b942396d5c2b7cbc1c229c585a6ef5ccaebac`. Its four-qubit circuit
+has 24 single-qubit gates and four CNOTs before terminal measurements; this is
+not the 12 single-qubit gates and four CNOTs implied by PIMutation's HS row.
+It therefore supplies a concrete source comparison, not authentication of the
+authors' exact transformed benchmark.
+
+For one disjoint control/target pair, the published chronological gate sequence
+is `Hc,Ht,Xc,Ht,CX,Ht,Xc,Hc,Ht,Ht,CX,Ht,Hc,Ht`. Direct multiplication using
+the conventional real H/X/CNOT matrices maps `|00>` to `|10>` (control first).
+The repository sequence is `Hc,Xc,Hc,CX,CX,Hc,Xc,Hc`, which is identity:
+the CNOTs cancel and each `H X H` is Z. Thus the sequences differ in both
+unitary and zero-input output; matching gate counts cannot establish fidelity.
+
+The proposed QRNG test repeats every H twice. Since `H H = I`, it returns
+the zero-input state rather than the uniform state of one QRNG layer. XOR's
+CNOT-only circuit also preserves zero input, although that alone does not
+prove a defect in a benchmark that intentionally includes such operations.
+Identity or simple-output circuits are not intrinsically invalid execution
+tests; they must not silently substitute for the requested algorithm workload.
+
+Required next action is a bounded source-backed reconciliation of the six
+families and their parameterizations, including terminal-measurement removal
+for the established pre-measurement full-statevector query. Preserve all six
+families. Do not solve this mismatch by relabeling the current shapes, selecting
+only convenient families, or changing kernels. No new pool, physical timing,
+or weight fit was produced under these definitions.
