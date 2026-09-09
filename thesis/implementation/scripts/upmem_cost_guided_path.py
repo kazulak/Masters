@@ -18,6 +18,7 @@ import signal
 import subprocess
 import threading
 import time
+import tempfile
 
 from quantum_bench.planning import (
     _network_preflight,
@@ -1038,7 +1039,7 @@ def _cell_inputs(cell_id: str, study: dict, workload: dict):
 
 
 def initial_cell_search(directory: Path, cell_id: str, study: dict, workload: dict) -> dict:
-    """One durable 128-proposal initial trace; interrupted cells never refill."""
+    """One durable initial trace; interrupted cells never refill."""
     binding, normalization, profile = _load_preparation(directory, study, workload)
     if cell_id not in normalization["greedy_cells"]:
         raise ValueError("Initial search is restricted to frozen development cells")
@@ -1047,14 +1048,30 @@ def initial_cell_search(directory: Path, cell_id: str, study: dict, workload: di
     instance, topology, network = _cell_inputs(cell_id, study, workload)
     if instance["split"] != study["workload"]["development_split"]:
         raise ValueError("Evaluation data cannot enter initial development search")
-    cell_directory = directory / "initial" / record_hash(cell_id)
+    return _run_cell_search(directory, cell_id, study, workload, binding, normalization, profile,
+                            instance, topology, network, stage="initial", objective_id="cotengra_tree_flops_v1")
+
+
+def _run_cell_search(directory, cell_id, study, workload, binding, normalization, profile,
+                     instance, topology, network, *, stage, objective_id):
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, LaunchCostScales, upmem_launch_cost_v1
+
+    scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+    cell_directory = directory / stage / record_hash(cell_id)
+    if stage == "evaluation":
+        cell_directory /= objective_id
     cell_directory.mkdir(parents=True, exist_ok=False)
     context = {"binding_hash": record_hash(binding), "normalization_hash": record_hash(normalization)}
     _write_new_json(cell_directory / "started.json", {"cell_id": cell_id, **context})
     started = time.monotonic()
     def evaluate(path, flops):
         result = lower_candidate(network, path, topology, study)
-        return result if result.score is None else GuidedEvaluation(flops, result.facts)
+        if result.score is None:
+            return result
+        score = flops if objective_id == "cotengra_tree_flops_v1" else upmem_launch_cost_v1(
+            LaunchCostFacts.from_mapping(result.facts), tuple(profile["integer_weights"]), scales,
+        )
+        return GuidedEvaluation(score, result.facts)
     try:
         with (cell_directory / "search_trace.jsonl").open("x", encoding="utf-8") as output:
             def retain(record):
@@ -1064,8 +1081,8 @@ def initial_cell_search(directory: Path, cell_id: str, study: dict, workload: di
             limits = study["search"]
             trace = run_cost_guided_search(
                 network, workload_id=workload["workload_id"], cell_id=cell_id,
-                circuit_id=instance["instance_id"], stage="initial",
-                objective_id="cotengra_tree_flops_v1", profile_id=record_hash(profile),
+                circuit_id=instance["instance_id"], stage=stage,
+                objective_id=objective_id, profile_id=record_hash(profile),
                 trace_context=context, evaluation_callback=evaluate, record_callback=retain,
                 master_seed=limits["master_seed"], proposals=limits["proposals"],
                 startup_trials=limits["startup_trials"], proposal_timeout_s=limits["proposal_timeout_s"],
@@ -1120,12 +1137,442 @@ def freeze_initial_round(directory: Path, study: dict, workload: dict, budget: d
     return manifest
 
 
+STAGES = ("initial", "feedback_1", "feedback_2", "evaluation")
+
+
+def _stage_prefix(stage: str) -> tuple[str, ...]:
+    if stage not in STAGES:
+        raise ValueError("Unknown study stage; extra adaptation rounds are forbidden")
+    return STAGES[:STAGES.index(stage)]
+
+
+def _read_json(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _file_digest(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as stream:
+        for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
+
+
+def verify_round_archives(archives: list[Path], manifest: dict, workload: dict, binding: dict, study: dict) -> dict:
+    """Reopen two durable copies and derive observations through canonical checks."""
+    from freeze_packed_operation_transport import _safe_extract
+    from qualify_quantized_upmem_execution import verify_checksums
+    from upmem_cost_guided_evidence import extract_round_observations
+
+    if len(archives) != 2:
+        raise ValueError("Stage acceptance requires two archive copies")
+    paths = [Path(path).resolve(strict=True) for path in archives]
+    if paths[0].samefile(paths[1]):
+        raise ValueError("Two paths to the same archive are not independent copies")
+    if any(path.is_relative_to(root) for path in paths for root in (Path("/tmp"), Path("/dev/shm"), Path("/run"))):
+        raise ValueError("Accepted archive copies must be in durable storage")
+    copies, extracted = [], []
+    for archive in paths:
+        digest = _file_digest(archive)
+        checksum = Path(str(archive) + ".sha256").read_text().strip().split()
+        if checksum != [digest, archive.name]:
+            raise ValueError("Outer archive checksum or name mismatch")
+        with tempfile.TemporaryDirectory(prefix="cost-guided-verify-") as temporary:
+            root = _safe_extract(archive, Path(temporary))
+            entries = (root / "SHA256SUMS").read_text().splitlines()
+            names = [line.partition("  ")[2] for line in entries]
+            if len(set(names)) != len(names) or any(not name or Path(name).is_absolute() or ".." in Path(name).parts for name in names):
+                raise ValueError("Unsafe or duplicate stage checksum entries")
+            verify_checksums(root)
+            extracted.append(extract_round_observations(root / "raw", manifest, workload, binding, study))
+        copies.append({"path": str(archive), "sha256": digest})
+    if copies[0]["sha256"] != copies[1]["sha256"] or extracted[0]["rows"] != extracted[1]["rows"]:
+        raise ValueError("Verified archive copies or observations differ")
+    return {**extracted[0], "archives": copies}
+
+
+def accept_round(directory: Path, stage: str, archives: list[Path], study: dict, workload: dict) -> dict:
+    """Acceptance is evidence verification, never an asserted success flag."""
+    binding, normalization, initial_profile = _load_preparation(directory, study, workload)
+    predecessors = _stage_prefix(stage)
+    for previous in predecessors:
+        _accepted_round(directory, previous, study, workload)
+    manifest = _read_json(directory / f"{stage}_round.json")
+    profile = (initial_profile if stage == "initial" else
+               _pretest_profile(directory, study, workload) if stage == "evaluation" else
+               _fitted_profile(directory, predecessors[-1], study, workload))
+    if (manifest.get("stage") != stage or manifest.get("study_id") != study["study_id"]
+            or manifest["binding_hash"] != record_hash(binding) or manifest["normalization_hash"] != record_hash(normalization)
+            or manifest["profile_hash"] != record_hash(profile)):
+        raise ValueError("Round binding changed")
+    target = directory / f"{stage}.accepted.json"
+    if target.exists() or (directory / f"{stage}.failed.json").exists():
+        raise ValueError("Accepted or failed rounds cannot be replaced")
+    if not manifest["cells"]:
+        if stage not in ("feedback_1", "feedback_2") or manifest["expected_attempts"] != 0 or archives:
+            raise ValueError("Only a declared empty feedback round can skip physical execution")
+        _verify_empty_feedback(directory, stage, manifest, study, workload, binding, normalization, profile)
+        result = {"rows": [], "archives": [], "physical_stage_elapsed_s": 0.0}
+    else:
+        result = verify_round_archives(archives, manifest, workload, binding, study)
+    elapsed = _require_nonnegative_finite(result["physical_stage_elapsed_s"], "physical stage elapsed")
+    prior_elapsed = sum(_read_json(directory / f"{p}.accepted.json")["physical_stage_elapsed_s"] for p in predecessors)
+    if prior_elapsed + elapsed > study["campaign"]["physical_stage_timeout_s"]:
+        raise ValueError("Cumulative physical-stage time budget exceeded")
+    record = {"stage": stage, "round_manifest_hash": record_hash(manifest),
+              "binding_hash": record_hash(binding), "rows": result["rows"], "archives": result["archives"],
+              "physical_stage_elapsed_s": elapsed}
+    _write_new_json(target, record)
+    return record
+
+
+def _accepted_round(directory: Path, stage: str, study: dict, workload: dict) -> tuple[dict, dict]:
+    binding = _read_json(directory / "binding.json")
+    manifest = _read_json(directory / f"{stage}_round.json")
+    accepted = _read_json(directory / f"{stage}.accepted.json")
+    if (directory / f"{stage}.failed.json").exists() or accepted["stage"] != stage or accepted["round_manifest_hash"] != record_hash(manifest) or accepted["binding_hash"] != record_hash(binding):
+        raise ValueError("Accepted round identity changed or stage failed")
+    if manifest["cells"]:
+        result = verify_round_archives([Path(item["path"]) for item in accepted["archives"]], manifest, workload, binding, study)
+        if (result["rows"] != accepted["rows"] or result["archives"] != accepted["archives"]
+                or result["physical_stage_elapsed_s"] != accepted["physical_stage_elapsed_s"]):
+            raise ValueError("Accepted observations no longer match raw evidence")
+    elif stage not in ("feedback_1", "feedback_2") or accepted["rows"] or accepted["archives"] or manifest["expected_attempts"] != 0:
+        raise ValueError("Invalid empty accepted round")
+    return manifest, accepted
+
+
+def _verify_empty_feedback(directory, stage, manifest, study, workload, binding, normalization, profile):
+    if set(manifest.get("skipped_cells", {})) != set(normalization["greedy_cells"]):
+        raise ValueError("Empty feedback must account for every development cell")
+    measured = {cell_id: set() for cell_id in normalization["greedy_cells"]}
+    for previous in _stage_prefix(stage):
+        prior, _ = _accepted_round(directory, previous, study, workload)
+        for cell_id, cell in prior["cells"].items():
+            measured[cell_id].update(cell["candidates"])
+    for cell_id, greedy in normalization["greedy_cells"].items():
+        trace = _completed_cell_trace(directory, stage, cell_id, greedy["circuit_id"], study, workload,
+                                      binding, normalization, profile, "upmem_launch_cost_v1")
+        skipped = manifest["skipped_cells"][cell_id]
+        if skipped != {"reason": "no_new_eligible_candidate", "trace_hash": record_hash(trace)}:
+            raise ValueError("Empty feedback skip is not trace-bound")
+        if set(eligible_candidate_pool(trace, greedy)) - measured[cell_id]:
+            raise ValueError("Empty feedback omitted a new eligible candidate")
+
+
+def fit_accepted_rounds(directory: Path, through_stage: str, study: dict, workload: dict) -> dict:
+    """Refit only newly verified development evidence; evaluation is never input."""
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, LaunchCostScales, fit_launch_cost_weights
+
+    if through_stage not in STAGES[:3] or (directory / "pretest_profile.json").exists():
+        raise ValueError("Fitting is forbidden after pretest freeze or for evaluation")
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    cells = {cell_id: {"family": row["family"], "split": "training", "greedy_path_id": row["path_id"],
+                       "path_facts": {row["path_id"]: LaunchCostFacts.from_mapping(row["facts"])}}
+             for cell_id, row in normalization["greedy_cells"].items()}
+    rounds, rows, accepted_hashes = [], [], []
+    identity = {"source_sha": binding["source_sha"], "execution_source": study["executor"]["source"],
+                "policy_id": study["executor"]["numeric_policy"], "timing_scope": "steady_execution_v1"}
+    for stage in (*_stage_prefix(through_stage), through_stage):
+        manifest, accepted = _accepted_round(directory, stage, study, workload)
+        accepted_hashes.append(record_hash(accepted))
+        if not manifest["cells"]:
+            continue
+        for cell_id, cell in manifest["cells"].items():
+            if cell_id not in cells or cell["split"] != "training":
+                raise ValueError("Undeclared development or evaluation cell in fit")
+            for path, candidate in cell["candidates"].items():
+                fact = LaunchCostFacts.from_mapping(candidate["facts"])
+                prior = cells[cell_id]["path_facts"].setdefault(path, fact)
+                if prior != fact:
+                    raise ValueError("Path facts changed between accepted rounds")
+        rounds.append({"round_id": stage, "accepted": True, "identity": accepted["rows"][0]["identity"],
+                       "cell_paths": {cell_id: list(cell["candidates"]) for cell_id, cell in manifest["cells"].items()},
+                       "warmup_blocks": manifest["warmup_blocks"], "measurement_blocks": manifest["measurement_blocks"]})
+        rows.extend(accepted["rows"])
+    scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+    fitted, table = fit_launch_cost_weights(cells, rounds, rows, scales=scales, expected_identity=identity)
+    profile = {"model_id": fitted["model_id"], "integer_weights": list(fitted["integer_weights"]),
+               "through_stage": through_stage, "binding_hash": record_hash(binding),
+               "normalization_hash": record_hash(normalization), "accepted_round_hashes": accepted_hashes,
+               "fit_hash": record_hash(fitted), "grid_hash": record_hash(table)}
+    target = directory / f"{through_stage}_fit"
+    target.mkdir(exist_ok=False)
+    _write_new_json(target / "fit.json", fitted)
+    _write_new_json(target / "grid.json", table)
+    _write_new_json(target / "profile.json", profile)
+    return profile
+
+
+def _fitted_profile(directory: Path, through_stage: str, study: dict, workload: dict) -> dict:
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    folder = directory / f"{through_stage}_fit"
+    profile, fitted, grid = (_read_json(folder / name) for name in ("profile.json", "fit.json", "grid.json"))
+    accepted_hashes = [record_hash(_accepted_round(directory, p, study, workload)[1])
+                       for p in (*_stage_prefix(through_stage), through_stage)]
+    if (profile["binding_hash"] != record_hash(binding) or profile["normalization_hash"] != record_hash(normalization)
+            or profile["through_stage"] != through_stage or profile["accepted_round_hashes"] != accepted_hashes
+            or profile["fit_hash"] != record_hash(fitted) or profile["grid_hash"] != record_hash(grid)
+            or profile["integer_weights"] != fitted["integer_weights"] or len(grid) != 1001):
+        raise ValueError("Fitted profile or accepted evidence binding changed")
+    return profile
+
+
+def feedback_cell_search(directory: Path, stage: str, cell_id: str, study: dict, workload: dict) -> dict:
+    if stage not in ("feedback_1", "feedback_2") or (directory / "pretest_profile.json").exists():
+        raise ValueError("No additional feedback or adaptation after pretest freeze")
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    if cell_id not in normalization["greedy_cells"] or (directory / f"{stage}_round.json").exists():
+        raise ValueError("Feedback requires a development cell and an unfrozen round")
+    profile = _fitted_profile(directory, _stage_prefix(stage)[-1], study, workload)
+    instance, topology, network = _cell_inputs(cell_id, study, workload)
+    return _run_cell_search(directory, cell_id, study, workload, binding, normalization, profile,
+                            instance, topology, network, stage=stage, objective_id="upmem_launch_cost_v1")
+
+
+def _completed_cell_trace(directory, stage, cell_id, circuit_id, study, workload, binding,
+                          normalization, profile, objective_id):
+    folder = directory / stage / record_hash(cell_id)
+    if stage == "evaluation":
+        folder /= objective_id
+    if (folder / "failed.json").exists():
+        raise ValueError("Failed search cannot enter a candidate round")
+    trace = _read_json(folder / "completed.json")
+    context = {"binding_hash": record_hash(binding), "normalization_hash": record_hash(normalization)}
+    validate_search_trace(trace, study, workload_id=workload["workload_id"], cell_id=cell_id,
+                          circuit_id=circuit_id, stage=stage, objective_id=objective_id,
+                          profile_id=record_hash(profile), context=context)
+    persisted = [json.loads(line) for line in (folder / "search_trace.jsonl").read_text().splitlines()]
+    if persisted != trace["trace"]:
+        raise ValueError("Incremental/completed trace mismatch")
+    if objective_id == "upmem_launch_cost_v1":
+        from quantum_bench.upmem.path_heuristic import LaunchCostFacts, LaunchCostScales, upmem_launch_cost_v1
+        scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+        for row in persisted:
+            if row["status"] == "eligible" and row["score"] != upmem_launch_cost_v1(
+                LaunchCostFacts.from_mapping(row["facts"]), tuple(profile["integer_weights"]), scales,
+            ):
+                raise ValueError("UPMEM trace score differs from its frozen profile")
+    return trace
+
+
+def freeze_feedback_round(directory: Path, stage: str, study: dict, workload: dict, budget: dict) -> dict:
+    from quantum_bench.upmem.path_heuristic import LaunchCostScales
+
+    if stage not in ("feedback_1", "feedback_2") or (directory / "pretest_profile.json").exists():
+        raise ValueError("Feedback freeze is limited to two rounds before pretest")
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    prior_stages = _stage_prefix(stage)
+    profile = _fitted_profile(directory, prior_stages[-1], study, workload)
+    measured = {cell: set() for cell in normalization["greedy_cells"]}
+    for prior in prior_stages:
+        manifest, _ = _accepted_round(directory, prior, study, workload)
+        for cell, record in manifest["cells"].items():
+            measured[cell].update(record["candidates"])
+    scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+    cells, skipped = {}, {}
+    for cell_id, greedy in sorted(normalization["greedy_cells"].items()):
+        trace = _completed_cell_trace(directory, stage, cell_id, greedy["circuit_id"], study, workload,
+                                      binding, normalization, profile, "upmem_launch_cost_v1")
+        candidates = eligible_candidate_pool(trace, greedy)
+        selection = choose_round_paths(candidates, greedy["path_id"], scales=scales,
+                                       weights=tuple(profile["integer_weights"]), previously_measured=measured[cell_id])
+        if not selection["path_ids"]:
+            skipped[cell_id] = {"reason": selection["reason"], "trace_hash": record_hash(trace)}
+            continue
+        cells[cell_id] = {"selection": selection, "trace_hash": record_hash(trace),
+                          "candidates": {p: candidates[p] for p in selection["path_ids"]},
+                          "circuit_id": greedy["circuit_id"], "family": greedy["family"],
+                          "topology_id": greedy["topology_id"], "split": "training"}
+    attempts = 4 * sum(len(cell["candidates"]) for cell in cells.values())
+    if len(cells) + len(skipped) != budget["development_cells"] or attempts > budget["stages"][stage]:
+        raise ValueError("Feedback membership or budget mismatch")
+    manifest = {"study_id": study["study_id"], "stage": stage, "binding_hash": record_hash(binding),
+                "normalization_hash": record_hash(normalization), "profile_hash": record_hash(profile),
+                "prior_rounds": profile["accepted_round_hashes"], "cells": cells, "skipped_cells": skipped,
+                "expected_attempts": attempts, "warmup_blocks": [0], "measurement_blocks": [1, 2, 3],
+                "physical_admission": "not_performed"}
+    _write_new_json(directory / f"{stage}_round.json", manifest)
+    return manifest
+
+
+def freeze_pretest(directory: Path, study: dict, workload: dict) -> dict:
+    profile = _fitted_profile(directory, "feedback_2", study, workload)
+    membership = sorted(f"{i['instance_id']}/{t['topology_id']}"
+                        for i in workload["instances"] if i["split"] == study["workload"]["evaluation_split"]
+                        for t in study["executor"]["topologies"])
+    frozen = {**profile, "stage": "pretest", "evaluation_cells": membership,
+              "search_settings_hash": record_hash(study["search"]), "workload_hash": study["workload"]["sha256"]}
+    _write_new_json(directory / "pretest_profile.json", frozen)
+    return frozen
+
+
+def _pretest_profile(directory: Path, study: dict, workload: dict) -> dict:
+    frozen = _read_json(directory / "pretest_profile.json")
+    expected = _fitted_profile(directory, "feedback_2", study, workload)
+    membership = sorted(f"{i['instance_id']}/{t['topology_id']}"
+                        for i in workload["instances"] if i["split"] == study["workload"]["evaluation_split"]
+                        for t in study["executor"]["topologies"])
+    if frozen != {**expected, "stage": "pretest", "evaluation_cells": membership,
+                  "search_settings_hash": record_hash(study["search"]), "workload_hash": study["workload"]["sha256"]}:
+        raise ValueError("Pretest profile, membership or search settings changed")
+    return frozen
+
+
+def evaluation_cell_search(directory: Path, cell_id: str, objective_id: str, study: dict, workload: dict) -> dict:
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    profile = _pretest_profile(directory, study, workload)
+    if cell_id not in profile["evaluation_cells"] or objective_id not in ("cotengra_tree_flops_v1", "upmem_launch_cost_v1"):
+        raise ValueError("Evaluation requires a frozen test cell and F or U objective")
+    if (directory / "evaluation_round.json").exists():
+        raise ValueError("All evaluation paths are already frozen")
+    instance, topology, network = _cell_inputs(cell_id, study, workload)
+    return _run_cell_search(directory, cell_id, study, workload, binding, normalization, profile,
+                            instance, topology, network, stage="evaluation", objective_id=objective_id)
+
+
+def freeze_evaluation_round(directory: Path, study: dict, workload: dict, budget: dict) -> dict:
+    from quantum_bench.planning import plan_opt_einsum
+
+    binding, normalization, _ = _load_preparation(directory, study, workload)
+    profile = _pretest_profile(directory, study, workload)
+    cells = {}
+    for cell_id in profile["evaluation_cells"]:
+        instance, topology, network = _cell_inputs(cell_id, study, workload)
+        path, _ = plan_opt_einsum(network, optimize="greedy")
+        evaluated = _evaluate_with_guard(lambda p, _: lower_candidate(network, p, topology, study), path, 0.0,
+                                         study["search"]["lowering_timeout_s"])
+        if evaluated.score is None:
+            raise ValueError("Required evaluation greedy path is infeasible")
+        greedy = {"path_id": path_id(path, circuit_id=instance["instance_id"]), "path": path,
+                  "facts": evaluated.facts, "tree_flops": conventional_tree_flops(network, path)}
+        f_trace, u_trace = [_completed_cell_trace(directory, "evaluation", cell_id, instance["instance_id"], study,
+                                                  workload, binding, normalization, profile, objective)
+                            for objective in ("cotengra_tree_flops_v1", "upmem_launch_cost_v1")]
+        roles = choose_evaluation_paths(greedy, f_trace, u_trace, profile=profile, normalization=normalization)
+        # The union is used only after the two method-specific selections, for execution deduplication.
+        pool = eligible_candidate_pool({"trace": [*f_trace["trace"], *u_trace["trace"]]}, greedy)
+        selected = sorted(set(roles.values()))
+        cells[cell_id] = {"selection": {"roles": roles, "path_ids": selected},
+                          "trace_hashes": {"F": record_hash(f_trace), "U": record_hash(u_trace)},
+                          "candidates": {p: pool[p] for p in selected}, "circuit_id": instance["instance_id"],
+                          "topology_id": topology["topology_id"], "family": instance["family"], "split": "test"}
+    attempts = 6 * sum(len(cell["candidates"]) for cell in cells.values())
+    if len(cells) != budget["evaluation_cells"] or attempts > budget["stages"]["evaluation"]:
+        raise ValueError("Evaluation membership or budget mismatch")
+    manifest = {"study_id": study["study_id"], "stage": "evaluation", "binding_hash": record_hash(binding),
+                "normalization_hash": record_hash(normalization), "profile_hash": record_hash(profile),
+                "cells": cells, "expected_attempts": attempts, "warmup_blocks": [0],
+                "measurement_blocks": [1, 2, 3, 4, 5], "physical_admission": "not_performed"}
+    _write_new_json(directory / "evaluation_round.json", manifest)
+    return manifest
+
+
+def remaining_execution_budget(directory: Path, stage: str, manifest: dict, study: dict, workload: dict) -> dict:
+    """Prelaunch budget from verified predecessors, never from a caller's counter."""
+    previous_attempts, previous_elapsed = 0, 0.0
+    for previous in _stage_prefix(stage):
+        prior, accepted = _accepted_round(directory, previous, study, workload)
+        previous_attempts += prior["expected_attempts"]
+        previous_elapsed += accepted["physical_stage_elapsed_s"]
+    for state in ("running", "accepted", "failed"):
+        if (directory / f"{stage}.{state}.json").exists():
+            raise ValueError("A running, accepted or failed physical stage cannot execute again")
+    attempts = manifest["expected_attempts"]
+    derived = sum(len(cell["candidates"]) for cell in manifest["cells"].values()) * (6 if stage == "evaluation" else 4)
+    cap = {"initial": 192, "feedback_1": 144, "feedback_2": 144, "evaluation": 288}[stage]
+    if type(attempts) is not int or attempts != derived or not 0 < attempts <= cap:
+        raise ValueError("Physical attempt count is empty or outside the frozen stage budget")
+    if previous_attempts + attempts > study["campaign"]["effective_attempt_cap"]:
+        raise ValueError("Cumulative physical attempt budget exceeded")
+    remaining = study["campaign"]["physical_stage_timeout_s"] - previous_elapsed
+    if not math.isfinite(remaining) or remaining <= 0:
+        raise ValueError("Cumulative physical time budget exhausted")
+    return {"prior_attempts": previous_attempts, "stage_attempts": attempts,
+            "cumulative_attempts": previous_attempts + attempts,
+            "prior_physical_stage_elapsed_s": previous_elapsed, "remaining_physical_time_s": remaining}
+
+
+def write_execution_packet(directory: Path, stage: str, output: Path, execution_root: Path,
+                            study: dict, workload: dict, *, simulator: bool = False,
+                            cpu_reference: bool = False) -> dict:
+    """Stage the selected paths for the existing runner; never start execution."""
+    import yaml
+    from quantum_bench.evidence import canonical_json
+    from quantum_bench.experiment import load_experiment_config
+    from qualify_upmem_path_candidates import prepare_cost_guided_config
+    from qualify_quantized_upmem_execution import write_checksums, verify_checksums
+    from upmem_path_heuristic import _canonical_bytes
+
+    binding, normalization, initial_profile = _load_preparation(directory, study, workload)
+    predecessors = _stage_prefix(stage)
+    profile = (initial_profile if stage == "initial" else
+               _pretest_profile(directory, study, workload) if stage == "evaluation" else
+               _fitted_profile(directory, predecessors[-1], study, workload))
+    manifest = _read_json(directory / f"{stage}_round.json")
+    if (manifest["stage"] != stage or manifest["binding_hash"] != record_hash(binding)
+            or manifest["profile_hash"] != record_hash(profile)
+            or manifest["normalization_hash"] != record_hash(normalization)):
+        raise ValueError("Execution packet round/profile binding mismatch")
+    if (directory / f"{stage}.accepted.json").exists() or (directory / f"{stage}.failed.json").exists():
+        raise ValueError("Completed or failed stages cannot create replacement execution packets")
+    target = "cpu" if cpu_reference else "sdk" if simulator else "physical"
+    experiment_id = f"upmem-cost-guided-{stage}-{target}-{binding['source_sha'][:8]}-{record_hash(manifest)[:12]}"
+    config, provenance = prepare_cost_guided_config(manifest, workload, execution_root=execution_root,
+                                                     experiment_id=experiment_id, simulator=simulator,
+                                                     cpu_reference=cpu_reference)
+    if not simulator and not cpu_reference:
+        provenance["execution_budget"] = remaining_execution_budget(directory, stage, manifest, study, workload)
+    output.mkdir(parents=True, exist_ok=False)
+    for source in provenance["qasm_source_bindings"]:
+        data = Path(source["source_path"]).read_bytes()
+        if hashlib.sha256(data).hexdigest() != source["qasm_sha256"]:
+            raise ValueError("QASM changed during packet staging")
+        path = _contained_path(output, source["prepared_path"])
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with path.open("xb") as stream:
+            stream.write(data)
+    configuration = output / "physical.yml"
+    with configuration.open("x", encoding="utf-8") as stream:
+        yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=False)
+    normalized = json.loads(canonical_json(load_experiment_config(configuration)))
+    binary_manifest = {str(execution_root / "native/upmem/runtime/bin" / name): digest
+                       for name, digest in study["executor"]["binaries"].items()}
+    _write_new_json(output / "binary_sha256.json", binary_manifest)
+    provenance.update(source_sha=binding["source_sha"], execution_source=study["executor"]["source"],
+                      round_manifest_hash=record_hash(manifest), configuration_sha256=_file_digest(configuration),
+                      normalized_configuration_sha256=hashlib.sha256(_canonical_bytes(normalized)).hexdigest(),
+                      physical_admission="not_performed")
+    with (output / "physical.yml.provenance.json").open("xb") as stream:
+        stream.write(_canonical_bytes(provenance))
+    _write_new_json(output / "round_manifest.json", manifest)
+    _write_new_json(output / "binding.json", binding)
+    _write_new_json(output / "profile.json", profile)
+    _write_new_json(output / "normalization.json", normalization)
+    write_checksums(output)
+    verify_checksums(output)
+    return {"experiment_id": experiment_id, "configuration_sha256": _file_digest(configuration),
+            "packet_checksums_sha256": _file_digest(output / "SHA256SUMS"),
+            "expected_attempts": provenance["expected_prepared_attempts"], "physical_admission": "not_performed"}
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("inspect", "initialize", "initial-search", "freeze-initial"))
+    parser.add_argument("command", choices=(
+        "inspect", "initialize", "initial-search", "freeze-initial", "accept", "fit",
+        "feedback-search", "freeze-feedback", "freeze-pretest", "evaluation-search", "freeze-evaluation",
+        "write-packet",
+    ))
     parser.add_argument("--study", type=Path, default=DEFAULT_STUDY)
     parser.add_argument("--directory", type=Path)
     parser.add_argument("--cell")
+    parser.add_argument("--stage", choices=STAGES)
+    parser.add_argument("--objective", choices=("cotengra_tree_flops_v1", "upmem_launch_cost_v1"))
+    parser.add_argument("--archive", action="append", type=Path, default=[])
+    parser.add_argument("--output", type=Path)
+    parser.add_argument("--execution-root", type=Path)
+    parser.add_argument("--simulator", action="store_true")
+    parser.add_argument("--cpu-reference", action="store_true")
     args = parser.parse_args()
     study, workload, budget = load_study(args.study)
     if args.command != "inspect":
@@ -1137,8 +1584,35 @@ def main() -> None:
             if args.cell is None:
                 parser.error("--cell is required for initial-search")
             result = initial_cell_search(args.directory, args.cell, study, workload)
-        else:
+        elif args.command == "freeze-initial":
             result = freeze_initial_round(args.directory, study, workload, budget)
+        elif args.command == "freeze-pretest":
+            result = freeze_pretest(args.directory, study, workload)
+        elif args.command == "freeze-evaluation":
+            result = freeze_evaluation_round(args.directory, study, workload, budget)
+        elif args.command == "evaluation-search":
+            if args.cell is None or args.objective is None:
+                parser.error("--cell and --objective are required for evaluation-search")
+            result = evaluation_cell_search(args.directory, args.cell, args.objective, study, workload)
+        else:
+            if args.stage is None:
+                parser.error("--stage is required")
+            if args.command == "accept":
+                result = accept_round(args.directory, args.stage, args.archive, study, workload)
+            elif args.command == "write-packet":
+                if args.output is None or args.execution_root is None:
+                    parser.error("--output and --execution-root are required for write-packet")
+                result = write_execution_packet(args.directory, args.stage, args.output, args.execution_root,
+                                                study, workload, simulator=args.simulator,
+                                                cpu_reference=args.cpu_reference)
+            elif args.command == "fit":
+                result = fit_accepted_rounds(args.directory, args.stage, study, workload)
+            elif args.command == "freeze-feedback":
+                result = freeze_feedback_round(args.directory, args.stage, study, workload, budget)
+            else:
+                if args.cell is None:
+                    parser.error("--cell is required for feedback-search")
+                result = feedback_cell_search(args.directory, args.stage, args.cell, study, workload)
         print(json.dumps(result, indent=2, sort_keys=True))
         return
     print(json.dumps({

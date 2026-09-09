@@ -519,43 +519,57 @@ The decisive completion evidence is a trace showing full-plan cost feedback chan
 
 ### 11.10 Current checkpoint and ordered continuation
 
-The committed software checkpoint is
-939a0161c22aa2fb6f315b1c2a9116654a32fe1e on
+The locally verified committed software checkpoint is
+6fad453a396773968f197f0e229d90a090d16548 on
 feature/upmem-final-system-path-search-v2. Its recorded qualification is
-2,023 passing tests without skips, Ruff and diff checks, with the detailed
+2,192 passing tests without skips, Ruff and diff checks, with the detailed
 record in implementation/docs/upmem_cost_guided_path_v1.md. It includes the
 launch-aware observer/score, isolated pinned research environment, study
-configuration and adaptive search primitives. This is software evidence, not
-physical calibration or completion of the campaign controller.
+configuration, adaptive search primitives, deterministic paired-observation
+fitting, batch selection and exact complete-path replay. This planning pass
+read the qualification record; it did not rerun tests or independently query
+hosted CI. This is software evidence, not physical calibration or completion
+of the campaign controller.
 
-At this planning update, fitting, deterministic batch selection and explicit
-path-replay changes are present as uncommitted work in the active worktree.
-Preserve and review those edits; do not treat the dirty checkout as an accepted
-execution source or restart the implementation from scratch. No new physical
-observations or fitted profile are established by this status update.
+At this planning update, the active worktree has uncommitted campaign commands,
+raw-evidence extraction, archive acceptance, feedback/pretest controls and their
+tests. Preserve and review those edits; do not treat their presence as proof of
+qualification. The physical-stage invocation and restart/failure guards must
+still be bound to the existing runner before admission. Do not restart the
+implemented score/search/fitting work or treat a dirty checkout as an accepted
+execution source. No new physical observations or fitted profile are established
+by this status update.
+
+The execution tag was checked locally to resolve to
+459935f586fdd16c82013838e6d27a12604c3093. The active workload and runtime files
+still match the SHA-256 values recorded in 11.1 and the checkpoint document.
+The root checkout is a different branch; implementation belongs in the active
+worktree above, not on the root checkout's runtime-hardening branch.
 
 Resume in this dependency order:
 
-1. **Close the software controller.** Review the existing fitting and batch
-   changes against 11.4 and 11.6. Finish only the missing campaign commands and
-   guards in the small private CLI. Retain per-proposal traces, complete round
-   membership, hashes, budgets and explicit accepted/failed state. Use synthetic
-   observations and the existing runner interface for fail-fast, resume,
-   two-copy acceptance and evaluation-leakage tests.
-   The read-only fitter review identified two guards to close before acceptance:
-   enforce the declared float32 policy and valid source identities even when
-   supplied identity dictionaries agree, and reject failed execution/startup
-   admission facts. Add focused regression cases; matching metadata alone does
-   not prove a valid physical observation.
-2. **Bind exact selected-path replay.** The historical planner entry regenerates
-   paths through its optimizer configuration; that is not an identity guarantee
-   for a new RandomGreedy proposal. Use the smallest explicit complete-path
-   input through planning.py, experiment.py and cli.py. Validate integer pairs,
-   completeness, tensor-network identity and resulting DAG identity before
-   executor allocation. Never substitute a regenerated HyperOptimizer path.
-   Reuse production lowering and execution unchanged; this adapter is a path
-   input, not a new planner, schedule or physical runner. Record preparation
-   source separately from frozen execution source and binary identities.
+1. **Close the software controller.** Review the pending campaign and evidence
+   changes against 11.4 and 11.6. Finish only missing guards around the existing
+   runner. Retain per-proposal traces, complete round membership, hashes and
+   explicit frozen/running/accepted/failed state. Enforce cumulative time and
+   attempt budgets before launch as well as at acceptance. An interrupted
+   running stage requires incident review, not automatic replay; accepted
+   stages cannot run again. Use fake observations to test first-failure stop,
+   partial-artifact retrieval, role deduplication, exact split/route/block sets,
+   two-copy acceptance and evaluation leakage. Empty feedback stages need a
+   complete-trace proof that no new eligible path exists, not a missing file.
+   Reuse the committed fitter's float32/source/admission checks rather than
+   inventing a second observation-validation policy.
+2. **Verify exact selected-path integration.** The committed frozen_path input
+   already binds integer pairs, completeness, network and DAG identity before
+   allocation. Verify that every stage's pending packet adapter uses it and
+   preserves candidate identity through canonical sample/session evidence.
+   Never substitute a regenerated HyperOptimizer path. Reuse production
+   lowering and execution unchanged; this adapter is a path input, not a new
+   planner, schedule or physical runner. Record preparation source separately
+   from frozen execution source and binary identities. Independently audit
+   raw joins, numerical eligibility, resource/release facts and paired controls
+   before using archive rows for fitting.
 3. **Qualify and freeze preparation.** Run focused mathematics, replay,
    fresh-process search and fake-campaign tests, then the full pinned suite,
    Ruff, diff checks and exact-head CI. Qualify representative selected paths
@@ -582,6 +596,14 @@ One implementer owns the bounded code task, an independent reviewer checks the
 mathematics, replay identity and leakage/failure gates, and the lead is the only
 hardware controller. An updated plan is not itself permission to launch a
 campaign before these gates.
+
+Immediate handoff: finish and review the existing dirty controller patch, not
+another cost-model design or hardware availability campaign. Commit a qualified
+software checkpoint before binding experimental traces. The only permitted
+implementation changes are those needed for this final search, fitting,
+evidence and reporting contract; any demonstrated defect in the frozen executor
+requires stopping and documenting the validity impact rather than silently
+repairing it inside a calibration campaign.
 
 ## 12. Thesis ablations and reporting
 

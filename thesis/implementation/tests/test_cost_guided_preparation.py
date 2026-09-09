@@ -36,10 +36,11 @@ def prepared(tmp_path, monkeypatch):
         rows = []
         common_seeds = {k: kwargs[k] for k in ("master_seed", "workload_id", "cell_id", "stage")}
         sampler_seed = search._seed_from_identity(**common_seeds, seed_domain="optuna_tpe_sampler", proposal_ordinal=None)
+        score = 10.0 if kwargs["objective_id"] == "cotengra_tree_flops_v1" else 1.0
         for index in range(128):
             row = {"proposal_index": index, "tell_order": index + 1, "path": path,
-                   "path_id": greedy["path_id"], "tree_flops": 10.0, "score": 10.0,
-                   "told_objective": 10.0, "facts": facts, "status": "eligible",
+                   "path_id": greedy["path_id"], "tree_flops": 10.0, "score": score,
+                   "told_objective": score, "facts": facts, "status": "eligible",
                    "rejection_reason": None, "duplicate": index > 0, "trial_number": index,
                    "params": {"costmod": 1.0, "temperature": 0.1}, "sampler_seed": sampler_seed,
                    "proposal_seed": search._seed_from_identity(**common_seeds, seed_domain="cotengra_random_greedy_proposal", proposal_ordinal=index),

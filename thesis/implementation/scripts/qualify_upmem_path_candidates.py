@@ -1228,8 +1228,9 @@ def prepare_cost_guided_config(
     execution_root: Path,
     experiment_id: str,
     simulator: bool = False,
+    cpu_reference: bool = False,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Prepare an initial cost-guided round without searches, writes or execution.
+    """Prepare a frozen cost-guided round without searches, writes or execution.
 
     The caller stages qasm_source_bindings and reserves a unique experiment_id
     before writing/loading the configuration. Manifest/profile/binding hashes
@@ -1240,21 +1241,29 @@ def prepare_cost_guided_config(
         raise ValueError("an explicit nonempty experiment_id is required")
     if type(simulator) is not bool:
         raise ValueError("simulator must be a boolean")
+    if type(cpu_reference) is not bool or (cpu_reference and simulator):
+        raise ValueError("CPU reference and SDK qualification are separate targets")
     root = Path(execution_root)
     if not root.is_absolute():
         raise ValueError("execution_root must be an absolute implementation path")
-    if manifest.get("study_id") != "upmem_cost_guided_path_study_v1" or manifest.get("stage") != "initial":
-        raise ValueError("cost-guided preparation supports the initial study stage only")
+    stage = manifest.get("stage")
+    stages = ("initial", "feedback_1", "feedback_2", "evaluation")
+    if manifest.get("study_id") != "upmem_cost_guided_path_study_v1" or stage not in stages:
+        raise ValueError("cost-guided preparation requires a declared study stage")
+    split = "test" if stage == "evaluation" else "training"
+    measured_blocks = 5 if stage == "evaluation" else 3
+    path_cap = 3 if stage in ("feedback_1", "feedback_2") else 4
+    attempt_cap = {"initial": 192, "feedback_1": 144, "feedback_2": 144, "evaluation": 288}[stage]
     for field in ("binding_hash", "profile_hash", "normalization_hash"):
         value = manifest.get(field)
         if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
             raise ValueError(f"{field} must be a lowercase SHA-256 digest")
-    if manifest.get("warmup_blocks") != [0] or manifest.get("measurement_blocks") != [1, 2, 3]:
-        raise ValueError("initial round requires frozen 1+3 blocks")
+    if manifest.get("warmup_blocks") != [0] or manifest.get("measurement_blocks") != list(range(1, measured_blocks + 1)):
+        raise ValueError("round requires its frozen warmup and measurement blocks")
     if any(type(block) is not int for field in ("warmup_blocks", "measurement_blocks") for block in manifest[field]):
         raise ValueError("declared block IDs must be integers")
-    if type(manifest.get("expected_attempts")) is not int or not 0 < manifest["expected_attempts"] <= 192:
-        raise ValueError("initial round expected_attempts must be positive and at most 192")
+    if type(manifest.get("expected_attempts")) is not int or not 0 < manifest["expected_attempts"] <= attempt_cap:
+        raise ValueError(f"round expected_attempts must be positive and at most {attempt_cap}; empty feedback has no execution packet")
     instances = {}
     for instance in workload["instances"]:
         identifier = instance.get("instance_id")
@@ -1265,14 +1274,21 @@ def prepare_cost_guided_config(
         if not isinstance(instance.get("family"), str) or not instance["family"]:
             raise ValueError("workload family is required")
         instances[identifier] = instance
-    training = {key: value for key, value in instances.items() if value["split"] == "training"}
+    training = {key: value for key, value in instances.items() if value["split"] == split}
     expected_cells = {f"{key}/{topology}" for key in training for topology in _EVALUATION_TOPOLOGIES}
     cells = manifest.get("cells")
-    if not expected_cells or not isinstance(cells, Mapping) or set(cells) != expected_cells:
-        raise ValueError("manifest must contain exactly all training instances at both topologies")
+    skipped = manifest.get("skipped_cells", {})
+    if not isinstance(skipped, Mapping) or (skipped and stage not in ("feedback_1", "feedback_2")):
+        raise ValueError("Only feedback rounds may declare skipped cells")
+    if any(item.get("reason") != "no_new_eligible_candidate" for item in skipped.values()):
+        raise ValueError("Skipped feedback cell has an invalid reason")
+    if not expected_cells or not isinstance(cells, Mapping) or set(cells) & set(skipped) or set(cells) | set(skipped) != expected_cells:
+        raise ValueError("manifest must contain exactly all declared split instances at both topologies")
 
     cases, networks, sources = {}, {}, []
     for circuit_id, instance in sorted(training.items()):
+        if not any(cell.get("circuit_id") == circuit_id for cell in cells.values()):
+            continue
         definition = instance["circuit"]
         job = make_simulation_job(_circuit_from_definition(definition))
         expected_problem = instance["canonical_circuit"]["operation_identity"]["problem_id"]
@@ -1291,18 +1307,21 @@ def prepare_cost_guided_config(
         circuit_id, topology_id = cell.get("circuit_id"), cell.get("topology_id")
         if circuit_id not in training or topology_id not in _EVALUATION_TOPOLOGIES or cell_id != f"{circuit_id}/{topology_id}":
             raise ValueError("cell identity/topology mismatch")
-        if cell.get("split") != "training" or cell.get("family") != training[circuit_id]["family"]:
+        if cell.get("split") != split or cell.get("family") != training[circuit_id]["family"]:
             raise ValueError("cell family/split differs from workload")
         selection, candidates = cell["selection"], cell["candidates"]
         paths, roles = selection["path_ids"], selection["roles"]
         if not isinstance(paths, list) or not paths or any(not isinstance(p, str) or not p for p in paths):
             raise ValueError("selection requires nonempty path IDs")
-        if len(paths) > 4:
-            raise ValueError("initial round permits at most 4 selected paths per cell")
+        if len(paths) > path_cap:
+            raise ValueError(f"round permits at most {path_cap} selected paths per cell")
         if len(paths) != len(set(paths)) or not isinstance(candidates, Mapping) or set(paths) != set(candidates):
             raise ValueError("selected path IDs must be deduplicated and exactly match candidates")
-        if not isinstance(roles, Mapping) or not {"G", "F", "R"} <= set(roles):
-            raise ValueError("initial selection requires G/F/R roles")
+        mandatory = {"G", "F", "R", "U"} if stage == "evaluation" else ({"G", "F", "R"} if stage == "initial" else {"G", "new_best"})
+        if not isinstance(roles, Mapping) or not mandatory <= set(roles):
+            raise ValueError("selection lacks mandatory stage roles")
+        if stage in ("feedback_1", "feedback_2") and roles["G"] == roles["new_best"]:
+            raise ValueError("Feedback execution requires a new path distinct from greedy")
         if any(not isinstance(role, str) or not role or not isinstance(p, str) or p not in candidates for role, p in roles.items()):
             raise ValueError("role references an unselected path")
         if set(roles.values()) != set(paths):
@@ -1350,22 +1369,22 @@ def prepare_cost_guided_config(
                 "tensor_network_structure_id": network_id, "logical_plan_id": logical_id,
                 "physical_plan_id": facts["physical_plan_id"],
             })
-    physical_attempts = len(selected_cells) * 4
-    if physical_attempts > 192 or manifest["expected_attempts"] != physical_attempts:
-        raise ValueError("manifest expected_attempts differs from deduplicated 1+3 schedule")
-    warmups, measurements, seed = (0, 1, 20260909) if simulator else (1, 3, 20260910)
+    physical_attempts = len(selected_cells) * (measured_blocks + 1)
+    if physical_attempts > attempt_cap or manifest["expected_attempts"] != physical_attempts:
+        raise ValueError("manifest expected_attempts differs from the deduplicated stage schedule")
+    warmups, measurements, seed = (0, 1, 20260909) if simulator else (1, measured_blocks, 20260910 + stages.index(stage))
     config = {
         "schema_version": "tn_benchmark_v3", "experiment_id": experiment_id,
         "defaults": {"timeout_s": 120.0},
         "collection": _collection(warmups=warmups, measurements=measurements, seed=seed),
         "cases": cases, "plans": plans,
         "routes": {topology: _route(topology, simulator=simulator, prepared_waves=True, execution_root=root)
-                   for topology in _EVALUATION_TOPOLOGIES},
+                   for topology in sorted({cell["topology_id"] for cell in cells.values()})},
         "matrix": [{"case_id": circuit_id, "plan_id": plan_id, "route_ids": sorted(routes)}
                    for (circuit_id, plan_id), routes in sorted(grouped.items())],
     }
     provenance = {
-        "stage": "initial", "experiment_id": experiment_id, "simulator": simulator,
+        "stage": stage, "experiment_id": experiment_id, "simulator": simulator,
         **{field: manifest[field] for field in ("binding_hash", "profile_hash", "normalization_hash")},
         "manifest_record_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
         "workload_record_sha256": hashlib.sha256(json.dumps(workload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
@@ -1373,6 +1392,19 @@ def prepare_cost_guided_config(
         "expected_prepared_attempts": len(selected_cells) * (warmups + measurements),
         "selected_cells": selected_cells, "qasm_source_bindings": sources,
     }
+    if cpu_reference:
+        # CPU qualification checks each exact DAG once, not once per topology.
+        config["routes"] = {"cpu_reference": {
+            "executor": "numpy_dag", "numeric_policy": FLOAT32, "options": {},
+        }}
+        for row in config["matrix"]:
+            row["route_ids"] = ["cpu_reference"]
+        config["collection"] = _collection(warmups=0, measurements=1, seed=20260909)
+        config["collection"]["machine_policy"]["affinity"] = {
+            "mode": "observed_v1", "expected_cpus": None,
+        }
+        provenance["cpu_reference"] = True
+        provenance["expected_prepared_attempts"] = len(config["matrix"])
     return config, provenance
 
 

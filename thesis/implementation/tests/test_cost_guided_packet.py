@@ -78,6 +78,87 @@ def _prepare(packet, **kwargs):
     )
 
 
+def test_evaluation_packet_uses_test_split_and_all_four_roles(packet, tmp_path):
+    manifest, workload = deepcopy(packet)
+    workload["instances"][0]["split"] = "test"
+    workload["instances"][1]["split"] = "training"
+    manifest.update(stage="evaluation", measurement_blocks=[1, 2, 3, 4, 5], expected_attempts=12)
+    for cell in manifest["cells"].values():
+        cell["split"] = "test"
+        cell["selection"]["roles"]["U"] = cell["selection"]["roles"]["G"]
+    config, provenance = _prepare((manifest, workload))
+    assert config["collection"]["measurement_blocks"] == 5
+    assert provenance["expected_prepared_attempts"] == 12
+    assert all(row["roles"] == ["F", "G", "R", "U"] for row in provenance["selected_cells"])
+    path = tmp_path / "evaluation.yml"
+    path.write_text(yaml.safe_dump(config))
+    assert load_experiment_config(path)["collection"]["measurement_blocks"] == 5
+
+
+def test_feedback_packet_cannot_disguise_greedy_as_a_new_path(packet):
+    manifest, workload = deepcopy(packet)
+    manifest["stage"] = "feedback_1"
+    for cell in manifest["cells"].values():
+        greedy = cell["selection"]["roles"]["G"]
+        cell["selection"]["roles"] = {"G": greedy, "new_best": greedy}
+    with pytest.raises(ValueError, match="distinct from greedy"):
+        _prepare((manifest, workload))
+
+
+def test_cpu_reference_packet_runs_exact_paths_once_without_dpu_allocation(packet, tmp_path):
+    from quantum_bench.report import verify_artifacts
+
+    config, provenance = _prepare(packet, cpu_reference=True)
+    assert set(config["routes"]) == {"cpu_reference"}
+    assert config["routes"]["cpu_reference"]["executor"] == "numpy_dag"
+    assert provenance["expected_prepared_attempts"] == 1
+    assert provenance["expected_physical_attempts"] == 8
+    assert len(provenance["selected_cells"]) == 2
+    assert config["collection"]["warmup_blocks"] == 0
+    assert config["collection"]["measurement_blocks"] == 1
+    path = tmp_path / "cpu.yml"
+    path.write_text(yaml.safe_dump(config))
+    output = tmp_path / "raw"
+    assert cli.run_command(str(path), str(output), allow_physical=False)["status"] == "completed"
+    assert verify_artifacts(output)["failed_count"] == 0
+    sample = json.loads((output / "samples.jsonl").read_text().strip())
+    assert sample["status"] == "success"
+    expected = next(iter(packet[0]["cells"].values()))
+    candidate = next(iter(expected["candidates"].values()))
+    assert sample["identities"]["logical_plan_id"] == candidate["facts"]["logical_plan_id"]
+    with pytest.raises(ValueError, match="separate targets"):
+        _prepare(packet, cpu_reference=True, simulator=True)
+
+
+def test_staged_packet_matches_existing_private_archive_verifier(packet, tmp_path, monkeypatch):
+    from tests.test_upmem_cost_guided_search import search
+    from quantum_bench.evidence import canonical_json
+    from upmem_path_heuristic import _wave_private_archive
+
+    manifest, workload = deepcopy(packet)
+    study, _, _ = search.load_study()
+    binding = {"source_sha": "a" * 40}
+    normalization = {"scales": {k: 1.0 for k in ("H", "P", "N", "M", "W")}}
+    profile = {"integer_weights": [2, 2, 2, 2, 2]}
+    manifest.update(binding_hash=search.record_hash(binding), profile_hash=search.record_hash(profile),
+                    normalization_hash=search.record_hash(normalization))
+    directory = tmp_path / "prepared"
+    directory.mkdir()
+    (directory / "initial_round.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(search, "_load_preparation", lambda *_: (binding, normalization, profile))
+    output = tmp_path / "stage" / "preregistration"
+    result = search.write_execution_packet(directory, "initial", output, ROOT, study, workload)
+    assert result["expected_attempts"] == 8
+    assert result["physical_admission"] == "not_performed"
+    normalized = json.loads(canonical_json(load_experiment_config(output / "physical.yml")))
+    archived = _wave_private_archive(output.parent / "raw", output / "physical.yml.provenance.json",
+                                     {"configuration": {"experiment": normalized}})
+    assert archived["provenance"]["round_manifest_hash"] == search.record_hash(manifest)
+    assert archived["configuration_sha256"] == result["configuration_sha256"]
+    with pytest.raises(FileExistsError):
+        search.write_execution_packet(directory, "initial", output, ROOT, study, workload)
+
+
 @pytest.mark.parametrize("simulator", [False, True])
 def test_exact_selected_paths_routes_counts_and_no_search(packet, tmp_path, monkeypatch, simulator):
     before = deepcopy(packet)

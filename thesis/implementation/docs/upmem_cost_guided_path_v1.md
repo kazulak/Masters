@@ -63,7 +63,7 @@ In particular, scoring a fixed candidate pool does not satisfy cost-guided
 search. The final G/F/R/U comparison must demonstrate and evaluate feedback
 during proposal generation.
 
-The private CLI exposes `inspect`, `initialize`, `initial-search` and
+At the initial software checkpoint, the private CLI exposed `inspect`, `initialize`, `initial-search` and
 `freeze-initial`. These are offline preparation commands, not a hardware
 controller. No accepted-round resume, physical collection, or fitting command
 is enabled by this checkpoint. Mandatory search tests do
@@ -124,6 +124,56 @@ diff checks passed. The independent replay review found no blockers; the
 preparation review's objective/profile and trace-provenance findings were
 repaired and passed its focused re-review. Runtime and historical CI constraints
 retain the hashes recorded above. No new SDK or physical execution was performed.
+
+## Campaign and evidence integration checkpoint
+
+The controller now exposes `accept`, `fit`, `feedback-search`,
+`freeze-feedback`, `freeze-pretest`, `evaluation-search`, `freeze-evaluation`
+and `write-packet`, in addition to the initial preparation commands. These
+commands prepare or verify artifacts; none invokes physical hardware.
+
+Every nonempty accepted stage is extracted independently from two retained
+archives. Outer hashes, safe extraction, the complete relative checksum
+inventory and canonical verification precede raw sample/session joins. Source,
+binary, path/plan, split, stage collection seed, block order, numerical policy,
+resource admission and release must match. Stage termination must demonstrate
+successful physical and canonical processes, no timeout, positive monotonic
+elapsed time covering the sequential attempts, clean source, rank release and
+zero retries or replacements. A self-consistent modified validation policy or
+collection seed is not sufficient. Missing historical observations are never
+reconstructed or imported.
+
+Fitting reopens accepted archives before consuming their rows. Feedback is
+limited to two rounds and cannot refill a completed search. Empty feedback
+requires trace-bound proof that no new eligible candidate exists. The pretest
+freeze prevents further fitting, and all evaluation F/U traces and G/F/R/U
+labels must be frozen before evaluation. Evaluation rows are never fit inputs.
+
+`write-packet --cpu-reference` prepares each selected exact DAG once for the
+existing NumPy reference runner, independently of topology duplicates. It
+does not add CPU placement to the UPMEM experiment. `--simulator` prepares SDK
+correctness packets; the default prepares physical packets. All preserve
+selected-path roles and replay identities. Packet preparation is not hardware
+admission or reservation. Physical packets check remaining attempt/time budgets
+from verified predecessors; running, accepted and failed stages cannot be
+issued as new physical packets.
+
+`upmem_cost_guided_execution.py` retains only the existing controller's Linux
+preflight, owned-process cleanup and archive mechanics. The remaining integration
+is an explicit once-only invocation around the existing canonical runner,
+including the private flock, qualification binding and durable running/failure
+markers. No second sampling loop is needed. That invocation, new selected-path
+CPU/SDK qualification, physical collection, fitting real observations and final
+evaluation remain incomplete. No physical acceptance is implied by these
+software checks.
+
+Qualification of this checkpoint: all 2,368 tests passed in 257.32 seconds in
+the pinned research environment, with no skips. Ruff and diff checks passed.
+The local XML report is retained under ignored
+`runs/p6-preparation/cost-guided-research/controller-qualification/pytest.xml`.
+Independent evidence and process/archive reviews found no remaining blockers
+after the numerical-policy, collection-seed, terminal-state and durable-archive
+repairs. Exact-head hosted CI remains a separate gate before experimental use.
 
 ## Host-pass inventory
 
