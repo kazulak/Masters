@@ -1,0 +1,836 @@
+{
+  "schema_version": "upmem_path_heuristic_preregistration_v1",
+  "study_id": "upmem_family_aligned_path_study_v1",
+  "status": "workload_definitions_frozen",
+  "source_qualification_status": "pending",
+  "software_qualification_status": "pending",
+  "sdk_qualification_status": "pending",
+  "physical_admission_status": "pending",
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md section 11",
+  "execution_profile": "kernel_schedule_system_v1",
+  "preparation_parent_commit": "85605e0b3e5947310f4047f29b0e19467fa8cb5b",
+  "workload_manifest": {
+    "path": "configs/upmem_family_aligned_workload_v1.json",
+    "workload_id": "upmem_family_aligned_workload_v1",
+    "status": "workload_definitions_frozen",
+    "sha256": "f2c85f27508d9b9fb5f55d13b89334939aa424330e27555dfafe3216452382d7"
+  },
+  "execution_contract": {
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": true,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": "split_complex_float32_v1",
+    "cost_model_id": "upmem_slr_wave_cost_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+  },
+  "execution_policy": {
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": true,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": "split_complex_float32_v1",
+    "cost_model_id": "upmem_slr_wave_cost_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "intermediate_policy": "host_roundtrip_v1",
+    "host_memory_reserve_bytes": 0
+  },
+  "score_id": "upmem_slr_wave_cost_v1",
+  "numeric_policy": "split_complex_float32_v1",
+  "rank_count": 1,
+  "host_memory_admission_bytes": 536870912,
+  "host_memory_policy": {
+    "declared_executor_budget_bytes": 536870912,
+    "reserve_bytes": 0,
+    "bound_type": "declared_executor_admission_not_rss_bound",
+    "route_options_override": false
+  },
+  "candidate_generation": {
+    "candidate_generation_id": "upmem_family_aligned_candidates_v1",
+    "status": "pending",
+    "strategy": "existing_generator_cotengra_greedy_one_trial",
+    "physical_lowering_timeout_s": 60.0,
+    "cotengra_method": "greedy",
+    "cotengra_objective": "flops",
+    "master_seed": 20260902,
+    "maximum_planned_work_units": 400,
+    "maximum_semantic_identity_expansion_units": 1000000,
+    "one_trial_searches": 64,
+    "opt_einsum_reference": "greedy",
+    "candidate_generation_after_timing": false
+  },
+  "candidate_pool": {
+    "candidate_pool_id": "upmem_family_aligned_candidates_v1",
+    "status": "pending",
+    "membership_frozen_before_timing": true,
+    "construction": [
+      "one opt_einsum greedy reference",
+      "64 cotengra one-trial candidates using the existing generator strategy"
+    ],
+    "size_before_feasibility_filter": 65,
+    "proposal_strategy": "training_only_adaptive_selection_from_fixed_pool",
+    "adaptive_proposal_roles": [
+      "greedy",
+      "incumbent",
+      "new_fixed_pool_candidate"
+    ],
+    "new_proposal_rule": "next unmeasured feasible fixed-pool path with lowest current training-fitted score, tie candidate_path_id",
+    "initial_selection_score": "existing _wave_equal_weights feature-model projection evaluated by _wave_score",
+    "candidate_generation_after_first_timing": false,
+    "physical_deduplication": "count each physical choice once per workload-topology cell",
+    "deduplication_effect": "unused slots remain unused; no post-timing refill",
+    "minimum_measured_paths_per_cell": 0
+  },
+  "calibration": {
+    "candidate_roles": [
+      "greedy",
+      "minimum_flops",
+      "minimum_peak_intermediate",
+      "minimum_writes",
+      "equal_wave_cost",
+      "feature_diverse"
+    ],
+    "candidates_per_cell_maximum": 6,
+    "measurement_blocks": 3,
+    "splits": [
+      "training"
+    ],
+    "warmup_blocks": 1,
+    "selection_timing_used": false,
+    "deduplicate_physical_choices": true,
+    "unused_deduplicated_slots_are_not_refilled": true
+  },
+  "model_forms": [
+    "six_term",
+    "grouped"
+  ],
+  "model_comparison": {
+    "data_split": "training_only",
+    "fold_unit": "leave_one_circuit_instance_out_with_both_topologies_together",
+    "evaluation_pool": "physically_measured_candidates_in_omitted_training_instance",
+    "bootstrap_resamples": 2000,
+    "bootstrap_seed": 20260904,
+    "bootstrap_unit": "complete paired block within each physical round shared across cells",
+    "confidence_level": 0.95,
+    "stability_resamples": 200,
+    "stability_fit_sample_count": 1000,
+    "stability_seed": 20260905,
+    "stability_interpretation": "bounded conditional fold-refit diagnostic; not full-search uncertainty or a model-selection objective",
+    "selection_rule": "choose six_term only if the lower 95 percent bound of paired log-geometric speedup over grouped is positive and observed worst-cell speedup is not lower; otherwise choose grouped",
+    "interpretation": "conditional training/development evidence because adaptive measured pools use training data, not unbiased generalization of adaptive search",
+    "report_selection_agreement": true,
+    "no_validation_or_test_timing": true
+  },
+  "score": {
+    "semantic_id": "upmem_slr_wave_cost_v1",
+    "normalization": "log((candidate+1)/(greedy+1))",
+    "normalization_epsilon_natural_units": 1,
+    "weight_search_samples": 100000,
+    "weight_search_seed": 20260903,
+    "inactive_terms": [
+      "E_num",
+      "P_wram"
+    ],
+    "cell_weighting": "equal_cells",
+    "primary_objective": "geometric_mean_repeated_block_speedup",
+    "tie_break": "highest_worst_cell_repeated_block_speedup_then_lexicographic_weights",
+    "no_raw_time_pooling": true,
+    "no_hardware_per_weight_vector": true,
+    "no_fastest_observation_selection": true
+  },
+  "topologies": [
+    {
+      "topology_id": "1dpu_t8",
+      "dpu_count": 1,
+      "rank_count": 1,
+      "tasklets_per_dpu": 8
+    },
+    {
+      "topology_id": "4dpu_t8",
+      "dpu_count": 4,
+      "rank_count": 1,
+      "tasklets_per_dpu": 8
+    }
+  ],
+  "physical_environment": {
+    "affinity": [
+      0
+    ],
+    "host": "safari-baguette1",
+    "rank_path": "/dev/dpu_rank1",
+    "transport": "packed_wave_v1"
+  },
+  "circuits": [
+    {
+      "circuit_id": "qrng_train_total16_r1",
+      "split": "training",
+      "family": "QRNG",
+      "family_key": "qrng",
+      "family_parameters": {
+        "n_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 16
+      },
+      "widths": {
+        "logical_qubits": 16,
+        "total_qubits": 16
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "986af9ebe7b7929f4599e80021e329802a874c71525e40116beb71fa0d3cb980"
+        }
+      },
+      "canonical_problem_id": "a6045ec53af50fc5f8824a569b60bab08db30c38359d182f807eb0ac140b9e9f"
+    },
+    {
+      "circuit_id": "qrng_test_total17_r1",
+      "split": "test",
+      "family": "QRNG",
+      "family_key": "qrng",
+      "family_parameters": {
+        "n_qubits": 17,
+        "repeat_layers": 1,
+        "logical_qubits": 17
+      },
+      "widths": {
+        "logical_qubits": 17,
+        "total_qubits": 17
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "1e1cef899957581cde38243d26b362c9d23a16e66472165f25ccb80ee7f4178f"
+        }
+      },
+      "canonical_problem_id": "d0021d1ffe2ab463882096cbe4f081d8939d45789a374c292ac6332917e4ecab"
+    },
+    {
+      "circuit_id": "bv_train_total16_r1",
+      "split": "training",
+      "family": "BV",
+      "family_key": "bv",
+      "family_parameters": {
+        "data_qubits": 15,
+        "repeat_layers": 1,
+        "oracle_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 15,
+        "ancilla_qubits": 1,
+        "total_qubits": 16
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "f43410b57e8a15b730dbb17f9de678d6445c38379a6cee6e94de424b0bb1442e"
+        }
+      },
+      "canonical_problem_id": "ba7e3ec264fe5a1783fb4a360182200f446298857b1e77f31e89d82d31ecbba3"
+    },
+    {
+      "circuit_id": "bv_test_total17_r1",
+      "split": "test",
+      "family": "BV",
+      "family_key": "bv",
+      "family_parameters": {
+        "data_qubits": 16,
+        "repeat_layers": 1,
+        "oracle_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 16,
+        "ancilla_qubits": 1,
+        "total_qubits": 17
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "b739f7feab6f37054e8c7d75f5616c9a156f4d3deda00dc98ff5b6574cd2f626"
+        }
+      },
+      "canonical_problem_id": "2549bff70723442426dccc5fe45ef19a43af75c72cf82d89f82071521dfddb11"
+    },
+    {
+      "circuit_id": "bb84_train_total16_r1",
+      "split": "training",
+      "family": "BB84",
+      "family_key": "bb84",
+      "family_parameters": {
+        "n_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 16
+      },
+      "widths": {
+        "logical_qubits": 16,
+        "total_qubits": 16
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "97d7336ddd3033e3c556e281b3a68fad767d33657d3160fd72a19f7772ccdd29"
+        }
+      },
+      "canonical_problem_id": "d7b27fd9cf4080830241dc9985ad78b037877f3aecfbd6747b5c1bc163e94708"
+    },
+    {
+      "circuit_id": "bb84_test_total17_r1",
+      "split": "test",
+      "family": "BB84",
+      "family_key": "bb84",
+      "family_parameters": {
+        "n_qubits": 17,
+        "repeat_layers": 1,
+        "logical_qubits": 17
+      },
+      "widths": {
+        "logical_qubits": 17,
+        "total_qubits": 17
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "edd534fae00355e6a730f786abbf29343cc551a08561bf3578bcdcda967efea0"
+        }
+      },
+      "canonical_problem_id": "3f75f4fb65cf723aabd025f438d989ba4996ac0a806efc7212e8c712b816d1c9"
+    },
+    {
+      "circuit_id": "edc_train_data8_syndrome7_total15_r1",
+      "split": "training",
+      "family": "EDC",
+      "family_key": "edc",
+      "family_parameters": {
+        "data_qubits": 8,
+        "repeat_layers": 1,
+        "logical_qubits": 1,
+        "encoded_data_qubits": 8,
+        "syndrome_qubits": 7
+      },
+      "widths": {
+        "logical_qubits": 1,
+        "encoded_data_qubits": 8,
+        "syndrome_qubits": 7,
+        "ancilla_qubits": 7,
+        "allocated_qubits": 15,
+        "total_qubits": 15
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_train_data8_syndrome7_total15_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "df8eee062d6e14f9e6bd4b91cc4f6abd5ae8a3c826f4b29eccb8a802a26683bd"
+        }
+      },
+      "canonical_problem_id": "cbdd7654f65a18da304f78b9b249bc17cc504d018ef170b14ae2af0d0955c71f"
+    },
+    {
+      "circuit_id": "edc_test_data9_syndrome8_total17_r1",
+      "split": "test",
+      "family": "EDC",
+      "family_key": "edc",
+      "family_parameters": {
+        "data_qubits": 9,
+        "repeat_layers": 1,
+        "logical_qubits": 1,
+        "encoded_data_qubits": 9,
+        "syndrome_qubits": 8
+      },
+      "widths": {
+        "logical_qubits": 1,
+        "encoded_data_qubits": 9,
+        "syndrome_qubits": 8,
+        "ancilla_qubits": 8,
+        "allocated_qubits": 17,
+        "total_qubits": 17
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_test_data9_syndrome8_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "2b838be2135b2436259fe51466b1772da74221a0c0a19d30f00139bff4118653"
+        }
+      },
+      "canonical_problem_id": "907d7bac7eebef4d0a23cd37c9a7458325139ad9449b436b5491a66ff3730f19"
+    },
+    {
+      "circuit_id": "hs_train_total16_r1",
+      "split": "training",
+      "family": "HS",
+      "family_key": "hs",
+      "family_parameters": {
+        "allocated_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 8
+      },
+      "widths": {
+        "allocated_qubits": 16,
+        "logical_qubits": 8,
+        "pair_count": 8,
+        "pair_layout": "q[2j] control, q[2j+1] target",
+        "total_qubits": 16
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "99373ee750b1794528585277bbd846c882f493be57cc33fce1a2a64e1df96209"
+        }
+      },
+      "canonical_problem_id": "7fd0262ff0ea0503a08e5e8627ea085879662ab83eb8a7d302a33ab84e7ec293"
+    },
+    {
+      "circuit_id": "hs_test_total18_r1",
+      "split": "test",
+      "family": "HS",
+      "family_key": "hs",
+      "family_parameters": {
+        "allocated_qubits": 18,
+        "repeat_layers": 1,
+        "logical_qubits": 9
+      },
+      "widths": {
+        "allocated_qubits": 18,
+        "logical_qubits": 9,
+        "pair_count": 9,
+        "pair_layout": "q[2j] control, q[2j+1] target",
+        "total_qubits": 18
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_test_total18_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "367aa5ce346faa1537b6646482727712ac7a71f23210e3e10f77f532014a89cd"
+        }
+      },
+      "canonical_problem_id": "62c83e4fbf0214ba2daf698d332726543893548b0760ac3bc713be4891912a1c"
+    },
+    {
+      "circuit_id": "xor_train_total16_r1",
+      "split": "training",
+      "family": "XOR",
+      "family_key": "xor",
+      "family_parameters": {
+        "data_qubits": 15,
+        "repeat_layers": 1,
+        "parity_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 15,
+        "ancilla_qubits": 1,
+        "total_qubits": 16
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "7860ed1b7586df0c70807c74532fbfa1d51f863911b09b39e53bf1b191b410c9"
+        }
+      },
+      "canonical_problem_id": "f083c8362ce1977feb38ca3d153281dc810b876b8617e28ea6578e78738eb5f2"
+    },
+    {
+      "circuit_id": "xor_test_total17_r1",
+      "split": "test",
+      "family": "XOR",
+      "family_key": "xor",
+      "family_parameters": {
+        "data_qubits": 16,
+        "repeat_layers": 1,
+        "parity_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 16,
+        "ancilla_qubits": 1,
+        "total_qubits": 17
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "1e72f5e23a76e2307c7fc31736fe1eb127bd6c1afc1abc1516b135c83067d982"
+        }
+      },
+      "canonical_problem_id": "1f235728477da31cfcd23baa2c8393d50931b4f7bf7a1129d3b2dcb287924a43"
+    }
+  ],
+  "declared_workload": {
+    "training_instance_ids": [
+      "qrng_train_total16_r1",
+      "bv_train_total16_r1",
+      "bb84_train_total16_r1",
+      "edc_train_data8_syndrome7_total15_r1",
+      "hs_train_total16_r1",
+      "xor_train_total16_r1"
+    ],
+    "test_instance_ids": [
+      "qrng_test_total17_r1",
+      "bv_test_total17_r1",
+      "bb84_test_total17_r1",
+      "edc_test_data9_syndrome8_total17_r1",
+      "hs_test_total18_r1",
+      "xor_test_total17_r1"
+    ],
+    "all_families_in_each_split": true,
+    "same_families_distinct_definition_identities": true,
+    "query": "pre_measurement_statevector"
+  },
+  "adaptive_search": {
+    "proposal_model_forms": [
+      "six_term",
+      "grouped"
+    ],
+    "maximum_rounds": 1,
+    "rounds_are_training_only": true,
+    "maximum_unique_paths_per_cell_per_round": 3,
+    "per_round_roles": [
+      "greedy",
+      "incumbent",
+      "new_fixed_pool_candidate"
+    ],
+    "proposal_input": "previous_training_measurements_only",
+    "proposal_rule": "lowest_current_training_fitted_score_then_candidate_path_id",
+    "score_frozen_before_each_batch": true,
+    "validation_or_test_timing_used_for_proposals": false,
+    "same_round_controls": true,
+    "deduplicate_physical_choices": true,
+    "unused_deduplicated_slots_are_not_refilled": true,
+    "no_positive_chasing": true
+  },
+  "budget": {
+    "maximum_new_attempts": 792,
+    "maximum_attempts": 792,
+    "historical_development_attempts_excluded_from_fit": 92,
+    "aggregate_ledger_total_including_historical_development": 884,
+    "physical_stage_elapsed_ceiling_s": 86400,
+    "elapsed_accounting": "cumulative monotonic wall time for new physical stages; excludes offline analysis and archival verification",
+    "elapsed_limit_action": "stop, preserve partial evidence, release resources; no retries, replacements, or refill",
+    "attempts_include_warmups_and_measurements": true,
+    "attempts_include_failed_or_incomplete_samples": true,
+    "deduplication_leaves_unused_attempts": true,
+    "no_refills": true,
+    "no_retries": true,
+    "hardware_per_weight_vector": false,
+    "maximum_adaptive_rounds": 1,
+    "no_separate_validation_physical_stage": true,
+    "actual_attempt_count_source": "frozen_deduplicated_selected_cells * declared blocks",
+    "stages": [
+      {
+        "stage_id": "initial_training",
+        "split": "training",
+        "instance_ids": [
+          "qrng_train_total16_r1",
+          "bv_train_total16_r1",
+          "bb84_train_total16_r1",
+          "edc_train_data8_syndrome7_total15_r1",
+          "hs_train_total16_r1",
+          "xor_train_total16_r1"
+        ],
+        "topologies": [
+          "1dpu_t8",
+          "4dpu_t8"
+        ],
+        "warmup_blocks": 1,
+        "measurement_blocks": 3,
+        "maximum_attempts": 288,
+        "maximum_unique_paths_per_cell": 6,
+        "actual_attempt_count_source": "frozen_deduplicated_selected_cells * declared blocks",
+        "formula": "upper bound: 6 instances * 2 topologies * 6 unique choices * (1 warmup + 3 measurements) = 288"
+      },
+      {
+        "stage_id": "adaptive_training",
+        "split": "training",
+        "instance_ids": [
+          "qrng_train_total16_r1",
+          "bv_train_total16_r1",
+          "bb84_train_total16_r1",
+          "edc_train_data8_syndrome7_total15_r1",
+          "hs_train_total16_r1",
+          "xor_train_total16_r1"
+        ],
+        "topologies": [
+          "1dpu_t8",
+          "4dpu_t8"
+        ],
+        "warmup_blocks": 1,
+        "measurement_blocks": 3,
+        "maximum_attempts": 144,
+        "maximum_unique_paths_per_cell": 3,
+        "maximum_unique_paths_per_cell_per_round": 3,
+        "actual_attempt_count_source": "frozen_deduplicated_selected_cells * declared blocks",
+        "formula": "upper bound: 1 round * 6 instances * 2 topologies * 3 unique choices * (1 warmup + 3 measurements) = 144",
+        "maximum_rounds": 1,
+        "maximum_unique_paths_per_cell_per_round": 3,
+        "roles_per_round": [
+          "greedy",
+          "incumbent",
+          "new_fixed_pool_candidate"
+        ]
+      },
+      {
+        "stage_id": "training_confirmation",
+        "split": "training",
+        "instance_ids": [
+          "qrng_train_total16_r1",
+          "bv_train_total16_r1",
+          "bb84_train_total16_r1",
+          "edc_train_data8_syndrome7_total15_r1",
+          "hs_train_total16_r1",
+          "xor_train_total16_r1"
+        ],
+        "topologies": [
+          "1dpu_t8",
+          "4dpu_t8"
+        ],
+        "warmup_blocks": 1,
+        "measurement_blocks": 5,
+        "maximum_attempts": 144,
+        "maximum_unique_paths_per_cell": 2,
+        "actual_attempt_count_source": "frozen_deduplicated_selected_cells * declared blocks",
+        "formula": "upper bound: 6 instances * 2 topologies * 2 arms * (1 warmup + 5 measurements) = 144",
+        "arms": [
+          "greedy",
+          "upmem_selected"
+        ]
+      },
+      {
+        "stage_id": "test",
+        "split": "test",
+        "instance_ids": [
+          "qrng_test_total17_r1",
+          "bv_test_total17_r1",
+          "bb84_test_total17_r1",
+          "edc_test_data9_syndrome8_total17_r1",
+          "hs_test_total18_r1",
+          "xor_test_total17_r1"
+        ],
+        "topologies": [
+          "1dpu_t8",
+          "4dpu_t8"
+        ],
+        "warmup_blocks": 1,
+        "measurement_blocks": 5,
+        "maximum_attempts": 216,
+        "maximum_unique_paths_per_cell": 3,
+        "actual_attempt_count_source": "frozen_deduplicated_selected_cells * declared blocks",
+        "formula": "upper bound: 6 instances * 2 topologies * 3 paths * (1 warmup + 5 measurements) = 216",
+        "path_roles": [
+          "greedy",
+          "minimum_flops",
+          "upmem_selected"
+        ]
+      }
+    ]
+  },
+  "freeze_order": {
+    "initial_workload_candidate_config_freeze": {
+      "before_any_physical_execution": true,
+      "freezes": [
+        "family-aligned QASM bytes, widths, source/query identity and split",
+        "candidate generator, seed, search budget, and fixed-pool rule",
+        "execution profile, schedule, transport, geometry, numeric, topology, and memory contract",
+        "finite attempt budget, deduplication, failed-attempt accounting, and elapsed cap"
+      ],
+      "does_not_freeze": [
+        "training-fitted weights",
+        "model form",
+        "pretest profile"
+      ]
+    },
+    "pretest_profile_freeze": {
+      "after_stages": [
+        "initial_training",
+        "adaptive_training"
+      ],
+      "after_training_only_model_comparison": true,
+      "before_stages": [
+        "training_confirmation",
+        "test"
+      ],
+      "fitted_profile_pending_after_training": true,
+      "required_before_initial_calibration": false,
+      "before_any_physical_execution": false
+    }
+  },
+  "timing_policy": {
+    "scope_id": "steady_execution_v1",
+    "primary_quantity": "session_inclusive_s",
+    "primary_formula": "session_inclusive_s = session_open_s + steady_execution_s + session_close_s",
+    "primary_fit_scope_id": "steady_execution_v1",
+    "secondary_quantity": "steady_execution_s",
+    "runtime_integrity_hashing_inside_session_included": true,
+    "external_reference_report_and_evidence_hashing_excluded": true,
+    "report_steady_side_view": true,
+    "steady_side_view_is_primary": false,
+    "no_positive_chasing": true
+  },
+  "validation_and_test": {
+    "measurement_blocks": 5,
+    "path_roles": [
+      "greedy",
+      "minimum_flops",
+      "upmem_selected"
+    ],
+    "warmup_blocks": 1,
+    "timing_may_change_candidates_or_model": false,
+    "frozen_pretest_before_test": true,
+    "pretest_profile_freeze_after_training_before_heldout": true,
+    "development_confirmation_split": "training",
+    "development_confirmation_uses_frozen_pretest_profile": true,
+    "no_separate_validation_physical_stage": true,
+    "test_is_not_a_proposal_source": true
+  },
+  "holdout_policy": {
+    "unit": "instance",
+    "same_six_families_in_training_and_test": true,
+    "distinct_definition_identity_required": true,
+    "heldout_dimension": "family-aligned width and parameter identity",
+    "family_holdout_claim": false,
+    "paper_exact_instance_claim": false,
+    "no_global_untouched_claim": true
+  },
+  "qualification_gates": [
+    "lead review of the frozen workload definitions",
+    "bounded exposure review; unknown prior records remain unknown",
+    "source and QASM hash binding review",
+    "CPU parser/reference correctness qualification",
+    "candidate generation and fixed-pool hashes before timing",
+    "resource, memory, native allocation, plan identity, and replay admission for every selected cell",
+    "strict SDK correctness qualification before any physical claim",
+    "pretest profile and two-copy evidence retention freeze"
+  ],
+  "physical_gate": {
+    "status": "blocked_until_qualification_and_freeze",
+    "claims_before_gate": "none beyond workload definition identity",
+    "hardware_execution_by_this_packet": false,
+    "candidate_execution_by_this_packet": false,
+    "old_development_92_reused_for_fit": false
+  },
+  "evidence_policy": {
+    "primary_optimization_evidence": "new session-inclusive measurements under frozen execution contract",
+    "historical_development_attempts": 92,
+    "historical_development_excluded_from_final_fit": true,
+    "old_profiles_weights_and_lost_calibration_not_imported": true,
+    "retain_all_families_even_when_infeasible_or_without_headroom": true,
+    "correctness_observed_is_not_optimization_proof": true
+  },
+  "identity_requirements": {
+    "workload_id": "upmem_family_aligned_workload_v1",
+    "candidate_generation_id": "upmem_family_aligned_candidates_v1",
+    "candidate_generation_source_sha256": "pending_candidate_generation",
+    "candidate_pool_sha256": "pending_candidate_generation",
+    "calibration_set_sha256": "pending_candidate_generation",
+    "analysis_profile_identity": "pending_training_only_loo_model_comparison",
+    "pretest_profile_sha256": "pending_profile_freeze_after_training",
+    "fitted_weight_vector_sha256": "pending_training_fit",
+    "execution_profile": "kernel_schedule_system_v1",
+    "execution_source": {
+      "execution_profile": "kernel_schedule_system_v1",
+      "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+      "execution_contract": {
+        "schedule_policy": "static_dag_waves_v1",
+        "request_transport": "packed_wave_v1",
+        "fuse_complex": true,
+        "geometry_policy": "panel_only_v1",
+        "numeric_policy": "split_complex_float32_v1",
+        "cost_model_id": "upmem_slr_wave_cost_v1",
+        "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+      },
+      "topologies": [
+        {
+          "topology_id": "1dpu_t8",
+          "dpu_count": 1,
+          "rank_count": 1,
+          "tasklets_per_dpu": 8
+        },
+        {
+          "topology_id": "4dpu_t8",
+          "dpu_count": 4,
+          "rank_count": 1,
+          "tasklets_per_dpu": 8
+        }
+      ],
+      "numeric_policy": "split_complex_float32_v1",
+      "rank_count": 1,
+      "host_memory_policy": {
+        "declared_executor_budget_bytes": 536870912,
+        "reserve_bytes": 0,
+        "bound_type": "declared_executor_admission_not_rss_bound"
+      }
+    },
+    "accepted_executor_tag": "thesis-upmem-kernel-schedule-system-v1",
+    "two_copy_retention_required": true
+  },
+  "source_lineage": {
+    "preparation_parent_commit": "85605e0b3e5947310f4047f29b0e19467fa8cb5b",
+    "preparation_parent_commit_meaning": "parent implementation commit used to prepare this pending packet; it does not contain these new packet files",
+    "constructor_source_path": "thesis/implementation/scripts/upmem_family_workload.py",
+    "workload_manifest_sha256": "f2c85f27508d9b9fb5f55d13b89334939aa424330e27555dfafe3216452382d7",
+    "execution_source": {
+      "execution_profile": "kernel_schedule_system_v1",
+      "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+      "execution_contract": {
+        "schedule_policy": "static_dag_waves_v1",
+        "request_transport": "packed_wave_v1",
+        "fuse_complex": true,
+        "geometry_policy": "panel_only_v1",
+        "numeric_policy": "split_complex_float32_v1",
+        "cost_model_id": "upmem_slr_wave_cost_v1",
+        "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+      },
+      "topologies": [
+        {
+          "topology_id": "1dpu_t8",
+          "dpu_count": 1,
+          "rank_count": 1,
+          "tasklets_per_dpu": 8
+        },
+        {
+          "topology_id": "4dpu_t8",
+          "dpu_count": 4,
+          "rank_count": 1,
+          "tasklets_per_dpu": 8
+        }
+      ],
+      "numeric_policy": "split_complex_float32_v1",
+      "rank_count": 1,
+      "host_memory_policy": {
+        "declared_executor_budget_bytes": 536870912,
+        "reserve_bytes": 0,
+        "bound_type": "declared_executor_admission_not_rss_bound"
+      }
+    },
+    "accepted_executor_tag": "thesis-upmem-kernel-schedule-system-v1",
+    "old_development_attempts_role": "historical ledger only; excluded from final fit"
+  }
+}

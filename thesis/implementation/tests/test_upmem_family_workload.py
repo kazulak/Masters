@@ -206,3 +206,37 @@ def test_hs_disjoint_pairs_preserve_all_output_wires(tmp_path: Path) -> None:
     expected = np.zeros(16, dtype=np.complex128)
     expected[0b1010] = 1
     np.testing.assert_allclose(state, expected, atol=1e-12)
+
+
+@pytest.mark.parametrize("row", workload.all_instance_metadata(), ids=lambda row: row["instance_id"])
+def test_full_declared_instance_against_analytic_state(row: dict, tmp_path: Path) -> None:
+    qasm, _ = workload.build_instance(row["instance_id"])
+    actual = _reference_state(qasm, tmp_path, row["instance_id"])
+    n = row["total_qubits"]
+    family = row["family"]
+    expected = np.zeros(1 << n, dtype=np.complex128)
+    if family == "qrng":
+        expected[:] = 2 ** (-n / 2)
+    elif family == "bb84":
+        expected = np.array([1.0], dtype=np.complex128)
+        states = ([1, 0], [0, 1], [2 ** -0.5, 2 ** -0.5], [2 ** -0.5, -(2 ** -0.5)])
+        for wire in range(n):
+            expected = np.kron(expected, states[wire % 4])
+    elif family == "bv":
+        secret = "".join("1" if wire % 2 == 0 else "0" for wire in range(n - 1))
+        expected[int(secret + "0", 2)] = 2 ** -0.5
+        expected[int(secret + "1", 2)] = -(2 ** -0.5)
+    elif family == "hs":
+        expected[int("10" * (n // 2), 2)] = 1
+    elif family == "xor":
+        for data in range(1 << (n - 1)):
+            expected[2 * data + data.bit_count() % 2] = 2 ** (-(n - 1) / 2)
+    else:
+        assert family == "edc"
+        k = row["parameters"]["data_qubits"]
+        error = k // 2
+        syndrome = "".join("1" if check in (error - 1, error) else "0" for check in range(k - 1))
+        for logical, amplitude in ((0, np.sqrt(3) / 2), (1, 0.5)):
+            data = "".join(str(logical ^ (wire == error)) for wire in range(k))
+            expected[int(data + syndrome, 2)] = amplitude
+    np.testing.assert_allclose(actual, expected, rtol=1e-11, atol=1e-12)

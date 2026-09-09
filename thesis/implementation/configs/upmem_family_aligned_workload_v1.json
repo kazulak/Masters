@@ -1,0 +1,872 @@
+{
+  "schema_version": "upmem_family_aligned_workload_v1",
+  "workload_id": "upmem_family_aligned_workload_v1",
+  "status": "workload_definitions_frozen",
+  "definition_status": "workload_definitions_frozen",
+  "qualification_status": {
+    "exposure": "pending_bounded_metadata_audit",
+    "resource_admission": "pending",
+    "candidate_pools": "pending_generation_and_selection",
+    "software": "pending_focused_cpu_qualification",
+    "sdk": "pending_strict_sdk_qualification",
+    "physical": "pending"
+  },
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md section 11",
+  "primary_reference": "https://arxiv.org/html/2503.00668v1",
+  "scope": {
+    "families": [
+      "BB84",
+      "BV",
+      "EDC",
+      "HS",
+      "QRNG",
+      "XOR"
+    ],
+    "same_six_families_in_training_and_test": true,
+    "distinct_instance_identity_required": true,
+    "identity_definition": "family key, declared parameters, source bytes, and quantum_bench.problem_id.v1",
+    "family_aligned_definitions": true,
+    "exact_pimutation_instances_verified": false,
+    "paper_gate_count_reproduction_required": false,
+    "optional_families": "deferred"
+  },
+  "definition_policy": {
+    "source_kind": "family_aligned_qasm_v1",
+    "qasm_format": "OpenQASM 2.0 pre-measurement unitary subset",
+    "query": "pre_measurement_statevector",
+    "qasm_file_private_parameters": [
+      "qasm_sha256"
+    ],
+    "family_parameters_outside_qasm_file_parameters": true,
+    "repeat_layers": 1,
+    "measurement_reset_and_classical_control": "forbidden",
+    "all_declared_instances_retained_when": [
+      "resource admission is infeasible",
+      "there is no measurable headroom"
+    ],
+    "minimum_feasible_paths_required": 0
+  },
+  "provenance": {
+    "constructor_source": {
+      "path": "thesis/implementation/scripts/upmem_family_workload.py",
+      "sha256": "9540a1cb3626e33d708a385ee129ea9569b8bad5b97f357491be9051231bcfee",
+      "hash_semantics": "SHA-256 of raw source bytes"
+    },
+    "canonical_core_apis": [
+      "quantum_bench.circuits.parse_openqasm2",
+      "quantum_bench.circuits.manifest",
+      "quantum_bench.model.make_simulation_job",
+      "quantum_bench.evidence.problem_id"
+    ],
+    "operation_identity_domain": "quantum_bench.problem_id.v1",
+    "operation_identity_scope": "canonical gate semantics and query with empty simulation parameters; excludes path, candidates, timing, dtype, and executor",
+    "qasm_assets": [
+      {
+        "instance_id": "qrng_train_total16_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_train_total16_r1.qasm",
+        "sha256": "986af9ebe7b7929f4599e80021e329802a874c71525e40116beb71fa0d3cb980"
+      },
+      {
+        "instance_id": "qrng_test_total17_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_test_total17_r1.qasm",
+        "sha256": "1e1cef899957581cde38243d26b362c9d23a16e66472165f25ccb80ee7f4178f"
+      },
+      {
+        "instance_id": "bv_train_total16_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_train_total16_r1.qasm",
+        "sha256": "f43410b57e8a15b730dbb17f9de678d6445c38379a6cee6e94de424b0bb1442e"
+      },
+      {
+        "instance_id": "bv_test_total17_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_test_total17_r1.qasm",
+        "sha256": "b739f7feab6f37054e8c7d75f5616c9a156f4d3deda00dc98ff5b6574cd2f626"
+      },
+      {
+        "instance_id": "bb84_train_total16_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_train_total16_r1.qasm",
+        "sha256": "97d7336ddd3033e3c556e281b3a68fad767d33657d3160fd72a19f7772ccdd29"
+      },
+      {
+        "instance_id": "bb84_test_total17_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_test_total17_r1.qasm",
+        "sha256": "edd534fae00355e6a730f786abbf29343cc551a08561bf3578bcdcda967efea0"
+      },
+      {
+        "instance_id": "edc_train_data8_syndrome7_total15_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_train_data8_syndrome7_total15_r1.qasm",
+        "sha256": "df8eee062d6e14f9e6bd4b91cc4f6abd5ae8a3c826f4b29eccb8a802a26683bd"
+      },
+      {
+        "instance_id": "edc_test_data9_syndrome8_total17_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_test_data9_syndrome8_total17_r1.qasm",
+        "sha256": "2b838be2135b2436259fe51466b1772da74221a0c0a19d30f00139bff4118653"
+      },
+      {
+        "instance_id": "hs_train_total16_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_train_total16_r1.qasm",
+        "sha256": "99373ee750b1794528585277bbd846c882f493be57cc33fce1a2a64e1df96209"
+      },
+      {
+        "instance_id": "hs_test_total18_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_test_total18_r1.qasm",
+        "sha256": "367aa5ce346faa1537b6646482727712ac7a71f23210e3e10f77f532014a89cd"
+      },
+      {
+        "instance_id": "xor_train_total16_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_train_total16_r1.qasm",
+        "sha256": "7860ed1b7586df0c70807c74532fbfa1d51f863911b09b39e53bf1b191b410c9"
+      },
+      {
+        "instance_id": "xor_test_total17_r1",
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_test_total17_r1.qasm",
+        "sha256": "1e72f5e23a76e2307c7fc31736fe1eb127bd6c1afc1abc1516b135c83067d982"
+      }
+    ]
+  },
+  "execution_context": {
+    "execution_profile": "kernel_schedule_system_v1",
+    "execution_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "execution_contract": {
+      "schedule_policy": "static_dag_waves_v1",
+      "request_transport": "packed_wave_v1",
+      "fuse_complex": true,
+      "geometry_policy": "panel_only_v1",
+      "numeric_policy": "split_complex_float32_v1",
+      "cost_model_id": "upmem_slr_wave_cost_v1",
+      "execution_source": "459935f586fdd16c82013838e6d27a12604c3093"
+    },
+    "topologies": [
+      {
+        "topology_id": "1dpu_t8",
+        "dpu_count": 1,
+        "rank_count": 1,
+        "tasklets_per_dpu": 8
+      },
+      {
+        "topology_id": "4dpu_t8",
+        "dpu_count": 4,
+        "rank_count": 1,
+        "tasklets_per_dpu": 8
+      }
+    ],
+    "numeric_policy": "split_complex_float32_v1",
+    "rank_count": 1,
+    "host_memory_policy": {
+      "declared_executor_budget_bytes": 536870912,
+      "reserve_bytes": 0,
+      "bound_type": "declared_executor_admission_not_rss_bound"
+    }
+  },
+  "instances": [
+    {
+      "instance_id": "qrng_train_total16_r1",
+      "split": "training",
+      "family": "QRNG",
+      "family_key": "qrng",
+      "family_parameters": {
+        "n_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 16
+      },
+      "widths": {
+        "logical_qubits": 16,
+        "total_qubits": 16
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_qrng_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_train_total16_r1.qasm",
+        "qasm_sha256": "986af9ebe7b7929f4599e80021e329802a874c71525e40116beb71fa0d3cb980",
+        "description": "one_h_per_wire"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "986af9ebe7b7929f4599e80021e329802a874c71525e40116beb71fa0d3cb980"
+        }
+      },
+      "canonical_circuit": {
+        "name": "qrng_train_total16_r1",
+        "n_qubits": 16,
+        "depth_proxy": 16,
+        "gate_set": [
+          "h"
+        ],
+        "gate_counts": {
+          "1q": 16,
+          "2q": 0,
+          "total": 16,
+          "by_gate": {
+            "h": 16
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "a6045ec53af50fc5f8824a569b60bab08db30c38359d182f807eb0ac140b9e9f"
+        }
+      }
+    },
+    {
+      "instance_id": "qrng_test_total17_r1",
+      "split": "test",
+      "family": "QRNG",
+      "family_key": "qrng",
+      "family_parameters": {
+        "n_qubits": 17,
+        "repeat_layers": 1,
+        "logical_qubits": 17
+      },
+      "widths": {
+        "logical_qubits": 17,
+        "total_qubits": 17
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_qrng_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_test_total17_r1.qasm",
+        "qasm_sha256": "1e1cef899957581cde38243d26b362c9d23a16e66472165f25ccb80ee7f4178f",
+        "description": "one_h_per_wire"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/qrng_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "1e1cef899957581cde38243d26b362c9d23a16e66472165f25ccb80ee7f4178f"
+        }
+      },
+      "canonical_circuit": {
+        "name": "qrng_test_total17_r1",
+        "n_qubits": 17,
+        "depth_proxy": 17,
+        "gate_set": [
+          "h"
+        ],
+        "gate_counts": {
+          "1q": 17,
+          "2q": 0,
+          "total": 17,
+          "by_gate": {
+            "h": 17
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "d0021d1ffe2ab463882096cbe4f081d8939d45789a374c292ac6332917e4ecab"
+        }
+      }
+    },
+    {
+      "instance_id": "bv_train_total16_r1",
+      "split": "training",
+      "family": "BV",
+      "family_key": "bv",
+      "family_parameters": {
+        "data_qubits": 15,
+        "repeat_layers": 1,
+        "oracle_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 15,
+        "ancilla_qubits": 1,
+        "total_qubits": 16
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_bv_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_train_total16_r1.qasm",
+        "qasm_sha256": "f43410b57e8a15b730dbb17f9de678d6445c38379a6cee6e94de424b0bb1442e",
+        "description": "target_x_then_h_and_data_h_oracle_h"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "f43410b57e8a15b730dbb17f9de678d6445c38379a6cee6e94de424b0bb1442e"
+        }
+      },
+      "canonical_circuit": {
+        "name": "bv_train_total16_r1",
+        "n_qubits": 16,
+        "depth_proxy": 40,
+        "gate_set": [
+          "cx",
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 32,
+          "2q": 8,
+          "total": 40,
+          "by_gate": {
+            "cx": 8,
+            "h": 31,
+            "x": 1
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "ba7e3ec264fe5a1783fb4a360182200f446298857b1e77f31e89d82d31ecbba3"
+        }
+      }
+    },
+    {
+      "instance_id": "bv_test_total17_r1",
+      "split": "test",
+      "family": "BV",
+      "family_key": "bv",
+      "family_parameters": {
+        "data_qubits": 16,
+        "repeat_layers": 1,
+        "oracle_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 16,
+        "ancilla_qubits": 1,
+        "total_qubits": 17
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_bv_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_test_total17_r1.qasm",
+        "qasm_sha256": "b739f7feab6f37054e8c7d75f5616c9a156f4d3deda00dc98ff5b6574cd2f626",
+        "description": "target_x_then_h_and_data_h_oracle_h"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bv_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "b739f7feab6f37054e8c7d75f5616c9a156f4d3deda00dc98ff5b6574cd2f626"
+        }
+      },
+      "canonical_circuit": {
+        "name": "bv_test_total17_r1",
+        "n_qubits": 17,
+        "depth_proxy": 42,
+        "gate_set": [
+          "cx",
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 34,
+          "2q": 8,
+          "total": 42,
+          "by_gate": {
+            "cx": 8,
+            "h": 33,
+            "x": 1
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "2549bff70723442426dccc5fe45ef19a43af75c72cf82d89f82071521dfddb11"
+        }
+      }
+    },
+    {
+      "instance_id": "bb84_train_total16_r1",
+      "split": "training",
+      "family": "BB84",
+      "family_key": "bb84",
+      "family_parameters": {
+        "n_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 16
+      },
+      "widths": {
+        "logical_qubits": 16,
+        "total_qubits": 16
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_bb84_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_train_total16_r1.qasm",
+        "qasm_sha256": "97d7336ddd3033e3c556e281b3a68fad767d33657d3160fd72a19f7772ccdd29",
+        "description": "bit_x_then_basis_h"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "97d7336ddd3033e3c556e281b3a68fad767d33657d3160fd72a19f7772ccdd29"
+        }
+      },
+      "canonical_circuit": {
+        "name": "bb84_train_total16_r1",
+        "n_qubits": 16,
+        "depth_proxy": 16,
+        "gate_set": [
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 16,
+          "2q": 0,
+          "total": 16,
+          "by_gate": {
+            "h": 8,
+            "x": 8
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "d7b27fd9cf4080830241dc9985ad78b037877f3aecfbd6747b5c1bc163e94708"
+        }
+      }
+    },
+    {
+      "instance_id": "bb84_test_total17_r1",
+      "split": "test",
+      "family": "BB84",
+      "family_key": "bb84",
+      "family_parameters": {
+        "n_qubits": 17,
+        "repeat_layers": 1,
+        "logical_qubits": 17
+      },
+      "widths": {
+        "logical_qubits": 17,
+        "total_qubits": 17
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_bb84_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_test_total17_r1.qasm",
+        "qasm_sha256": "edd534fae00355e6a730f786abbf29343cc551a08561bf3578bcdcda967efea0",
+        "description": "bit_x_then_basis_h"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/bb84_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "edd534fae00355e6a730f786abbf29343cc551a08561bf3578bcdcda967efea0"
+        }
+      },
+      "canonical_circuit": {
+        "name": "bb84_test_total17_r1",
+        "n_qubits": 17,
+        "depth_proxy": 16,
+        "gate_set": [
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 16,
+          "2q": 0,
+          "total": 16,
+          "by_gate": {
+            "h": 8,
+            "x": 8
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "3f75f4fb65cf723aabd025f438d989ba4996ac0a806efc7212e8c712b816d1c9"
+        }
+      }
+    },
+    {
+      "instance_id": "edc_train_data8_syndrome7_total15_r1",
+      "split": "training",
+      "family": "EDC",
+      "family_key": "edc",
+      "family_parameters": {
+        "data_qubits": 8,
+        "repeat_layers": 1,
+        "logical_qubits": 1,
+        "encoded_data_qubits": 8,
+        "syndrome_qubits": 7
+      },
+      "widths": {
+        "logical_qubits": 1,
+        "encoded_data_qubits": 8,
+        "syndrome_qubits": 7,
+        "ancilla_qubits": 7,
+        "allocated_qubits": 15,
+        "total_qubits": 15
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_edc_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_train_data8_syndrome7_total15_r1.qasm",
+        "qasm_sha256": "df8eee062d6e14f9e6bd4b91cc4f6abd5ae8a3c826f4b29eccb8a802a26683bd",
+        "description": "ry_pi_over_3_then_repetition_encoder"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_train_data8_syndrome7_total15_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "df8eee062d6e14f9e6bd4b91cc4f6abd5ae8a3c826f4b29eccb8a802a26683bd"
+        }
+      },
+      "canonical_circuit": {
+        "name": "edc_train_data8_syndrome7_total15_r1",
+        "n_qubits": 15,
+        "depth_proxy": 23,
+        "gate_set": [
+          "cx",
+          "ry",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 2,
+          "2q": 21,
+          "total": 23,
+          "by_gate": {
+            "cx": 21,
+            "ry": 1,
+            "x": 1
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "cbdd7654f65a18da304f78b9b249bc17cc504d018ef170b14ae2af0d0955c71f"
+        }
+      }
+    },
+    {
+      "instance_id": "edc_test_data9_syndrome8_total17_r1",
+      "split": "test",
+      "family": "EDC",
+      "family_key": "edc",
+      "family_parameters": {
+        "data_qubits": 9,
+        "repeat_layers": 1,
+        "logical_qubits": 1,
+        "encoded_data_qubits": 9,
+        "syndrome_qubits": 8
+      },
+      "widths": {
+        "logical_qubits": 1,
+        "encoded_data_qubits": 9,
+        "syndrome_qubits": 8,
+        "ancilla_qubits": 8,
+        "allocated_qubits": 17,
+        "total_qubits": 17
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_edc_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_test_data9_syndrome8_total17_r1.qasm",
+        "qasm_sha256": "2b838be2135b2436259fe51466b1772da74221a0c0a19d30f00139bff4118653",
+        "description": "ry_pi_over_3_then_repetition_encoder"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/edc_test_data9_syndrome8_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "2b838be2135b2436259fe51466b1772da74221a0c0a19d30f00139bff4118653"
+        }
+      },
+      "canonical_circuit": {
+        "name": "edc_test_data9_syndrome8_total17_r1",
+        "n_qubits": 17,
+        "depth_proxy": 26,
+        "gate_set": [
+          "cx",
+          "ry",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 2,
+          "2q": 24,
+          "total": 26,
+          "by_gate": {
+            "cx": 24,
+            "ry": 1,
+            "x": 1
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "907d7bac7eebef4d0a23cd37c9a7458325139ad9449b436b5491a66ff3730f19"
+        }
+      }
+    },
+    {
+      "instance_id": "hs_train_total16_r1",
+      "split": "training",
+      "family": "HS",
+      "family_key": "hs",
+      "family_parameters": {
+        "allocated_qubits": 16,
+        "repeat_layers": 1,
+        "logical_qubits": 8
+      },
+      "widths": {
+        "allocated_qubits": 16,
+        "logical_qubits": 8,
+        "pair_count": 8,
+        "pair_layout": "q[2j] control, q[2j+1] target",
+        "total_qubits": 16
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_hs_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_train_total16_r1.qasm",
+        "qasm_sha256": "99373ee750b1794528585277bbd846c882f493be57cc33fce1a2a64e1df96209",
+        "description": "one_pinned_pair_block_per_disjoint_pair",
+        "reference": "QASMBench:small/hs4_n4/hs4_n4.qasm@357b942396d5c2b7cbc1c229c585a6ef5ccaebac"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "99373ee750b1794528585277bbd846c882f493be57cc33fce1a2a64e1df96209"
+        }
+      },
+      "canonical_circuit": {
+        "name": "hs_train_total16_r1",
+        "n_qubits": 16,
+        "depth_proxy": 112,
+        "gate_set": [
+          "cx",
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 96,
+          "2q": 16,
+          "total": 112,
+          "by_gate": {
+            "cx": 16,
+            "h": 80,
+            "x": 16
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "7fd0262ff0ea0503a08e5e8627ea085879662ab83eb8a7d302a33ab84e7ec293"
+        }
+      }
+    },
+    {
+      "instance_id": "hs_test_total18_r1",
+      "split": "test",
+      "family": "HS",
+      "family_key": "hs",
+      "family_parameters": {
+        "allocated_qubits": 18,
+        "repeat_layers": 1,
+        "logical_qubits": 9
+      },
+      "widths": {
+        "allocated_qubits": 18,
+        "logical_qubits": 9,
+        "pair_count": 9,
+        "pair_layout": "q[2j] control, q[2j+1] target",
+        "total_qubits": 18
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_hs_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_test_total18_r1.qasm",
+        "qasm_sha256": "367aa5ce346faa1537b6646482727712ac7a71f23210e3e10f77f532014a89cd",
+        "description": "one_pinned_pair_block_per_disjoint_pair",
+        "reference": "QASMBench:small/hs4_n4/hs4_n4.qasm@357b942396d5c2b7cbc1c229c585a6ef5ccaebac"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/hs_test_total18_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "367aa5ce346faa1537b6646482727712ac7a71f23210e3e10f77f532014a89cd"
+        }
+      },
+      "canonical_circuit": {
+        "name": "hs_test_total18_r1",
+        "n_qubits": 18,
+        "depth_proxy": 126,
+        "gate_set": [
+          "cx",
+          "h",
+          "x"
+        ],
+        "gate_counts": {
+          "1q": 108,
+          "2q": 18,
+          "total": 126,
+          "by_gate": {
+            "cx": 18,
+            "h": 90,
+            "x": 18
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "62c83e4fbf0214ba2daf698d332726543893548b0760ac3bc713be4891912a1c"
+        }
+      }
+    },
+    {
+      "instance_id": "xor_train_total16_r1",
+      "split": "training",
+      "family": "XOR",
+      "family_key": "xor",
+      "family_parameters": {
+        "data_qubits": 15,
+        "repeat_layers": 1,
+        "parity_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 15,
+        "ancilla_qubits": 1,
+        "total_qubits": 16
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_xor_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_train_total16_r1.qasm",
+        "qasm_sha256": "7860ed1b7586df0c70807c74532fbfa1d51f863911b09b39e53bf1b191b410c9",
+        "description": "uniform_data_h_layer_before_parity_cnot"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_train_total16_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "7860ed1b7586df0c70807c74532fbfa1d51f863911b09b39e53bf1b191b410c9"
+        }
+      },
+      "canonical_circuit": {
+        "name": "xor_train_total16_r1",
+        "n_qubits": 16,
+        "depth_proxy": 30,
+        "gate_set": [
+          "cx",
+          "h"
+        ],
+        "gate_counts": {
+          "1q": 15,
+          "2q": 15,
+          "total": 30,
+          "by_gate": {
+            "cx": 15,
+            "h": 15
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "f083c8362ce1977feb38ca3d153281dc810b876b8617e28ea6578e78738eb5f2"
+        }
+      }
+    },
+    {
+      "instance_id": "xor_test_total17_r1",
+      "split": "test",
+      "family": "XOR",
+      "family_key": "xor",
+      "family_parameters": {
+        "data_qubits": 16,
+        "repeat_layers": 1,
+        "parity_ancilla": 1
+      },
+      "widths": {
+        "data_qubits": 16,
+        "ancilla_qubits": 1,
+        "total_qubits": 17
+      },
+      "source": {
+        "kind": "family_aligned_qasm_v1",
+        "source_id": "family_aligned_xor_v1",
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_test_total17_r1.qasm",
+        "qasm_sha256": "1e72f5e23a76e2307c7fc31736fe1eb127bd6c1afc1abc1516b135c83067d982",
+        "description": "uniform_data_h_layer_before_parity_cnot"
+      },
+      "query": "pre_measurement_statevector",
+      "circuit": {
+        "kind": "qasm_file",
+        "name": null,
+        "path": "configs/qasm/upmem_family_aligned_v1/xor_test_total17_r1.qasm",
+        "parameters": {
+          "qasm_sha256": "1e72f5e23a76e2307c7fc31736fe1eb127bd6c1afc1abc1516b135c83067d982"
+        }
+      },
+      "canonical_circuit": {
+        "name": "xor_test_total17_r1",
+        "n_qubits": 17,
+        "depth_proxy": 32,
+        "gate_set": [
+          "cx",
+          "h"
+        ],
+        "gate_counts": {
+          "1q": 16,
+          "2q": 16,
+          "total": 32,
+          "by_gate": {
+            "cx": 16,
+            "h": 16
+          }
+        },
+        "query": "pre_measurement_statevector",
+        "operation_identity": {
+          "domain": "quantum_bench.problem_id.v1",
+          "problem_id": "1f235728477da31cfcd23baa2c8393d50931b4f7bf7a1129d3b2dcb287924a43"
+        }
+      }
+    }
+  ],
+  "split_policy": {
+    "training_instance_ids": [
+      "qrng_train_total16_r1",
+      "bv_train_total16_r1",
+      "bb84_train_total16_r1",
+      "edc_train_data8_syndrome7_total15_r1",
+      "hs_train_total16_r1",
+      "xor_train_total16_r1"
+    ],
+    "test_instance_ids": [
+      "qrng_test_total17_r1",
+      "bv_test_total17_r1",
+      "bb84_test_total17_r1",
+      "edc_test_data9_syndrome8_total17_r1",
+      "hs_test_total18_r1",
+      "xor_test_total17_r1"
+    ],
+    "training_count": 6,
+    "test_count": 6,
+    "families_per_split": 6,
+    "heldout_dimension": "declared family-aligned width and parameter identity",
+    "family_holdout_claim": false,
+    "no_global_untouched_claim": true
+  },
+  "retention_policy": {
+    "retain_all_six_families": true,
+    "retain_explicit_infeasible_or_no_headroom_instances": true,
+    "omit_only_from_a_specific_attempt_arm_when_infeasible": true,
+    "no_minimum_four_path_requirement": true
+  }
+}
