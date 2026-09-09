@@ -1,5 +1,16 @@
 # PIMutation Workload Reconciliation v1
 
+**Current decision, superseding the source-scope hold below:** the user confirmed
+that the benchmark must cover the six PIMutation algorithm families, not the
+authors' exact circuit instances. Use correct, explicitly specified
+family-aligned constructions; no further author-artifact search or exact
+gate-count matching is required. Retain source attribution and semantic tests.
+The old shape-only 12-instance packet remains historical and must be replaced
+with newly identified definitions, feasibility checks and a complete workload
+freeze before calibration/fitting. This decision resolves the experiment-scope
+blocker; it does not qualify the dummy circuits or authorize bypassing any
+software, numerical, SDK, physical or evidence gate.
+
 Status: `workload_definitions_frozen`. This note freezes the 12 workload
 definitions and their training/test roles only. It does not freeze the physical
 admission, candidate pool, fitted pretest profile, or physical execution, and
