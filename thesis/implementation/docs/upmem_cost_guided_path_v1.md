@@ -56,15 +56,17 @@ metadata extractions. The independent read-only score/host-pass and search
 reviews found no remaining blockers. The incorrectly suspected output-reshape
 copy was withdrawn after a real assembly memory-sharing regression.
 
-This checkpoint is not a calibrated optimization result. Paired-observation
-grid fitting, campaign gates, and final physical evaluation remain pending.
+This checkpoint is not a calibrated optimization result. End-to-end acceptance
+of physical observations, feedback-round control and final physical evaluation
+remain pending. The follow-on software work below adds the pure grid fitter.
 In particular, scoring a fixed candidate pool does not satisfy cost-guided
 search. The final G/F/R/U comparison must demonstrate and evaluate feedback
 during proposal generation.
 
-The private CLI currently exposes only `inspect`. The callable search engine
-is not a hardware controller. No accepted-round resume, physical collection,
-or fitting command is enabled by this checkpoint. Mandatory search tests do
+The private CLI exposes `inspect`, `initialize`, `initial-search` and
+`freeze-initial`. These are offline preparation commands, not a hardware
+controller. No accepted-round resume, physical collection, or fitting command
+is enabled by this checkpoint. Mandatory search tests do
 not skip when Optuna or a private environment path is unavailable: they use
 the active test interpreter and require the pinned library versions.
 
@@ -78,6 +80,50 @@ Ruff passed across `src`, `tests`, and `scripts`; `git diff --check` passed.
 
 No new SDK or physical campaign has been run at this checkpoint. No coefficients
 or normalization scales have been fitted or frozen from physical observations.
+
+## Follow-on software checkpoint
+
+The paired-observation fitter enumerates all 1,001 integer tuples and uses
+session-inclusive same-cell/round/block log ratios with equal family weighting
+and the prescribed deterministic tie breaks. It rejects evaluation data,
+incomplete or duplicate observations, policy/source mismatches, fallback,
+numerical failures and failed execution/startup admission. Its private result
+is not evidence acceptance; the existing canonical archive verification and
+two-copy acceptance must precede any call using physical observations.
+
+The `frozen_path` planning input replays the exact selected complete path through
+the existing runner. Strict integer-pair validation and network/DAG hashes
+precede native allocation. It does not rerun a library search, select a new
+schedule, or change runtime, transport or numerical behavior. Tests include a
+CPU runner roundtrip through canonical evidence verification. The initial
+candidate packet adapter reuses the existing collection, resource-route and
+QASM helpers, retaining all path roles while deduplicating execution rows.
+
+Offline preparation requires the exact clean source and pinned environment.
+Initialization freezes only development-greedy scales. Each initial cell search
+reserves a new directory and retains every proposal in flushed JSONL; a failed
+or interrupted search cannot be refilled. Freezing the initial round checks all
+declared cells, invocation/seed/row identities, objective tells and duplicate
+facts against the complete traces. It does not grant physical admission.
+
+Final G/F/R/U selection binds the supplied profile and normalization by hash
+and verifies the scored U trace against that profile. U cannot inherit F's
+candidate pool. Search records distinguish adaptive ask/tell, candidate
+generation and complete-plan evaluation durations; the latter currently combines
+lowering, feature extraction and score evaluation. Timing fields are excluded
+from deterministic trace equality, never from the retained raw trace.
+
+The integration still to finish is bounded round execution/acceptance using the
+existing physical runner, offline refits from newly accepted raw evidence,
+feedback search commands, final freeze/evaluation and durable reporting. Do not
+run a campaign merely because preparation or pure fitting tests pass.
+
+Follow-on qualification: all 2,192 tests passed in 227.87 seconds in the pinned
+research environment, with no skips. Ruff passed across src/tests/scripts and
+diff checks passed. The independent replay review found no blockers; the
+preparation review's objective/profile and trace-provenance findings were
+repaired and passed its focused re-review. Runtime and historical CI constraints
+retain the hashes recorded above. No new SDK or physical execution was performed.
 
 ## Host-pass inventory
 

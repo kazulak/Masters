@@ -56,7 +56,7 @@ from quantum_bench.lowering import (
     slice_contraction,
 )
 from quantum_bench.model import ContractNode, SimulationJob, make_simulation_job
-from quantum_bench.planning import plan_cotengra, plan_opt_einsum
+from quantum_bench.planning import plan_cotengra, plan_frozen_path, plan_opt_einsum
 from quantum_bench.results import (
     ExecutionFailed,
     ExecutionSample,
@@ -387,6 +387,10 @@ def _plan_dag(
 ) -> tuple[object, Mapping[str, np.ndarray], object, Mapping[str, object]]:
     network, inputs = lower_tensor_network(job)
     planner = plan_config["planner"]
+    if planner["engine"] == "frozen_path" and (
+        planner["mode"] != "replay" or plan_config["slicing"] is not None
+    ):
+        raise ValueError("frozen_path requires replay mode without slicing")
     if planner["engine"] == "opt_einsum":
         path, provenance = plan_opt_einsum(network, optimize=planner["mode"])
     elif planner["engine"] == "cotengra":
@@ -396,9 +400,21 @@ def _plan_dag(
             max_repeats=planner["max_repeats"],
             seed=planner["seed"],
         )
+    elif planner["engine"] == "frozen_path":
+        # load_experiment_config freezes validated JSON lists as tuples.
+        replay_path = planner["path"]
+        if isinstance(replay_path, tuple):
+            replay_path = [list(pair) if isinstance(pair, tuple) else pair for pair in replay_path]
+        path, provenance = plan_frozen_path(
+            network, replay_path,
+            tensor_network_structure_id=planner["tensor_network_structure_id"],
+            logical_plan_id=planner["logical_plan_id"],
+        )
     else:  # Config validation prevents this branch.
         raise ValueError(f"unsupported planner engine: {planner['engine']}")
     dag = build_contraction_dag(network, path)
+    if planner["engine"] == "frozen_path" and contraction_dag_hash(dag) != planner["logical_plan_id"]:
+        raise ValueError("frozen path logical_plan_id mismatch")
     slicing = plan_config["slicing"]
     if slicing is not None:
         node = next(

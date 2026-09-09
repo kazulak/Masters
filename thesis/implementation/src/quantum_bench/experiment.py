@@ -166,6 +166,7 @@ _PLAN_FIELDS = frozenset({"planner", "slicing"})
 _PLANNER_FIELDS = {
     "opt_einsum": frozenset({"engine", "mode"}),
     "cotengra": frozenset({"engine", "mode", "max_repeats", "seed"}),
+    "frozen_path": frozenset({"engine", "mode", "path", "tensor_network_structure_id", "logical_plan_id"}),
 }
 _SLICING_FIELDS = frozenset({"node_id", "minimum_slice_count"})
 _ROUTE_FIELDS = frozenset({"executor", "numeric_policy", "options"})
@@ -189,7 +190,7 @@ _NUMERIC_POLICIES = frozenset(
     {"split_complex_float32_v1", "complex_int8_shared_scale_v1"}
 )
 _CIRCUIT_KINDS = frozenset({"builtin", "quest_compatible", "qasm_file"})
-_PLANNER_ENGINES = frozenset({"opt_einsum", "cotengra"})
+_PLANNER_ENGINES = frozenset({"opt_einsum", "cotengra", "frozen_path"})
 _OPT_EINSUM_MODES = frozenset({"greedy", "optimal"})
 _COTENGRA_MODES = frozenset({"greedy", "labels"})
 _ROUTE_OPTIONS = {
@@ -463,6 +464,8 @@ def _normalize_plan(value: object, field: str) -> dict[str, object]:
     )
     mode = _config_string(planner["mode"], f"{field}.planner.mode")
     allowed_modes = _OPT_EINSUM_MODES if engine == "opt_einsum" else _COTENGRA_MODES
+    if engine == "frozen_path":
+        allowed_modes = frozenset({"replay"})
     if mode not in allowed_modes:
         raise ValueError(f"{field}.planner.mode has an unsupported value: {mode}")
     if engine == "cotengra":
@@ -470,6 +473,14 @@ def _normalize_plan(value: object, field: str) -> dict[str, object]:
             planner["max_repeats"], f"{field}.planner.max_repeats", minimum=1
         )
         planner["seed"] = _config_int(planner["seed"], f"{field}.planner.seed")
+    if engine == "frozen_path":
+        from quantum_bench.planning import normalize_frozen_path
+
+        planner["path"] = normalize_frozen_path(planner["path"])
+        for identity in ("tensor_network_structure_id", "logical_plan_id"):
+            _sha256_string(planner[identity], f"{field}.planner.{identity}")
+        if plan["slicing"] is not None:
+            raise ValueError("frozen_path replay does not permit slicing")
     slicing = plan["slicing"]
     if slicing is not None:
         slicing_map = dict(_config_fields(slicing, _SLICING_FIELDS, f"{field}.slicing"))

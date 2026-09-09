@@ -62,7 +62,7 @@ def test_search_tells_complete_production_plan_cost_not_tree_flops(monkeypatch):
         return search.GuidedEvaluation(score=score, facts=features)
 
     result = search.run_cost_guided_search(
-        network, workload_id="fixture", cell_id="fixture/1dpu_t8", stage="software_test",
+        network, workload_id="fixture", cell_id="fixture/1dpu_t8", circuit_id="fixture", stage="software_test",
         objective_id="upmem_launch_cost_v1", profile_id="unit_scales_fixture_only",
         trace_context={"executor_id": "frozen_fixture", "extractor_id": "launch_cost", "scales_id": "unit"},
         evaluation_callback=evaluate,
@@ -173,6 +173,7 @@ def _run_fake(
         _network(),
         workload_id="workload",
         cell_id="cell",
+        circuit_id="circuit",
         stage=stage,
         objective_id=objective_id,
         profile_id=profile_id,
@@ -307,6 +308,7 @@ def test_fake_study_ask_tell_is_strictly_serial(monkeypatch: pytest.MonkeyPatch)
         workload_id="workload",
         cell_id="cell",
         stage="training",
+        circuit_id="circuit",
         objective_id="objective",
         profile_id="profile",
         trace_context={"executor_id": "executor", "extractor_id": "extractor", "scales_id": "scales"},
@@ -474,6 +476,7 @@ result = run_cost_guided_search(
     network,
     workload_id="workload",
     cell_id="cell",
+    circuit_id="circuit",
     stage="training",
     objective_id="objective",
     profile_id="profile",
@@ -501,6 +504,11 @@ print(json.dumps(result, sort_keys=True, separators=(",", ":"), allow_nan=False)
 
     first = invoke()
     second = invoke()
+    for result in (first, second):
+        for row in result["trace"]:
+            timing = row.pop("timings_s")
+            assert set(timing) == {"adaptive_ask", "candidate_generation", "plan_evaluation", "adaptive_tell"}
+            assert all(math.isfinite(value) and value >= 0 for value in timing.values())
     assert first == second
     assert first["completed"] is True
     assert first["proposal_count"] == 128

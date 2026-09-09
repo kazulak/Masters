@@ -491,6 +491,230 @@ def upmem_launch_cost_v1(
     return _require_finite_nonnegative("upmem launch cost", serial + launch_total)
 
 
+def validate_launch_cost_observations(
+    cells: Mapping[str, Mapping[str, object]],
+    rounds: Sequence[Mapping[str, object]],
+    rows: Iterable[Mapping[str, object]],
+    *,
+    expected_identity: Mapping[str, str],
+) -> dict[str, dict[str, dict[str, float | int]]]:
+    """Validate declared accepted rounds and return per-path paired log medians.
+
+    Cells declare family, split='training', greedy_path_id and path_facts.
+    Rounds declare round_id, accepted=True, identity, cell_paths, warmup_blocks
+    and measurement_blocks. Every declared path has every declared block.
+    Rows carry cell_id/path_id/round_id/block/attempt_type, split, identity,
+    status='success', validation='pass', fallback=False, full_precision_passed
+    and policy_reference_passed=True, plus the three session timing components.
+    execution_resource_admission_passed and startup_resource_admission_passed
+    must both be literal True on every row, including warmups. Collection
+    scaling eligibility is diagnostic and is not a hard execution gate.
+    Identity mappings use exact strings; round-specific bindings may extend the
+    common expected_identity. source_sha must be a 40-character lowercase hex
+    commit and policy_id must be split_complex_float32_v1. Warmups are validated
+    but never paired for fitting.
+    """
+    required = {"source_sha", "execution_source", "policy_id", "timing_scope"}
+    if not isinstance(expected_identity, Mapping) or not required <= expected_identity.keys():
+        raise ValueError("expected_identity requires source, executor, policy and timing scope")
+    for key, value in expected_identity.items():
+        _require_nonempty_string("identity key", key)
+        _require_nonempty_string(key, value)
+    source_sha = expected_identity["source_sha"]
+    if len(source_sha) != 40 or any(character not in "0123456789abcdef" for character in source_sha):
+        raise ValueError("source_sha must be a 40-character lowercase hexadecimal commit SHA")
+    if expected_identity["policy_id"] != "split_complex_float32_v1":
+        raise ValueError("policy_id must be exactly split_complex_float32_v1")
+    if expected_identity["execution_source"] != "459935f586fdd16c82013838e6d27a12604c3093":
+        raise ValueError("launch-cost fitting requires the frozen 459 executor")
+    if expected_identity["timing_scope"] != "steady_execution_v1":
+        raise ValueError("launch-cost fitting requires steady_execution_v1 raw scope")
+    if not isinstance(cells, Mapping) or not cells:
+        raise ValueError("frozen development cells must be nonempty")
+    for cell_id, cell in cells.items():
+        _require_nonempty_string("cell_id", cell_id)
+        if not isinstance(cell, Mapping) or cell.get("split") != "training":
+            raise ValueError("fitting requires explicit training cells only")
+        _require_nonempty_string("family", cell.get("family"))
+        greedy = _require_nonempty_string("greedy_path_id", cell.get("greedy_path_id"))
+        facts = cell.get("path_facts")
+        if not isinstance(facts, Mapping) or greedy not in facts:
+            raise ValueError(f"missing greedy facts for development cell {cell_id}")
+        for candidate, fact in facts.items():
+            _require_nonempty_string("path_id", candidate)
+            if not isinstance(fact, LaunchCostFacts):
+                raise TypeError("eligible path_facts must contain LaunchCostFacts")
+
+    expected = set()
+    identities = {}
+    for declared in rounds:
+        round_id = _require_nonempty_string("round_id", declared.get("round_id"))
+        if round_id in identities or declared.get("accepted") is not True:
+            raise ValueError("round IDs must be unique and every round explicitly accepted")
+        identity = declared.get("identity")
+        if not isinstance(identity, Mapping) or any(
+            identity.get(key) != value for key, value in expected_identity.items()
+        ):
+            raise ValueError("round identity differs from frozen source/policy/executor")
+        for key, value in identity.items():
+            _require_nonempty_string("identity key", key)
+            _require_nonempty_string(key, value)
+        identities[round_id] = dict(identity)
+        blocks = {}
+        for attempt, field in (("warmup", "warmup_blocks"), ("measurement", "measurement_blocks")):
+            values = declared.get(field)
+            if not isinstance(values, (tuple, list)) or not values:
+                raise ValueError("rounds require explicit nonempty warmup and measurement blocks")
+            if any(type(block) is not int or block < 0 for block in values):
+                raise ValueError("block IDs must be nonnegative integers")
+            if len(values) != len(set(values)):
+                raise ValueError("duplicate declared block")
+            blocks[attempt] = values
+        membership = declared.get("cell_paths")
+        if not isinstance(membership, Mapping) or not membership:
+            raise ValueError("accepted rounds require explicit cell_paths")
+        for cell_id, paths in membership.items():
+            if cell_id not in cells:
+                raise ValueError("round contains an undeclared development cell")
+            if not isinstance(paths, (tuple, list)) or not paths:
+                raise ValueError("round cell_paths must be nonempty sequences")
+            for candidate in paths:
+                _require_nonempty_string("path_id", candidate)
+            if len(paths) != len(set(paths)):
+                raise ValueError("duplicate declared path")
+            if cells[cell_id]["greedy_path_id"] not in paths:
+                raise ValueError("every measured round cell requires a greedy control")
+            if any(candidate not in cells[cell_id]["path_facts"] for candidate in paths):
+                raise ValueError("round path lacks eligible frozen facts")
+            expected.update(
+                (cell_id, candidate, round_id, block, attempt)
+                for candidate in paths for attempt, values in blocks.items() for block in values
+            )
+    if {key[0] for key in expected} != set(cells):
+        raise ValueError("accepted rounds are missing declared development cells")
+
+    observations = {}
+    for row in rows:
+        if not isinstance(row, Mapping) or row.get("split") != "training":
+            raise ValueError("fitting rejects evaluation or unspecified split rows")
+        key = tuple(row.get(field) for field in (
+            "cell_id", "path_id", "round_id", "block", "attempt_type"
+        ))
+        for field, value in zip(("cell_id", "path_id", "round_id"), key[:3], strict=True):
+            _require_nonempty_string(field, value)
+        if type(key[3]) is not int or key[3] < 0:
+            raise ValueError("row block must be a nonnegative integer")
+        if key[4] not in ("warmup", "measurement") or key not in expected:
+            raise ValueError("row is outside the exact declared round attempt set")
+        if key in observations:
+            raise ValueError("duplicate observation in accepted round")
+        if row.get("identity") != identities[key[2]]:
+            raise ValueError("row identity differs from accepted round identity")
+        if row.get("status") != "success" or row.get("validation") != "pass":
+            raise ValueError("failed or unsupported observation")
+        if row.get("fallback") is not False:
+            raise ValueError("fallback must be explicitly False")
+        for field in (
+            "full_precision_passed", "policy_reference_passed",
+            "execution_resource_admission_passed", "startup_resource_admission_passed",
+        ):
+            if row.get(field) is not True:
+                raise ValueError(f"{field} must be explicitly True")
+        components = tuple(_require_finite_nonnegative(field, row.get(field)) for field in (
+            "session_open_s", "total_wall_s", "session_close_s"
+        ))
+        total = sum(components)
+        if not math.isfinite(total) or total <= 0:
+            raise ValueError("session-inclusive time must be finite and strictly positive")
+        observations[key] = total
+    if observations.keys() != expected:
+        raise ValueError("incomplete accepted round: missing declared attempts")
+
+    paired = {cell_id: {} for cell_id in sorted(cells)}
+    for (cell_id, candidate, round_id, block, attempt), total in sorted(observations.items()):
+        if attempt == "warmup":
+            continue
+        greedy = cells[cell_id]["greedy_path_id"]
+        control = observations[(cell_id, greedy, round_id, block, attempt)]
+        # Log differences avoid overflow when finite timings have extreme ratios.
+        paired[cell_id].setdefault(candidate, []).append(math.log(control) - math.log(total))
+    return {
+        cell_id: {
+            candidate: {"median_log_speedup": float(median(values)), "paired_count": len(values)}
+            for candidate, values in sorted(paths.items())
+        }
+        for cell_id, paths in paired.items()
+    }
+
+
+def fit_launch_cost_weights(
+    cells: Mapping[str, Mapping[str, object]],
+    rounds: Sequence[Mapping[str, object]],
+    rows: Iterable[Mapping[str, object]],
+    *,
+    scales: LaunchCostScales,
+    expected_identity: Mapping[str, str],
+) -> tuple[dict[str, object], tuple[dict[str, object], ...]]:
+    """Fit all 1001 integer tuples using plan 11.4's paired median objective.
+
+    Scales are supplied frozen before calibration and are never recomputed here.
+    The returned profile is a private mathematical result, not an execution
+    authorization. Its training objective is conditional on the measured pool.
+    """
+    if not isinstance(scales, LaunchCostScales):
+        raise TypeError("fitting requires frozen LaunchCostScales")
+    paired = validate_launch_cost_observations(
+        cells, rounds, rows, expected_identity=expected_identity
+    )
+    families = {}
+    for cell_id in paired:
+        family = cells[cell_id]["family"]
+        families[family] = families.get(family, 0) + 1
+    cell_weights = {
+        cell_id: 1.0 / (len(families) * families[cells[cell_id]["family"]])
+        for cell_id in paired
+    }
+    table = []
+    for weights in launch_cost_weight_grid():
+        selections = {}
+        for cell_id, paths in paired.items():
+            cost, selected = min(
+                (upmem_launch_cost_v1(cells[cell_id]["path_facts"][candidate], weights, scales), candidate)
+                for candidate in paths
+            )
+            selections[cell_id] = {
+                "path_id": selected, "cost": cost,
+                "median_log_speedup": paths[selected]["median_log_speedup"],
+            }
+        objective = float(np.sum(np.asarray([
+            cell_weights[cell_id] * selection["median_log_speedup"]
+            for cell_id, selection in selections.items()
+        ], dtype=np.float64), dtype=np.float64))
+        table.append({
+            "integer_weights": weights, "J": objective,
+            "rounded_J": round(objective, 12),
+            "worst_cell_log_speedup": min(item["median_log_speedup"] for item in selections.values()),
+            "distance_from_uniform_squared": sum((weight - 2) ** 2 for weight in weights),
+            "cells": selections,
+        })
+    best = min(table, key=lambda row: (
+        -row["rounded_J"], -row["worst_cell_log_speedup"],
+        row["distance_from_uniform_squared"], row["integer_weights"],
+    ))
+    profile = {
+        "model_id": LAUNCH_COST_MODEL_ID, "fit_split": "training",
+        "integer_weights": best["integer_weights"], "scales": scales.as_mapping(),
+        "primary_quantity": "session_inclusive_s", "identity": dict(expected_identity),
+        "accepted_rounds": tuple({"round_id": item["round_id"], "identity": dict(item["identity"])}
+                                 for item in sorted(rounds, key=lambda item: item["round_id"])),
+        "cell_weights": cell_weights, "candidate_observations": paired,
+        "J": best["J"], "worst_cell_log_speedup": best["worst_cell_log_speedup"],
+        "cells": best["cells"], "evaluated_weight_vectors": len(table),
+        "interpretation": "Family-balanced geometric training score on the measured pool; not unbiased generalization.",
+    }
+    return profile, tuple(table)
+
+
 @dataclass(frozen=True, slots=True)
 class PlanFeatureFacts:
     """Raw features plus auditable physical-plan counters."""
@@ -1670,6 +1894,8 @@ __all__ = [
     "launch_cost_weight_grid",
     "development_greedy_scales",
     "upmem_launch_cost_v1",
+    "validate_launch_cost_observations",
+    "fit_launch_cost_weights",
     "FEATURE_NAMES",
     "GROUP_FEATURE_NAMES",
     "SIX_TERM_FEATURE_MODEL",

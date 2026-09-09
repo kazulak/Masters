@@ -17,11 +17,11 @@ import numpy as np
 import yaml
 
 from quantum_bench.cpu import run_complex128_reference, run_cpu_once
-from quantum_bench.evidence import canonical_json
+from quantum_bench.evidence import canonical_json, problem_id, tensor_network_structure_id
 from quantum_bench.experiment import load_experiment_config
 from quantum_bench.lowering import build_contraction_dag, contraction_dag_hash, lower_tensor_network
 from quantum_bench.model import make_simulation_job
-from quantum_bench.planning import plan_cotengra, plan_opt_einsum
+from quantum_bench.planning import normalize_frozen_path, plan_cotengra, plan_opt_einsum
 from quantum_bench.upmem.path_heuristic import (
     FEATURE_NAMES,
     GROUP_FEATURE_NAMES,
@@ -1219,6 +1219,161 @@ def _confirmation_selection(
             for role, candidate_id in (("greedy", greedy[0]["candidate_path_id"]), ("upmem_selected", selected)):
                 roles.setdefault((circuit_id, topology, candidate_id), set()).add(role)
     return sorted(roles), {key: tuple(sorted(value)) for key, value in roles.items()}, profile_hash
+
+
+def prepare_cost_guided_config(
+    manifest: Mapping[str, Any],
+    workload: Mapping[str, Any],
+    *,
+    execution_root: Path,
+    experiment_id: str,
+    simulator: bool = False,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Prepare an initial cost-guided round without searches, writes or execution.
+
+    The caller stages qasm_source_bindings and reserves a unique experiment_id
+    before writing/loading the configuration. Manifest/profile/binding hashes
+    are retained for the caller's freeze packet; their referenced artifacts are
+    not inputs to this adapter and must be authenticated by that caller.
+    """
+    if not isinstance(experiment_id, str) or not experiment_id.strip() or experiment_id != experiment_id.strip():
+        raise ValueError("an explicit nonempty experiment_id is required")
+    if type(simulator) is not bool:
+        raise ValueError("simulator must be a boolean")
+    root = Path(execution_root)
+    if not root.is_absolute():
+        raise ValueError("execution_root must be an absolute implementation path")
+    if manifest.get("study_id") != "upmem_cost_guided_path_study_v1" or manifest.get("stage") != "initial":
+        raise ValueError("cost-guided preparation supports the initial study stage only")
+    for field in ("binding_hash", "profile_hash", "normalization_hash"):
+        value = manifest.get(field)
+        if not isinstance(value, str) or len(value) != 64 or any(c not in "0123456789abcdef" for c in value):
+            raise ValueError(f"{field} must be a lowercase SHA-256 digest")
+    if manifest.get("warmup_blocks") != [0] or manifest.get("measurement_blocks") != [1, 2, 3]:
+        raise ValueError("initial round requires frozen 1+3 blocks")
+    if any(type(block) is not int for field in ("warmup_blocks", "measurement_blocks") for block in manifest[field]):
+        raise ValueError("declared block IDs must be integers")
+    if type(manifest.get("expected_attempts")) is not int or not 0 < manifest["expected_attempts"] <= 192:
+        raise ValueError("initial round expected_attempts must be positive and at most 192")
+    instances = {}
+    for instance in workload["instances"]:
+        identifier = instance.get("instance_id")
+        if not isinstance(identifier, str) or not identifier or identifier in instances:
+            raise ValueError("workload instance IDs must be nonempty and unique")
+        if instance.get("split") not in {"training", "test"}:
+            raise ValueError("unsupported workload split")
+        if not isinstance(instance.get("family"), str) or not instance["family"]:
+            raise ValueError("workload family is required")
+        instances[identifier] = instance
+    training = {key: value for key, value in instances.items() if value["split"] == "training"}
+    expected_cells = {f"{key}/{topology}" for key in training for topology in _EVALUATION_TOPOLOGIES}
+    cells = manifest.get("cells")
+    if not expected_cells or not isinstance(cells, Mapping) or set(cells) != expected_cells:
+        raise ValueError("manifest must contain exactly all training instances at both topologies")
+
+    cases, networks, sources = {}, {}, []
+    for circuit_id, instance in sorted(training.items()):
+        definition = instance["circuit"]
+        job = make_simulation_job(_circuit_from_definition(definition))
+        expected_problem = instance["canonical_circuit"]["operation_identity"]["problem_id"]
+        if problem_id(job) != expected_problem:
+            raise ValueError("workload canonical problem identity mismatch")
+        networks[circuit_id], _ = lower_tensor_network(job)
+        public, binding = _prepared_circuit_definition(definition)
+        cases[circuit_id] = {"circuit": public}
+        if binding is not None:
+            sources.append({"circuit_id": circuit_id, **binding})
+
+    from quantum_bench.upmem.execution_features import extract_launch_cost_features
+
+    plans, grouped, selected_cells = {}, {}, []
+    for cell_id, cell in sorted(cells.items()):
+        circuit_id, topology_id = cell.get("circuit_id"), cell.get("topology_id")
+        if circuit_id not in training or topology_id not in _EVALUATION_TOPOLOGIES or cell_id != f"{circuit_id}/{topology_id}":
+            raise ValueError("cell identity/topology mismatch")
+        if cell.get("split") != "training" or cell.get("family") != training[circuit_id]["family"]:
+            raise ValueError("cell family/split differs from workload")
+        selection, candidates = cell["selection"], cell["candidates"]
+        paths, roles = selection["path_ids"], selection["roles"]
+        if not isinstance(paths, list) or not paths or any(not isinstance(p, str) or not p for p in paths):
+            raise ValueError("selection requires nonempty path IDs")
+        if len(paths) > 4:
+            raise ValueError("initial round permits at most 4 selected paths per cell")
+        if len(paths) != len(set(paths)) or not isinstance(candidates, Mapping) or set(paths) != set(candidates):
+            raise ValueError("selected path IDs must be deduplicated and exactly match candidates")
+        if not isinstance(roles, Mapping) or not {"G", "F", "R"} <= set(roles):
+            raise ValueError("initial selection requires G/F/R roles")
+        if any(not isinstance(role, str) or not role or not isinstance(p, str) or p not in candidates for role, p in roles.items()):
+            raise ValueError("role references an unselected path")
+        if set(roles.values()) != set(paths):
+            raise ValueError("every selected path requires a role")
+        network = networks[circuit_id]
+        network_id = tensor_network_structure_id(network)
+        for identifier in sorted(paths):
+            candidate = candidates[identifier]
+            path = normalize_frozen_path(candidate["path"])
+            if candidate.get("path_id") != identifier or path_id(path, circuit_id=circuit_id) != identifier:
+                raise ValueError("selected canonical path identity mismatch")
+            flops = candidate.get("tree_flops")
+            if isinstance(flops, bool) or not isinstance(flops, (int, float)) or not math.isfinite(flops) or flops < 0:
+                raise ValueError("tree_flops must be finite and nonnegative")
+            dag = build_contraction_dag(network, path)
+            facts = candidate["facts"]
+            logical_id = contraction_dag_hash(dag)
+            if facts.get("logical_plan_id") != logical_id:
+                raise ValueError("candidate logical-plan identity mismatch")
+            resources = {"dpu_count": 1 if topology_id == "1dpu_t8" else 4, "rank_count": 1, "tasklets_per_dpu": 8}
+            plan = plan_upmem(dag, numeric_policy=FLOAT32, topology=UpmemTopology(**resources), schedule_policy="static_dag_waves_v1")
+            _require_wave_execution_coverage(plan)
+            if facts.get("physical_plan_id") != physical_plan_id(plan):
+                raise ValueError("candidate physical-plan identity mismatch")
+            _wave_scaling_admission(facts.get("resource_admission"), resources, expected=collection_resource_admission(plan))
+            recomputed = extract_launch_cost_features(dag, plan, fuse_complex=True, geometry_policy="panel_only_v1")
+            memory = recomputed["execution"]["host_buffers"]["declared_executor_memory_estimate_bytes"]
+            if facts.get("declared_host_bytes") != memory or memory > _WAVE_MEMORY_BUDGET_BYTES:
+                raise ValueError("candidate declared host memory mismatch or budget exceeded")
+            for field in ("model_id", "H", "P", "N", "launches"):
+                if facts.get(field) != recomputed[field]:
+                    raise ValueError(f"candidate launch-cost facts mismatch: {field}")
+            plan_id = f"path_{identifier}"
+            public_plan = {"planner": {
+                "engine": "frozen_path", "mode": "replay", "path": path,
+                "tensor_network_structure_id": network_id, "logical_plan_id": logical_id,
+            }, "slicing": None}
+            if plan_id in plans and plans[plan_id] != public_plan:
+                raise ValueError("same path ID has inconsistent replay definitions")
+            plans[plan_id] = public_plan
+            grouped.setdefault((circuit_id, plan_id), []).append(topology_id)
+            selected_cells.append({
+                "cell_id": cell_id, "path_id": identifier,
+                "roles": sorted(role for role, p in roles.items() if p == identifier),
+                "tensor_network_structure_id": network_id, "logical_plan_id": logical_id,
+                "physical_plan_id": facts["physical_plan_id"],
+            })
+    physical_attempts = len(selected_cells) * 4
+    if physical_attempts > 192 or manifest["expected_attempts"] != physical_attempts:
+        raise ValueError("manifest expected_attempts differs from deduplicated 1+3 schedule")
+    warmups, measurements, seed = (0, 1, 20260909) if simulator else (1, 3, 20260910)
+    config = {
+        "schema_version": "tn_benchmark_v3", "experiment_id": experiment_id,
+        "defaults": {"timeout_s": 120.0},
+        "collection": _collection(warmups=warmups, measurements=measurements, seed=seed),
+        "cases": cases, "plans": plans,
+        "routes": {topology: _route(topology, simulator=simulator, prepared_waves=True, execution_root=root)
+                   for topology in _EVALUATION_TOPOLOGIES},
+        "matrix": [{"case_id": circuit_id, "plan_id": plan_id, "route_ids": sorted(routes)}
+                   for (circuit_id, plan_id), routes in sorted(grouped.items())],
+    }
+    provenance = {
+        "stage": "initial", "experiment_id": experiment_id, "simulator": simulator,
+        **{field: manifest[field] for field in ("binding_hash", "profile_hash", "normalization_hash")},
+        "manifest_record_sha256": hashlib.sha256(json.dumps(manifest, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
+        "workload_record_sha256": hashlib.sha256(json.dumps(workload, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest(),
+        "expected_physical_attempts": physical_attempts,
+        "expected_prepared_attempts": len(selected_cells) * (warmups + measurements),
+        "selected_cells": selected_cells, "qasm_source_bindings": sources,
+    }
+    return config, provenance
 
 
 def prepare_config(

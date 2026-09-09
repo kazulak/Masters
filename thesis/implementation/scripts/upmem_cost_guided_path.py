@@ -9,10 +9,13 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+from importlib import metadata
 import multiprocessing
+import os
 import queue as queue_module
 from pathlib import Path
 import signal
+import subprocess
 import threading
 import time
 
@@ -302,11 +305,13 @@ def run_cost_guided_search(
     *,
     workload_id: str,
     cell_id: str,
+    circuit_id: str,
     stage: str,
     objective_id: str,
     profile_id: str,
     trace_context: Mapping[str, object],
     evaluation_callback: Callable[[tuple[tuple[int, int], ...], float], GuidedEvaluation],
+    record_callback: Callable[[dict[str, object]], None] | None = None,
     master_seed: int = 20260909,
     proposals: int = 128,
     startup_trials: int = 16,
@@ -329,6 +334,7 @@ def run_cost_guided_search(
         raise TypeError("evaluation_callback must be callable")
     _require_nonempty_text(workload_id, "workload_id")
     _require_nonempty_text(cell_id, "cell_id")
+    _require_nonempty_text(circuit_id, "circuit_id")
     _require_nonempty_text(stage, "stage")
     _require_nonempty_text(objective_id, "objective_id")
     _require_nonempty_text(profile_id, "profile_id")
@@ -379,6 +385,7 @@ def run_cost_guided_search(
             raise CostGuidedSearchError("search exceeded 7200-second guard", trace)
         record: dict[str, object] | None = None
         try:
+            ask_started = time.monotonic()
             trial = study.ask()
             costmod = _bounded_parameter(
                 trial.suggest_float("costmod", costmod_low, costmod_high, log=False),
@@ -419,8 +426,10 @@ def run_cost_guided_search(
                 "told_objective": None,
                 "duplicate": False,
                 "tell_order": None,
+                "timings_s": {"adaptive_ask": time.monotonic() - ask_started},
             }
             proposal_deadline = min(search_deadline, time.monotonic() + proposal_timeout_s)
+            generation_started = time.monotonic()
             canonical_path, tree_flops = _isolated_random_greedy(
                 inputs=inputs,
                 output=output,
@@ -431,7 +440,8 @@ def run_cost_guided_search(
                 proposal_seed=proposal_seed,
                 deadline=proposal_deadline,
             )
-            candidate_path_id = path_id(canonical_path, circuit_id=cell_id)
+            record["timings_s"]["candidate_generation"] = time.monotonic() - generation_started
+            candidate_path_id = path_id(canonical_path, circuit_id=circuit_id)
             record["path"] = [list(step) for step in canonical_path]
             record["path_id"] = candidate_path_id
             record["tree_flops"] = tree_flops
@@ -439,16 +449,19 @@ def run_cost_guided_search(
             callback_timeout = min(lowering_timeout_s, proposal_deadline - time.monotonic())
             if callback_timeout <= 0:
                 raise TimeoutError("proposal exceeded 300-second guard before evaluation")
+            evaluation_started = time.monotonic()
             evaluation = _evaluate_with_guard(
                 evaluation_callback,
                 canonical_path,
                 tree_flops,
                 callback_timeout,
             )
+            record["timings_s"]["plan_evaluation"] = time.monotonic() - evaluation_started
             if time.monotonic() > min(proposal_deadline, search_deadline):
                 raise TimeoutError("proposal completed after its deadline")
             # A caller may reuse its scratch dictionaries on the next proposal.
             snapshot = json.loads(json.dumps(evaluation.facts, allow_nan=False))
+            tell_started = time.monotonic()
             if evaluation.score is None:
                 study.tell(trial, float("inf"))
                 record["status"] = "known_infeasible"
@@ -461,8 +474,11 @@ def run_cost_guided_search(
                 record["score"] = evaluation.score
                 record["facts"] = snapshot
                 record["told_objective"] = evaluation.score
+            record["timings_s"]["adaptive_tell"] = time.monotonic() - tell_started
             record["tell_order"] = proposal_index + 1
             trace.append(record)
+            if record_callback is not None:
+                record_callback(record)
             seen_path_ids.add(candidate_path_id)
         except CostGuidedSearchError:
             raise
@@ -470,6 +486,8 @@ def run_cost_guided_search(
             if record is not None and record.get("tell_order") is None:
                 record["rejection_reason"] = f"{type(exc).__name__}:{exc}"
                 trace.append(record)
+                if record_callback is not None:
+                    record_callback(record)
             raise CostGuidedSearchError(
                 f"cost-guided proposal {proposal_index} aborted: {type(exc).__name__}:{exc}",
                 trace,
@@ -482,6 +500,7 @@ def run_cost_guided_search(
         "completed": True,
         "workload_id": workload_id,
         "cell_id": cell_id,
+        "circuit_id": circuit_id,
         "stage": stage,
         "objective_id": objective_id,
         "profile_id": profile_id,
@@ -584,15 +603,544 @@ def load_study(path: Path = DEFAULT_STUDY, *, root: Path = ROOT) -> tuple[dict, 
         raise ValueError("Declared effective budget does not match workload")
     if budget["initial_paths_per_cell"] != campaign["initial_paths_per_cell"]:
         raise ValueError("Declared initial-path cap does not match budget")
+    if campaign["authorized_attempt_cap"] > 792 or campaign["feedback_rounds"] != 2:
+        raise ValueError("Study exceeds the authorized attempt/round contract")
+    required = {
+        "search": {"cotengra_version": "0.7.5", "optuna_version": "4.5.0",
+                   "sampler": "TPESampler", "generator": "fresh_RandomGreedyOptimizer",
+                   "startup_trials": 16, "proposals": 128, "master_seed": 20260909,
+                   "max_repeats": 1, "accel": False, "parallel": False,
+                   "simplify": True, "serial": True,
+                   "costmod": {"low": 0.1, "high": 4.0, "log": False},
+                   "temperature": {"low": 0.001, "high": 1.0, "log": True},
+                   "proposal_timeout_s": 300, "lowering_timeout_s": 60, "search_timeout_s": 7200,
+                   "maximum_planned_work_units": 400, "maximum_semantic_identity_expansion_units": 1000000,
+                   "host_memory_admission_bytes": 536870912},
+        "score": {"model_id": "upmem_launch_cost_v1", "terms": ["H", "P", "N", "M", "W"],
+                  "coefficient_denominator": 10, "grid_size": 1001,
+                  "initial_integer_coefficients": [2, 2, 2, 2, 2],
+                  "timing_primary": "session_open_s + steady_execution_v1.total_wall_s + session_close_s",
+                  "historical_observations_allowed": False, "evaluation_observations_allowed_for_fit": False},
+        "executor": {"source": "459935f586fdd16c82013838e6d27a12604c3093",
+                     "schedule_policy": "static_dag_waves_v1", "request_transport": "packed_wave_v1",
+                     "fuse_complex": True, "geometry_policy": "panel_only_v1",
+                     "numeric_policy": "split_complex_float32_v1"},
+        "campaign": {"feedback_paths_per_cell": 3, "calibration_warmup_blocks": 1,
+                     "calibration_measurement_blocks": 3, "evaluation_methods": ["G", "F", "R", "U"],
+                     "evaluation_warmup_blocks": 1, "evaluation_measurement_blocks": 5,
+                     "retry_or_replacement": False, "unused_attempts_reallocated": False,
+                     "acceptance_requires_verified_copies": 2,
+                     "attempt_timeout_s": 120, "physical_stage_timeout_s": 86400},
+    }
+    for section, fields in required.items():
+        for name, expected in fields.items():
+            if study[section].get(name) != expected or type(study[section].get(name)) is not type(expected):
+                raise ValueError(f"Frozen study contract mismatch: {section}.{name}")
     return study, workload, budget
+
+
+def record_hash(value: object) -> str:
+    return hashlib.sha256(json.dumps(
+        value, sort_keys=True, separators=(",", ":"), allow_nan=False,
+    ).encode("utf-8")).hexdigest()
+
+
+def research_binding(study: dict) -> dict:
+    """Require a clean source and the fully pinned research interpreter."""
+    dirty = subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT, text=True)
+    if dirty:
+        raise ValueError("Frozen preparation requires a clean worktree")
+    source = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip()
+    runtime_hash = hashlib.sha256((ROOT / "src/quantum_bench/upmem/runtime.py").read_bytes()).hexdigest()
+    if runtime_hash != "b7168cd09f007978622346fd9954bdda54beb9ce48d870e4df8d158ed8681c02":
+        raise ValueError("Frozen executor runtime source changed")
+    lock = ROOT / "requirements-upmem-path-search.txt"
+    versions = {}
+    for line in lock.read_text().splitlines():
+        if not line or line.startswith("#"):
+            continue
+        name, version = line.split("==")
+        actual = metadata.version(name)
+        if actual != version:
+            raise ValueError(f"Research dependency mismatch: {name}: {actual} != {version}")
+        versions[name] = actual
+    return {
+        "source_sha": source,
+        "executor_source": study["executor"]["source"],
+        "runtime_source_hash": runtime_hash,
+        "study_hash": record_hash(study),
+        "workload_hash": study["workload"]["sha256"],
+        "research_lock_hash": hashlib.sha256(lock.read_bytes()).hexdigest(),
+        "dependencies": versions,
+        "source_hashes": {
+            path: hashlib.sha256((ROOT / path).read_bytes()).hexdigest()
+            for path in (
+                "src/quantum_bench/upmem/execution_features.py",
+                "src/quantum_bench/upmem/path_heuristic.py",
+                "scripts/upmem_cost_guided_path.py",
+            )
+        },
+    }
+
+
+def lower_candidate(network, path, topology: dict, study: dict) -> GuidedEvaluation:
+    """Observe/admit the production plan; unexpected defects are never exclusions."""
+    from quantum_bench.lowering import build_contraction_dag
+    from quantum_bench.upmem.execution_features import extract_launch_cost_features
+    from quantum_bench.upmem.path_heuristic import extract_conventional_features
+    from quantum_bench.upmem.plan import UpmemTopology, collection_resource_admission, plan_upmem
+    import upmem_path_heuristic as existing
+
+    dag = build_contraction_dag(network, path)
+    limits = study["search"]
+    units = existing._estimated_work_unit_count(dag)
+    if units > limits["maximum_planned_work_units"]:
+        return GuidedEvaluation(None, {"work_unit_count": units}, "work_unit_bound")
+    expansion = existing._semantic_identity_expansion_units(
+        dag, stop_after=limits["maximum_semantic_identity_expansion_units"],
+    )
+    if expansion > limits["maximum_semantic_identity_expansion_units"]:
+        return GuidedEvaluation(None, {"identity_expansion_units": expansion}, "identity_expansion_bound")
+    executor = study["executor"]
+    resources = UpmemTopology(**{key: topology[key] for key in (
+        "dpu_count", "rank_count", "tasklets_per_dpu",
+    )})
+    plan = plan_upmem(dag, numeric_policy=executor["numeric_policy"], topology=resources,
+                      schedule_policy=executor["schedule_policy"])
+    try:
+        existing._require_wave_execution_coverage(plan)
+    except ValueError as exc:
+        if not str(exc).startswith("planned_execution_resource_admission_failed:"):
+            raise
+        return GuidedEvaluation(None, {"work_unit_count": units}, str(exc))
+    features = extract_launch_cost_features(
+        dag, plan, fuse_complex=executor["fuse_complex"], geometry_policy=executor["geometry_policy"],
+    )
+    execution = features.pop("execution")
+    memory = execution["host_buffers"]["declared_executor_memory_estimate_bytes"]
+    if memory > limits["host_memory_admission_bytes"]:
+        return GuidedEvaluation(None, {"declared_host_bytes": memory}, "host_memory_bound")
+    admission = collection_resource_admission(plan)
+    existing._wave_scaling_admission(admission, resources)
+    features.update(
+        physical_plan_id=execution["plan"]["physical_plan_id"],
+        logical_plan_id=execution["plan"]["logical_plan_id"],
+        resource_admission=admission,
+        declared_host_bytes=memory,
+        work_unit_count=units,
+        conventional=extract_conventional_features(dag).as_mapping(),
+    )
+    return GuidedEvaluation(0.0, features)
+
+
+def prepare_normalization(study: dict, workload: dict) -> dict:
+    """Development greedy plans only; no tensor execution or test-cell scaling."""
+    import upmem_path_heuristic as existing
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, development_greedy_scales
+
+    cells, references = {}, {}
+    for instance in sorted(workload["instances"], key=lambda item: item["instance_id"]):
+        if instance["split"] != study["workload"]["development_split"]:
+            continue
+        circuit = existing._circuit_from_definition(instance["circuit"])
+        network, _ = existing.lower_tensor_network(existing.make_simulation_job(circuit))
+        path, _ = existing.plan_opt_einsum(network, optimize="greedy")
+        for topology in study["executor"]["topologies"]:
+            cell_id = f"{instance['instance_id']}/{topology['topology_id']}"
+            evaluated = _evaluate_with_guard(
+                lambda p, _: lower_candidate(network, p, topology, study), path, 0.0,
+                study["search"]["lowering_timeout_s"],
+            )
+            if evaluated.score is None:
+                raise ValueError(f"Required greedy cell is infeasible: {cell_id}: {evaluated.known_infeasible_reason}")
+            facts = LaunchCostFacts.from_mapping(evaluated.facts)
+            cells[cell_id] = ("training", facts)
+            references[cell_id] = {
+                "circuit_id": instance["instance_id"], "family": instance["family"],
+                "topology_id": topology["topology_id"], "split": "training",
+                "path_id": path_id(path, circuit_id=instance["instance_id"]),
+                "path": path, "facts": evaluated.facts,
+                "tree_flops": conventional_tree_flops(network, path),
+            }
+    expected = sum(i["split"] == study["workload"]["development_split"] for i in workload["instances"])
+    if len(cells) != expected * len(study["executor"]["topologies"]):
+        raise ValueError("Development normalization membership is incomplete")
+    return {
+        "model_id": "upmem_launch_cost_v1", "study_hash": record_hash(study),
+        "workload_hash": study["workload"]["sha256"],
+        "scales": development_greedy_scales(cells).as_mapping(), "greedy_cells": references,
+    }
+
+
+def conventional_tree_flops(network, path) -> float:
+    """Put greedy on the identical cotengra FLOP scale used in search trials."""
+    from cotengra import ContractionTree
+
+    inputs = [tuple(tensor.labels) for tensor in network.tensors]
+    tree = ContractionTree.from_path(inputs, tuple(network.output_labels), _size_dict(network), path=path)
+    return _require_nonnegative_finite(tree.total_flops(), "greedy tree FLOPs")
+
+
+def choose_round_paths(candidates: Mapping[str, dict], greedy_id: str, *, scales, weights,
+                       initial_cap: int | None = None, previously_measured=frozenset()) -> dict:
+    """Fixed initial G/F/R+diversity or feedback new-best+diversity+G selection."""
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, upmem_launch_cost_v1
+
+    if greedy_id not in candidates:
+        raise ValueError("A round requires its eligible greedy control")
+    facts = {identifier: LaunchCostFacts.from_mapping(row["facts"]) for identifier, row in candidates.items()}
+    scores = {identifier: upmem_launch_cost_v1(fact, weights, scales) for identifier, fact in facts.items()}
+    vectors = {identifier: tuple(x / scale for x, scale in zip(fact.as_tuple(), scales.as_tuple(), strict=True))
+               for identifier, fact in facts.items()}
+    selected = {greedy_id}
+    roles = {"G": greedy_id}
+    if initial_cap is not None:
+        if type(initial_cap) is not int or not 3 <= initial_cap <= 6:
+            raise ValueError("Initial cap must admit G/F/R and stay within six paths")
+        roles["F"] = min(candidates, key=lambda p: (candidates[p]["tree_flops"], p))
+        roles["R"] = min(candidates, key=lambda p: (scores[p], p))
+        selected.update(roles.values())
+        remaining = set(candidates) - selected
+        maximum = initial_cap
+    else:
+        remaining = set(candidates) - set(previously_measured) - {greedy_id}
+        if not remaining:
+            return {"roles": {}, "path_ids": [], "reason": "no_new_eligible_candidate"}
+        best = min(remaining, key=lambda p: (scores[p], p))
+        roles["new_best"] = best
+        selected.add(best)
+        remaining.remove(best)
+        maximum = 3
+    while remaining and len(selected) < maximum:
+        distance = {
+            p: min(sum(abs(x-y) for x, y in zip(vectors[p], vectors[a], strict=True)) for a in sorted(selected))
+            for p in sorted(remaining)
+        }
+        chosen = min(remaining, key=lambda p: (-distance[p], p))
+        roles[f"diverse_{len(selected)}"] = chosen
+        selected.add(chosen)
+        remaining.remove(chosen)
+    return {"roles": roles, "path_ids": sorted(selected), "scores": scores}
+
+
+def choose_evaluation_paths(greedy: dict, flop_trace: dict, upmem_trace: dict, *, profile: dict, normalization: dict) -> dict:
+    """Four method labels with U isolated from the F/R candidate pool."""
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, LaunchCostScales, upmem_launch_cost_v1
+
+    if profile.get("model_id") != "upmem_launch_cost_v1" or profile.get("normalization_hash") != record_hash(normalization):
+        raise ValueError("Evaluation profile/normalization binding mismatch")
+    weights = tuple(profile["integer_weights"])
+    scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+    for trace in (flop_trace, upmem_trace):
+        if trace.get("completed") is not True or trace.get("proposal_count") != 128 or len(trace["trace"]) != 128:
+            raise ValueError("Evaluation requires two complete 128-proposal traces")
+        context = trace.get("trace_context", {})
+        if "caller_binding" not in context or any(context.get(key) != trace.get(key) for key in (
+            "stage", "objective_id", "profile_id",
+        )):
+            raise ValueError("Evaluation trace binding mismatch: trace_context")
+        if trace.get("profile_id") != record_hash(profile) or context["caller_binding"].get("normalization_hash") != record_hash(normalization):
+            raise ValueError("Evaluation trace binding mismatch: supplied profile/normalization")
+    for key in ("workload_id", "cell_id", "circuit_id", "stage", "master_seed", "sampler_seed", "profile_id"):
+        if key not in flop_trace or flop_trace[key] != upmem_trace.get(key):
+            raise ValueError(f"Evaluation trace binding mismatch: {key}")
+    if flop_trace["trace_context"].get("caller_binding") != upmem_trace["trace_context"].get("caller_binding"):
+        raise ValueError("Evaluation trace binding mismatch: caller_binding")
+    if flop_trace.get("objective_id") != "cotengra_tree_flops_v1" or upmem_trace.get("objective_id") != "upmem_launch_cost_v1":
+        raise ValueError("Evaluation must distinguish FLOP-guided and UPMEM-guided traces")
+    for trace in (flop_trace, upmem_trace):
+        for row in trace["trace"]:
+            if row["status"] == "eligible":
+                expected_score = row["tree_flops"] if trace is flop_trace else upmem_launch_cost_v1(
+                    LaunchCostFacts.from_mapping(row["facts"]), weights, scales,
+                )
+                if row.get("score") != expected_score or row.get("told_objective") != expected_score:
+                    raise ValueError("Evaluation trace score differs from its frozen objective")
+    f_pool, u_pool = eligible_candidate_pool(flop_trace, greedy), eligible_candidate_pool(upmem_trace, greedy)
+    def score(row):
+        return upmem_launch_cost_v1(LaunchCostFacts.from_mapping(row["facts"]), weights, scales)
+    return {
+        "G": greedy["path_id"],
+        "F": min(f_pool, key=lambda p: (f_pool[p]["tree_flops"], p)),
+        "R": min(f_pool, key=lambda p: (score(f_pool[p]), p)),
+        "U": min(u_pool, key=lambda p: (score(u_pool[p]), p)),
+    }
+
+
+def eligible_candidate_pool(trace: dict, greedy: dict) -> dict:
+    """Deduplicate facts, not trial identities or objective-dependent scores."""
+    result = {}
+    for row in [*trace["trace"], greedy]:
+        if row.get("status", "eligible") != "eligible":
+            continue
+        canonical = {key: row[key] for key in ("path_id", "tree_flops", "facts")}
+        if "path" in row:
+            canonical["path"] = [sorted(pair) for pair in row["path"]]
+        identifier = row["path_id"]
+        if identifier in result and record_hash(canonical) != record_hash(result[identifier]):
+            raise ValueError(f"Conflicting deterministic facts for path {identifier}")
+        result[identifier] = canonical
+    return result
+
+
+def validate_search_trace(trace: dict, study: dict, *, workload_id: str, cell_id: str,
+                          circuit_id: str, stage: str, objective_id: str, profile_id: str,
+                          context: dict) -> None:
+    """Validate the retained engine trace against its already frozen invocation."""
+    from quantum_bench.planning import normalize_frozen_path
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts
+
+    settings = study["search"]
+    sampler_seed = _seed_from_identity(
+        master_seed=settings["master_seed"], workload_id=workload_id, cell_id=cell_id,
+        seed_domain="optuna_tpe_sampler", stage=stage, proposal_ordinal=None,
+    )
+    expected = {"schema": "upmem_cost_guided_search_trace_v1", "completed": True,
+                "workload_id": workload_id, "cell_id": cell_id, "circuit_id": circuit_id,
+                "stage": stage, "objective_id": objective_id, "profile_id": profile_id,
+                "proposal_count": settings["proposals"], "startup_trials": settings["startup_trials"],
+                "master_seed": settings["master_seed"], "sampler_seed": sampler_seed,
+                "seed_derivation": settings["seed_derivation"],
+                "generator": {"optimizer": "cotengra.RandomGreedyOptimizer", "max_repeats": 1,
+                              "accel": False, "parallel": False, "simplify": True},
+                "trace_context": {"stage": stage, "objective_id": objective_id,
+                                  "profile_id": profile_id, "caller_binding": context}}
+    if any(record_hash(trace.get(k)) != record_hash(v) for k, v in expected.items()):
+        raise ValueError("Incomplete or mismatched search invocation provenance")
+    if len(trace["trace"]) != settings["proposals"]:
+        raise ValueError("Incomplete search proposal set")
+    seen = {}
+    for index, row in enumerate(trace["trace"]):
+        ordinal_fields = {"proposal_index": index, "trial_number": index, "tell_order": index + 1,
+                          "stage": stage, "objective_id": objective_id, "profile_id": profile_id,
+                          "sampler_seed": sampler_seed, "proposal_seed": _seed_from_identity(
+                              master_seed=settings["master_seed"], workload_id=workload_id, cell_id=cell_id,
+                              seed_domain="cotengra_random_greedy_proposal", stage=stage, proposal_ordinal=index)}
+        if any(record_hash(row.get(k)) != record_hash(v) for k, v in ordinal_fields.items()):
+            raise ValueError("Search row provenance or proposal/tell sequence mismatch")
+        if set(row["params"]) != {"costmod", "temperature"}:
+            raise ValueError("Unexpected search proposal parameters")
+        for key in ("costmod", "temperature"):
+            _bounded_parameter(row["params"][key], settings[key]["low"], settings[key]["high"], key)
+        path = normalize_frozen_path(row["path"])
+        if row["path_id"] != path_id(path, circuit_id=circuit_id):
+            raise ValueError("Search canonical path identity mismatch")
+        if row.get("duplicate") is not (row["path_id"] in seen):
+            raise ValueError("Search duplicate flag mismatch")
+        _require_nonnegative_finite(row["tree_flops"], "tree_flops")
+        if row["status"] == "eligible":
+            LaunchCostFacts.from_mapping(row["facts"])
+            score = _require_nonnegative_finite(row["score"], "score")
+            if row["told_objective"] != score or row.get("rejection_reason") is not None:
+                raise ValueError("Eligible proposal tell/rejection mismatch")
+            if objective_id == "cotengra_tree_flops_v1" and score != row["tree_flops"]:
+                raise ValueError("Search did not use the declared FLOP objective")
+        elif row["status"] == "known_infeasible":
+            if row["score"] is not None or row["told_objective"] != "positive_infinity":
+                raise ValueError("Infeasible proposal must tell positive infinity without a finite score")
+            _require_nonempty_text(row["rejection_reason"], "rejection_reason")
+        else:
+            raise ValueError("Aborted proposal cannot enter a frozen round")
+        deterministic = {k: row[k] for k in ("facts", "status", "tree_flops", "rejection_reason", "score")}
+        if row["path_id"] in seen and record_hash(seen[row["path_id"]]) != record_hash(deterministic):
+            raise ValueError("Conflicting duplicate proposal facts or score")
+        seen[row["path_id"]] = deterministic
+    eligible = [row for row in trace["trace"] if row["status"] == "eligible"]
+    best = min(eligible, key=lambda row: (row["score"], row["path_id"]), default=None)
+    if trace.get("best_path_id") != (best["path_id"] if best is not None else None):
+        raise ValueError("Search best-path identity mismatch")
+
+
+def _write_new_json(path: Path, value: object) -> None:
+    """Exclusive durable write: interrupted artifacts are retained, never reused."""
+    data = json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n"
+    with path.open("x", encoding="utf-8") as stream:
+        stream.write(data)
+        stream.flush()
+        os.fsync(stream.fileno())
+    descriptor = os.open(path.parent, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def initialize_preparation(directory: Path, study: dict, workload: dict) -> dict:
+    """Freeze software binding and development-only scales, without a search."""
+    binding = research_binding(study)
+    directory.mkdir(parents=True, exist_ok=False)
+    _write_new_json(directory / "binding.json", binding)
+    try:
+        normalization = prepare_normalization(study, workload)
+        normalization["binding_hash"] = record_hash(binding)
+        _write_new_json(directory / "normalization.json", normalization)
+        profile = {
+            "model_id": study["score"]["model_id"], "stage": "initial",
+            "integer_weights": study["score"]["initial_integer_coefficients"],
+            "normalization_hash": record_hash(normalization), "binding_hash": record_hash(binding),
+            "observation_rounds": [],
+        }
+        _write_new_json(directory / "initial_profile.json", profile)
+        return {"binding_hash": record_hash(binding), "normalization_hash": record_hash(normalization),
+                "profile_hash": record_hash(profile)}
+    except BaseException as exc:
+        _write_new_json(directory / "preparation_failed.json", {"reason": f"{type(exc).__name__}:{exc}"})
+        raise
+
+
+def _load_preparation(directory: Path, study: dict, workload: dict) -> tuple[dict, dict, dict]:
+    from quantum_bench.upmem.path_heuristic import LaunchCostFacts, development_greedy_scales
+
+    if (directory / "preparation_failed.json").exists():
+        raise ValueError("Failed preparation cannot be resumed")
+    binding, normalization, profile = (
+        json.loads((directory / name).read_text())
+        for name in ("binding.json", "normalization.json", "initial_profile.json")
+    )
+    if research_binding(study) != binding:
+        raise ValueError("Preparation source, environment or study binding changed")
+    if normalization.get("binding_hash") != record_hash(binding) or profile != {
+        "model_id": study["score"]["model_id"], "stage": "initial",
+        "integer_weights": study["score"]["initial_integer_coefficients"],
+        "normalization_hash": record_hash(normalization), "binding_hash": record_hash(binding),
+        "observation_rounds": [],
+    }:
+        raise ValueError("Preparation normalization/profile binding mismatch")
+    expected = {f"{i['instance_id']}/{t['topology_id']}": (i, t)
+                for i in workload["instances"] if i["split"] == study["workload"]["development_split"]
+                for t in study["executor"]["topologies"]}
+    if set(normalization["greedy_cells"]) != set(expected):
+        raise ValueError("Normalization must contain the exact development membership")
+    references = {}
+    for cell_id, row in normalization["greedy_cells"].items():
+        instance, topology = expected[cell_id]
+        if (row["circuit_id"], row["family"], row["topology_id"], row["split"]) != (
+            instance["instance_id"], instance["family"], topology["topology_id"], "training",
+        ) or row["path_id"] != path_id(row["path"], circuit_id=instance["instance_id"]):
+            raise ValueError("Normalization greedy cell identity mismatch")
+        references[cell_id] = ("training", LaunchCostFacts.from_mapping(row["facts"]))
+    if normalization["scales"] != development_greedy_scales(references).as_mapping():
+        raise ValueError("Normalization scales differ from frozen development greedy facts")
+    return binding, normalization, profile
+
+
+def _cell_inputs(cell_id: str, study: dict, workload: dict):
+    import upmem_path_heuristic as existing
+
+    cells = {f"{instance['instance_id']}/{topology['topology_id']}": (instance, topology)
+             for instance in workload["instances"] for topology in study["executor"]["topologies"]}
+    if cell_id not in cells:
+        raise ValueError("Unknown workload cell")
+    instance, topology = cells[cell_id]
+    circuit = existing._circuit_from_definition(instance["circuit"])
+    network, _ = existing.lower_tensor_network(existing.make_simulation_job(circuit))
+    return instance, topology, network
+
+
+def initial_cell_search(directory: Path, cell_id: str, study: dict, workload: dict) -> dict:
+    """One durable 128-proposal initial trace; interrupted cells never refill."""
+    binding, normalization, profile = _load_preparation(directory, study, workload)
+    if cell_id not in normalization["greedy_cells"]:
+        raise ValueError("Initial search is restricted to frozen development cells")
+    if (directory / "initial_round.json").exists():
+        raise ValueError("Initial round is already frozen")
+    instance, topology, network = _cell_inputs(cell_id, study, workload)
+    if instance["split"] != study["workload"]["development_split"]:
+        raise ValueError("Evaluation data cannot enter initial development search")
+    cell_directory = directory / "initial" / record_hash(cell_id)
+    cell_directory.mkdir(parents=True, exist_ok=False)
+    context = {"binding_hash": record_hash(binding), "normalization_hash": record_hash(normalization)}
+    _write_new_json(cell_directory / "started.json", {"cell_id": cell_id, **context})
+    started = time.monotonic()
+    def evaluate(path, flops):
+        result = lower_candidate(network, path, topology, study)
+        return result if result.score is None else GuidedEvaluation(flops, result.facts)
+    try:
+        with (cell_directory / "search_trace.jsonl").open("x", encoding="utf-8") as output:
+            def retain(record):
+                output.write(json.dumps(record, sort_keys=True, allow_nan=False) + "\n")
+                output.flush()
+                os.fsync(output.fileno())
+            limits = study["search"]
+            trace = run_cost_guided_search(
+                network, workload_id=workload["workload_id"], cell_id=cell_id,
+                circuit_id=instance["instance_id"], stage="initial",
+                objective_id="cotengra_tree_flops_v1", profile_id=record_hash(profile),
+                trace_context=context, evaluation_callback=evaluate, record_callback=retain,
+                master_seed=limits["master_seed"], proposals=limits["proposals"],
+                startup_trials=limits["startup_trials"], proposal_timeout_s=limits["proposal_timeout_s"],
+                lowering_timeout_s=limits["lowering_timeout_s"], search_timeout_s=limits["search_timeout_s"],
+            )
+        trace["search_wall_s"] = time.monotonic() - started
+        _write_new_json(cell_directory / "completed.json", trace)
+        return {"cell_id": cell_id, "trace_hash": record_hash(trace), "proposal_count": trace["proposal_count"]}
+    except BaseException as exc:
+        _write_new_json(cell_directory / "failed.json", {"reason": f"{type(exc).__name__}:{exc}",
+                                                       "search_wall_s": time.monotonic() - started})
+        raise
+
+
+def freeze_initial_round(directory: Path, study: dict, workload: dict, budget: dict) -> dict:
+    """All development traces precede the immutable physical candidate manifest."""
+    from quantum_bench.upmem.path_heuristic import LaunchCostScales
+
+    binding, normalization, profile = _load_preparation(directory, study, workload)
+    scales = LaunchCostScales(**{k.lower(): v for k, v in normalization["scales"].items()})
+    cells = {}
+    for cell_id, greedy in sorted(normalization["greedy_cells"].items()):
+        folder = directory / "initial" / record_hash(cell_id)
+        if (folder / "failed.json").exists():
+            raise ValueError(f"Failed cell cannot enter a frozen round: {cell_id}")
+        trace = json.loads((folder / "completed.json").read_text())
+        context = {
+            "binding_hash": record_hash(binding), "normalization_hash": record_hash(normalization),
+        }
+        validate_search_trace(trace, study, workload_id=workload["workload_id"], cell_id=cell_id,
+                              circuit_id=greedy["circuit_id"], stage="initial",
+                              objective_id="cotengra_tree_flops_v1", profile_id=record_hash(profile), context=context)
+        persisted = [json.loads(line) for line in (folder / "search_trace.jsonl").read_text().splitlines()]
+        if persisted != trace["trace"]:
+            raise ValueError("Incremental trace differs from completed trace")
+        candidates = eligible_candidate_pool(trace, greedy)
+        selection = choose_round_paths(candidates, greedy["path_id"], scales=scales,
+                                       weights=tuple(profile["integer_weights"]),
+                                       initial_cap=budget["initial_paths_per_cell"])
+        cells[cell_id] = {"selection": selection, "trace_hash": record_hash(trace),
+                          "candidates": {p: candidates[p] for p in selection["path_ids"]},
+                          "circuit_id": greedy["circuit_id"], "family": greedy["family"],
+                          "topology_id": greedy["topology_id"], "split": "training"}
+    attempts = 4 * sum(len(cell["candidates"]) for cell in cells.values())
+    if len(cells) != budget["development_cells"] or attempts > budget["stages"]["initial"]:
+        raise ValueError("Initial membership or attempt budget mismatch")
+    manifest = {"study_id": study["study_id"], "stage": "initial", "binding_hash": record_hash(binding),
+                "profile_hash": record_hash(profile), "normalization_hash": record_hash(normalization),
+                "cells": cells, "expected_attempts": attempts, "warmup_blocks": [0],
+                "measurement_blocks": [1, 2, 3], "physical_admission": "not_performed"}
+    _write_new_json(directory / "initial_round.json", manifest)
+    return manifest
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("command", choices=("inspect",))
+    parser.add_argument("command", choices=("inspect", "initialize", "initial-search", "freeze-initial"))
     parser.add_argument("--study", type=Path, default=DEFAULT_STUDY)
+    parser.add_argument("--directory", type=Path)
+    parser.add_argument("--cell")
     args = parser.parse_args()
     study, workload, budget = load_study(args.study)
+    if args.command != "inspect":
+        if args.directory is None:
+            parser.error("--directory is required for preparation commands")
+        if args.command == "initialize":
+            result = initialize_preparation(args.directory, study, workload)
+        elif args.command == "initial-search":
+            if args.cell is None:
+                parser.error("--cell is required for initial-search")
+            result = initial_cell_search(args.directory, args.cell, study, workload)
+        else:
+            result = freeze_initial_round(args.directory, study, workload, budget)
+        print(json.dumps(result, indent=2, sort_keys=True))
+        return
     print(json.dumps({
         "study_id": study["study_id"],
         "workload_id": workload["workload_id"],

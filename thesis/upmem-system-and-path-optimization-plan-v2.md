@@ -319,7 +319,8 @@ For each implementation packet: one implementation, focused tests, checkpoint, i
 
 This section is the controlling implementation plan for the remaining phase. Treat P0-P5 as complete; do not reopen branch integration, tasklet/DPU allocation, DAG scheduling, quantization, kernel dispatch, fusion, slicing, residency, transport, or resource admission. The research contribution is a whole-plan cost function consulted during adaptive path generation, not only after conventional candidates have been generated.
 
-Read-only binding on 2026-09-09:
+Initial read-only binding on 2026-09-09 (historical preparation checkpoint;
+see 11.10 for the subsequent software checkpoint and remaining work):
 
 | Item | Bound value / disposition |
 |---|---|
@@ -415,7 +416,7 @@ Tie-break in this exact order: greatest round(J,12); greatest worst-cell log-spe
 
 Use a serial Optuna ask/tell TPE loop around cotengra, not custom local annealing, subtree objectives or HyperOptimizer random sampling. The installed cotengra annealing hook scores local FLOPs/sizes, whereas this objective requires the complete schedule. A fresh random-greedy object avoids an internal best-so-far FLOP filter.
 
-Checkpoint 1 pins cotengra==0.7.5 and proposes Optuna==4.5.0 in the research dependency environment, without changing the frozen executor environment. Optuna 4.5.0 supports the project's Python 3.10; installation and dependency-resolution qualification are later work. Pin the complete resolved research environment before traces. Do not silently use a newer release. [Optuna release](https://pypi.org/project/optuna/4.5.0/)
+Checkpoint 1 pins cotengra==0.7.5 and Optuna==4.5.0 in the research dependency environment, without changing the frozen executor environment. Installation and dependency-resolution checks are recorded in the software checkpoint in 11.10; bind the complete resolved research lock before experimental traces. Do not silently use a newer release. [Optuna release](https://pypi.org/project/optuna/4.5.0/)
 
 Each call makes exactly 128 proposals, counting duplicates and known-infeasible proposals. Use TPESampler with explicit seed, n_startup_trials=16, serial independent-parameter sampling and no pruning/distributed service. Ask for costmod in [0.1,4.0] linearly and temperature in [0.001,1.0] logarithmically.
 
@@ -515,6 +516,72 @@ Retain a compact private bundle: binding.json; normalization.json; per-call sear
 Report the new model's explicit relationship to SLR section 9.3: operationalized host traffic, host array work, coordination, local movement and arithmetic; constraints remain separate. Do not call coefficients exact architectural constants or the unique physical model. Do not claim literal cotengra annealing or global path optimality: this is UPMEM-cost-guided hyperparameter search over cotengra-generated complete paths.
 
 The decisive completion evidence is a trace showing full-plan cost feedback changes subsequent search proposals, followed by a frozen G/F/R/U evaluation through the unchanged executor. A favorable reranking result alone does not complete this milestone. No further optimization follows the declared evaluation; publish only after the complete evidence has two verified copies.
+
+### 11.10 Current checkpoint and ordered continuation
+
+The committed software checkpoint is
+939a0161c22aa2fb6f315b1c2a9116654a32fe1e on
+feature/upmem-final-system-path-search-v2. Its recorded qualification is
+2,023 passing tests without skips, Ruff and diff checks, with the detailed
+record in implementation/docs/upmem_cost_guided_path_v1.md. It includes the
+launch-aware observer/score, isolated pinned research environment, study
+configuration and adaptive search primitives. This is software evidence, not
+physical calibration or completion of the campaign controller.
+
+At this planning update, fitting, deterministic batch selection and explicit
+path-replay changes are present as uncommitted work in the active worktree.
+Preserve and review those edits; do not treat the dirty checkout as an accepted
+execution source or restart the implementation from scratch. No new physical
+observations or fitted profile are established by this status update.
+
+Resume in this dependency order:
+
+1. **Close the software controller.** Review the existing fitting and batch
+   changes against 11.4 and 11.6. Finish only the missing campaign commands and
+   guards in the small private CLI. Retain per-proposal traces, complete round
+   membership, hashes, budgets and explicit accepted/failed state. Use synthetic
+   observations and the existing runner interface for fail-fast, resume,
+   two-copy acceptance and evaluation-leakage tests.
+   The read-only fitter review identified two guards to close before acceptance:
+   enforce the declared float32 policy and valid source identities even when
+   supplied identity dictionaries agree, and reject failed execution/startup
+   admission facts. Add focused regression cases; matching metadata alone does
+   not prove a valid physical observation.
+2. **Bind exact selected-path replay.** The historical planner entry regenerates
+   paths through its optimizer configuration; that is not an identity guarantee
+   for a new RandomGreedy proposal. Use the smallest explicit complete-path
+   input through planning.py, experiment.py and cli.py. Validate integer pairs,
+   completeness, tensor-network identity and resulting DAG identity before
+   executor allocation. Never substitute a regenerated HyperOptimizer path.
+   Reuse production lowering and execution unchanged; this adapter is a path
+   input, not a new planner, schedule or physical runner. Record preparation
+   source separately from frozen execution source and binary identities.
+3. **Qualify and freeze preparation.** Run focused mathematics, replay,
+   fresh-process search and fake-campaign tests, then the full pinned suite,
+   Ruff, diff checks and exact-head CI. Qualify representative selected paths
+   with CPU reference and strict SDK correctness using the existing runner.
+   Freeze development-only greedy scales, research/source bindings and the
+   complete initial candidate manifest before physical admission. Stop on a
+   genuine correctness or binding defect; never assume the physical gate passes.
+4. **Collect and fit the bounded development rounds.** Admit hardware through
+   the existing lock/preflight. Initial collection has at most 192 attempts;
+   each of two feedback rounds has at most 144. Accept and durably archive each
+   whole declared round before fitting or advancing. No hardware per tuple,
+   retries, replacement observations or additional searches to fill duplicates.
+5. **Freeze and evaluate.** Freeze the final integer coefficients and every
+   pretest identity, then generate and freeze all final G/F/R/U selections.
+   Execute at most 288 evaluation attempts without subsequent adaptation.
+   Report U versus R explicitly, alongside G/F, session-inclusive and steady
+   timings, search cost, numerical validity and regressions.
+6. **Close once.** Verify exact evidence sets and two independent copies,
+   publish the profiles/traces/raw results and bounded interpretation, then
+   stop. Do not reopen execution-system optimization because a family is
+   neutral or U does not outperform R.
+
+One implementer owns the bounded code task, an independent reviewer checks the
+mathematics, replay identity and leakage/failure gates, and the lead is the only
+hardware controller. An updated plan is not itself permission to launch a
+campaign before these gates.
 
 ## 12. Thesis ablations and reporting
 

@@ -10,8 +10,9 @@ import time
 import opt_einsum as oe
 
 from quantum_bench.model import TensorNetwork
+from quantum_bench.evidence import tensor_network_structure_id as network_structure_id
 
-__all__ = ["plan_opt_einsum", "plan_cotengra"]
+__all__ = ["plan_opt_einsum", "plan_cotengra", "plan_frozen_path", "normalize_frozen_path"]
 
 _PROVENANCE_KEYS = (
     "planner_engine",
@@ -176,6 +177,57 @@ def plan_cotengra(
         dependency_versions={"cotengra": cotengra_version},
     )
     return normalized_path, provenance
+
+
+def normalize_frozen_path(path: object) -> list[list[int]]:
+    """Validate JSON list pairs without coercion and canonicalize pair order."""
+    if not isinstance(path, list):
+        raise ValueError("frozen path must be a JSON list of pairs")
+    normalized = []
+    for pair in path:
+        if not isinstance(pair, list) or len(pair) != 2:
+            raise ValueError("frozen path steps must be JSON list pairs")
+        if any(type(index) is not int or index < 0 for index in pair):
+            raise ValueError("frozen path indices must be nonnegative integers, without coercion")
+        normalized.append(sorted(pair))
+    _validate_pairwise_path(normalized, len(normalized) + 1)
+    return normalized
+
+
+def plan_frozen_path(
+    network: TensorNetwork,
+    path: object,
+    *,
+    tensor_network_structure_id: str,
+    logical_plan_id: str,
+) -> tuple[tuple[tuple[int, int], ...], dict[str, object]]:
+    """Replay a network-bound complete path; the coordinator checks its DAG ID."""
+    started = time.perf_counter()
+    tensor_count = _network_preflight(network)
+    for name, value in (("tensor_network_structure_id", tensor_network_structure_id),
+                        ("logical_plan_id", logical_plan_id)):
+        if not isinstance(value, str) or len(value) != 64 or any(
+            character not in "0123456789abcdef" for character in value
+        ):
+            raise ValueError(f"{name} must be a lowercase SHA-256 digest")
+    normalized = normalize_frozen_path(path)
+    _size_dict(network)
+    complete = _validate_pairwise_path(normalized, tensor_count)
+    if network_structure_id(network) != tensor_network_structure_id:
+        raise ValueError("frozen path tensor_network_structure_id mismatch")
+    config = {
+        "engine": "frozen_path", "mode": "replay", "path": normalized,
+        "tensor_network_structure_id": tensor_network_structure_id,
+        "logical_plan_id": logical_plan_id,
+    }
+    return complete, _provenance(
+        planner_engine="frozen_path", planner_id="frozen_path.replay",
+        planner_kind="frozen_contraction_path", optimize_mode="replay",
+        objective="frozen_path_replay", cost_basis="frozen_path_identity",
+        config=config, path_info_text="validated complete frozen path; no path search",
+        largest_intermediate=None, naive_flops=None, optimized_flops=None,
+        planning_time_s=time.perf_counter() - started, dependency_versions={},
+    )
 
 
 def _provenance(
