@@ -17,6 +17,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+path-search = ["cotengra==0.7.5", "optuna==4.5.0"]
 test = ["pytest", "ruff==0.15.21"]
 dev = ["pytest", "ruff==0.15.21", "cmake>=3.21,<4", "build>=1.2,<2"]
 

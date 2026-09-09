@@ -1,6 +1,8 @@
 # UPMEM thesis: kernel and hierarchical-parallel execution research plan
 
-**Revision:** proposed v2, 5 September 2026.  
+> **Active phase, 9 September 2026:** the execution-system freeze is accepted and complete. Sections 1-10 retain historical system-development context; they are not a new execution queue. The replacement Section 11 controls the remaining cost-guided path study and supersedes earlier fixed-pool, score, normalization, fitting and budget instructions. This amendment is planning only.
+
+**Revision:** v2 final-phase cost-guided amendment, 9 September 2026.
 **Purpose:** replacement roadmap for the stalled execution-system/path-optimization goal.  
 **Project:** deterministic, full pre-measurement statevector simulation through exact, untruncated tensor-network contraction on physical UPMEM.  
 **Execution status:** planning only. This document does not merge branches, modify the remote repository, or authorize an unbounded physical campaign.
@@ -311,69 +313,208 @@ Four attempts mean one warmup and three measurements; six mean one warmup and fi
 
 For each implementation packet: one implementation, focused tests, checkpoint, independent audit, physical A/B, and at most one evidence-justified repair or optimization cycle. A correctness defect may require repair for qualification, but it does not reopen an unlimited performance search.
 
-## 11. Schedule-aware path optimization
+## 11. UPMEM cost-guided path optimization: final-phase contract
 
-### 11.1 Update the cost representation
+### 11.1 Scope, verified starting point, and supersession
 
-The six SLR-motivated features remain useful explanatory totals, but a DAG-parallel executor cannot be modeled adequately by summing independent kernel durations without representing overlap and waiting. Under the first synchronous-wave design, a proposed surrogate is
+This section is the controlling implementation plan for the remaining phase. Treat P0-P5 as complete; do not reopen branch integration, tasklet/DPU allocation, DAG scheduling, quantization, kernel dispatch, fusion, slicing, residency, transport, or resource admission. The research contribution is a whole-plan cost function consulted during adaptive path generation, not only after conventional candidates have been generated.
 
-\[
-\widehat T(p,q,r)=\sum_{w\in\mathcal W(p,q,r)}\left[
-\widehat H_w+
-\max_{d\in D_w}\left(\sum_{u\in U_{w,d}}\widehat K_u\right)+
-\widehat G_w\right],
-\]
+Read-only binding on 2026-09-09:
 
-where `H` includes wave preparation/input transfer, `K` the assigned DPU work, and `G` gathering/reconstruction/reduction. This is a model proposal, not a calibrated runtime law. Later real overlap or multi-launch subwaves require the model to reflect the actual schedule.
+| Item | Bound value / disposition |
+|---|---|
+| Active implementation worktree | /home/tom/repos/Masters/.agent-work-final-system-path-search-v2 |
+| Branch and preparation source | feature/upmem-final-system-path-search-v2; 29ebaa2d1b20a1f6469435efe7309f89e161f263 |
+| Accepted execution source | 459935f586fdd16c82013838e6d27a12604c3093 |
+| Execution tag | thesis-upmem-kernel-schedule-system-v1, locally verified to peel to the execution source |
+| Frozen execution | packed_wave_v1; static_dag_waves_v1; fuse_complex=true; panel_only_v1; host-roundtrip reconstruction; one rank |
+| Primary policy and resources | split_complex_float32_v1; 1 DPU/T8 and 4 DPUs/T8 |
+| Workload source | implementation/configs/upmem_family_aligned_workload_v1.json |
+| Workload raw SHA-256 | f2c85f27508d9b9fb5f55d13b89334939aa424330e27555dfafe3216452382d7 |
+| Split | Six development/training instances and six test instances; all six families in each split |
+| Existing preparation qualification | 1,973 tests and Ruff passed; exact-head CI run 34340679355 succeeded, as recorded before this planning amendment |
+| Installed search library | cotengra 0.7.5, Python backend available; Optuna not installed |
+| Historical material | Old 92-attempt development evidence and interrupted 64-trial FLOP-pool generation remain separate; neither supplies this study's fit |
 
-Extract actual or explicitly estimated movement, instruction/work, coordination and representation overhead from the chosen physical plan. Record live memory, padding and idle/wait time. Compare a grouped movement/compute/coordination model with the six-term version, but neither is excused from representing the scheduler. Use the simpler one when decisions and held-out behavior are materially equivalent.
+Preserve all twelve QASM bytes, hashes, canonical problem IDs, parameters and split assignments. The six families are BB84, BV, EDC, HS, QRNG and XOR, using our declared family-aligned instances, not claims of reproducing unavailable PIMutation code. EDC has one logical qubit, encoded data wires and separate syndrome ancillas. Preserve full pre-measurement statevector outputs including ancillas.
 
-Normalize feature scales from training data before interpreting nonnegative simplex weights. Correlated features do not yield uniquely identifiable physical constants. Keep fitted ranking coefficients distinct from measured hardware penalties.
+The old family-aligned study configuration specifies fixed-pool reranking, a six-term score, per-cell log normalization, one adaptive round and an older comparison layout. It is historical preregistration, not the controller for this amendment. At checkpoint 1 create a new private study configuration, upmem_cost_guided_path_study_v1, bound to the unchanged workload and executor. Do not rewrite old observations or silently reuse their model/profile identities. The interrupted old generator must not resume automatically.
 
-### 11.2 Freeze first, then learn paths
+Planning provenance: this amendment was initially prepared without implementation, installation, searches or experiments. The subsequently approved goal authorizes implementation; the software, freeze and evidence gates below still control execution.
 
-The final executor includes its deterministic kernel, resource-allocation and scheduling rules. Changes in path can expose different kernels or frontiers without changing these rules. That is precisely why calibration should happen after the system freeze.
+### 11.2 One production-plan boundary and five facts
 
-Keep optimized float32 as the primary equal-quality study. Int8 is a separate profile with independently calibrated cost data and declared accuracy eligibility or a runtime/error frontier. The handoff's reported Stress18 error prevents presuming int8 is equally accurate everywhere. [S1] No post-hoc tolerance or normalization is used to rescue a speed winner.
-
-### 11.3 Bounded adaptive search
-
-Use cotengra to generate or alter paths through its documented search/reconfiguration/annealing facilities. Qualify the installed version rather than assuming current online APIs match it. [S8] Lower candidates through the frozen scheduler, deduplicate physical choices, and run only a small batch of informative/promising candidates on ETH.
-
-Separate offline exploration of cost weights from physical measurements of selected executable plans. Many weights choose the same plan; do not invoke UPMEM for every weight vector. Pin proposal seeds, temperature/acceptance schedule when using actual annealing, candidate count, three adaptive rounds at most, hardware attempts, and elapsed-time cap.
-
-No path fit may start until the final workload manifest covers all six PIMutation Table 2 families: BB84, BV, EDC, HiddenSubgroup/HS, QRNG and XOR. The generator kind, family name, parameters, source identity and exact operation identity must be declared for every instance. The current six-instance P6 record and its 92-attempt development packet are development-only; its existing split labels do not define the final benchmark split or final model-training pool. Its archived configuration and evidence remain unchanged and must not be silently retargeted.
-
-**User-resolved scope:** use these six algorithm families, not the exact circuit instances used by the PIMutation authors. Their implementation is unavailable. Correct, explicitly specified family-aligned circuits are the target; reproducing paper gate counts or recovering the authors' artifact is not a gate. Declare algorithm parameters, pre-measurement query boundaries, mathematical/reference validation and any source adaptation. Do not relabel dummy shape circuits as algorithm implementations. Training and final testing both cover all six families using distinct declared instances. Additional families remain deferred. Freeze the complete corrected workload before candidate calibration and weight fitting; the earlier shape-only definition packet must be superseded explicitly, not silently repurposed.
-
-The former 540-attempt float32 allocation (144 initial training, 216 adaptive training, 72 development confirmation, 36 validation and 72 test) is a historical template, not a final budget for the reconciled workload. The `upmem_pimutation_full6_*_v1` identifiers belong to the superseded shape-only packet and must not be reused. Before calibration timing, create and hash a new packet under reserved identifiers `upmem_family_aligned_workload_v1`, `upmem_family_aligned_candidates_v1`, `upmem_family_aligned_path_study_v1` and `upmem_family_aligned_budget_v1`. That packet must state the exact instances, split assignments, attempt rows, warmups, adaptive-round limit, no-refill rule, failed-attempt accounting, memory policy and elapsed-time cap. This amendment assigns no final split or numeric final budget.
-
-The gating order is: define and review the six-family workload; generate the fixed candidate pools with the declared strategy; freeze the physical selections; qualify source, plan, memory and execution identities; calibrate; fit; freeze the pretest profile; then test. Candidate generation is permitted at its declared pre-calibration stage. After the fixed pool and physical selections are frozen, timing cannot generate candidates or refill deduplicated slots.
-
-The current P6 freeze record is therefore superseded for the final benchmark role, while its source, hashes and development evidence remain historical records. A new final packet is required; no old candidate set, profile or budget is imported by relabeling.
-
-Use paired same-round controls and the objective
+Define the reusable function
 
 \[
-J=\exp\!\left(\sum_j\pi_j\,\log S_j\right),\qquad
-\sum_j\pi_j=1,
+(c,p,e,\theta)\longmapsto C_\theta(\operatorname{Lower}_e(c,p)).
 \]
 
-where `S_j` is the preregistered repeated-block speedup and `pi_j` fixes circuit/family weighting. Track worst-cell regression, numerical eligibility, physical selected-path rank, regret, measured-pool headroom and search cost. Do not optimize the fastest individual observation or stop when a pleasing result appears.
+The fixed executor chooses kernels, assignments and schedule through its existing rules. The scorer observes those choices; it must not invent a different schedule or choose CPU arithmetic. P means host array-pass traffic, never the historical P_wram feature; M means local transfer traffic, never the MRAM storage-span field.
 
-Use session-inclusive execution as the primary one-simulation execution comparison, with its boundary stated exactly. Also report steady execution and full job time including construction/path selection/preparation where an end-to-end claim is made. Validation, reference calculation, hashing and reports remain outside the timed execution. Comparing against greedy establishes a gain over greedy; claims about optimizer superiority require an equal-budget target-neutral search comparator.
+Reuse build_contraction_dag, plan_upmem and extract_execution_features. The last function already derives emitted control waves from build_cohort_controls and reports slot-level work, movement and launch facts. Verify that each scored launch corresponds to one native physical launch. Do not substitute a logical ready frontier for its emitted launch sequence.
 
-### 11.4 Holdout discipline
+| Fact | Exact scope |
+|---|---|
+| H | Total planned H2D plus D2H bytes, including operands, outputs, replication, alignment/padding and control/completion transfers |
+| P | Bytes read plus bytes written by explicitly modeled host array passes in preparation and reconstruction; a data-volume proxy, not measured CPU time or peak memory |
+| N | Native request-envelope count plus physical launch count; no extra barrier, DAG bonus or critical-path penalty |
+| M[l,d] | Source-derived estimate of MRAM-WRAM transfer bytes assigned to DPU d in physical launch l |
+| W[l,d] | Real MAC pairs assigned to that DPU in that physical launch |
 
-All kernel, scheduling, residency, slicing and path decisions consume development data. Repeatedly inspected validation is development, not a final holdout. A test is family-held-out only when the family has not influenced any of these stages; size-held-out is a different claim.
+For P, freeze a small pass inventory tied to actual runtime function locations: operand materialization/packing and real/imaginary conversion, payload copies that actually occur, output decoding/assembly, complex reconstruction and required host reductions. Count each modeled read/write once at its actual dtype and extent. Zero-copy views count zero movement. Explicitly list excluded hashing, filesystem and allocator work; do not label P a complete host-cost measurement. Do not substitute the current retained-memory estimate for cumulative host-pass traffic. Binding this inventory is a checkpoint-2 gate, not permission for another profiling/optimization campaign.
 
-The final workload must retain all six PIMutation families even when a family has low measured headroom or an instance is infeasible. Such outcomes are recorded with their admission, utilization and infeasibility facts; they are not omitted, replaced after timing, or used to manufacture a more favorable family mix. The historical 42-case grid of six families at 8, 10, 12, 14, 16, 18 and 20 qubits is continuity evidence from the archived benchmark matrix, not a current campaign freeze and not proof of exact paper instances.
+Fused complex still performs four real products. Use actual tile extents and kernel behavior. Never divide already assigned W or M by DPU/tasklet counts. Record idle-slot facts and fixed transfer/launch overhead even when arithmetic work is zero.
 
-Training and test use the same six families but must use different canonical instance identities: `(generator kind, generator name, canonical parameters, operation identity)`. This is instance-held-out evidence, not a disjoint-family split; changing size alone does not establish a family-held-out claim. Before calibration timing, freeze the workload, candidate/config/source/split/budget, fixed candidate pools, physical selections and execution contract. Calibration then supplies training evidence; the fitted profile is created after training and model comparison and is frozen before any final test timing, so its hash is not a circular pre-calibration requirement. Any final test candidate requires a bounded exposure audit over available local and remote metadata; unknown or unavailable evidence is reported as unknown. Correctness-observed is not optimization-unseen.
+Extract facts without SDK calls, contraction execution, or allocating intermediate/statevector-sized dummy arrays. Shape/stride metadata and existing small input tensors are sufficient. If a helper currently materializes an intermediate merely for planning, provide the smallest metadata-only adaptation, not a second planner. Preserve production feasibility checks for live storage, WRAM, MRAM, alignment, accumulators and ownership. Numerical correctness is a separate predicate, never an error penalty in the score.
 
-The frozen executor memory gate remains the declared 512 MiB host admission budget with zero reserve, not an RSS bound. Plan identity, native allocation, active-DPU/rank coverage, startup, execution, replay and accuracy gates remain hard. A workload that exceeds the declared memory or another hard gate is an explicit infeasible benchmark record, not a reason to drop the family. The PIMutation reconciliation and this holdout rule do not authorize physical execution, fitting or testing outside the gating order; fixed-pool candidate generation remains permitted only after workload review and before physical-selection freeze.
+### 11.3 Freeze global normalization and the launch-aware score
 
-GHZ14/XOR18 from the old proposal remain untouched only after an exposure audit, but they are not a substitute for the final six-family workload. If either has already influenced development, choose and freeze a distinct instance before its timings are observed. If both numerical profiles share tests, freeze both before observing either profile's test performance. No weights, kernels, dispatch, schedules, candidates or acceptance criteria change after the final test. A neutral result completes the study.
+For each development cell j, obtain greedy facts with the frozen lowering:
+
+\[
+X(g_j)=(H,P,N,\sum_{l,d}M[l,d],\sum_{l,d}W[l,d]),\qquad
+s_k=\max(1,\operatorname{median}_{j\in D}X_k(g_j)).
+\]
+
+Freeze these five scales before any calibration timing. Test instances do not contribute. Do not renormalize by candidate, cell, round or newly observed timings.
+
+Use exactly
+
+\[
+C_\theta=
+\theta_H H/s_H+\theta_P P/s_P+\theta_N N/s_N+
+\sum_l\max_{d\in D_l}
+\left(\theta_M M[l,d]/s_M+\theta_W W[l,d]/s_W\right).
+\]
+
+Movement and computation are combined for each DPU BEFORE taking the maximum. The old sum of independent maxima and old per-cell log-ratio score are not this model and their weights must not migrate. Record the new private model identity upmem_launch_cost_v1 and extractor/source hashes.
+
+This is a dimensionless ranking score, not a calibrated prediction in seconds. Report feature correlations and constant features, but retain the prescribed five-dimensional model and grid; do not introduce nonlinear terms, a six-vs-three model-selection branch, additional penalties, or an int8 fit. Int8 may later use the same software only with its own profile, calibration and separately authorized budget.
+
+### 11.4 Deterministic coefficient fitting
+
+Enumerate every nonnegative integer tuple k=(kH,kP,kN,kM,kW) with sum(k)=10, exactly C(14,4)=1001 tuples; theta=k/10. Initial theta is (0.2,0.2,0.2,0.2,0.2). Store integers as the authoritative representation.
+
+The primary timing T is session_open_s + steady_execution_v1 total_wall_s + session_close_s. Keep steady execution as a secondary view; do not change this choice after timing. Runtime work performed inside those boundaries remains included; external reference validation/reporting is excluded.
+
+Reject evaluation-role observations from fitting. For each measured, numerically eligible development candidate p in cell j, pair its non-warmup timing with greedy from the SAME cell, round and block:
+
+\[
+\ell_{jp}=\operatorname{median}_{(r,b)\in O_{jp}}
+\log(T_{j,g,r,b}/T_{j,p,r,b}).
+\]
+
+Missing or duplicate controls, nonpositive timings, source/policy mismatches and incomplete accepted rounds fail validation. Never pair unrelated medians or impute observations. Deduplicated greedy rows have log-speedup zero.
+
+For every grid tuple select among measured eligible paths only, minimizing (cost, path_id). Maximize J=sum_j a_j*ell[j,selected], with a_j=1/(F*n_family(j)). Freeze the complete development membership; no silent reweighting after dropping an inconvenient cell. Report ineligible cells explicitly and stop/declare an incomplete campaign when required controls cannot be admitted.
+
+Tie-break in this exact order: greatest round(J,12); greatest worst-cell log-speedup; least sum_i(k_i-2)^2; lexicographically smallest integer tuple. Fixed sorted cell/path order and float64 arithmetic make reductions reproducible. No Monte Carlo coefficient search, optimizer registry or hardware per tuple. exp(J) is the family-balanced geometric training score, not unbiased generalization.
+
+### 11.5 One adaptive search route
+
+Use a serial Optuna ask/tell TPE loop around cotengra, not custom local annealing, subtree objectives or HyperOptimizer random sampling. The installed cotengra annealing hook scores local FLOPs/sizes, whereas this objective requires the complete schedule. A fresh random-greedy object avoids an internal best-so-far FLOP filter.
+
+Checkpoint 1 pins cotengra==0.7.5 and proposes Optuna==4.5.0 in the research dependency environment, without changing the frozen executor environment. Optuna 4.5.0 supports the project's Python 3.10; installation and dependency-resolution qualification are later work. Pin the complete resolved research environment before traces. Do not silently use a newer release. [Optuna release](https://pypi.org/project/optuna/4.5.0/)
+
+Each call makes exactly 128 proposals, counting duplicates and known-infeasible proposals. Use TPESampler with explicit seed, n_startup_trials=16, serial independent-parameter sampling and no pruning/distributed service. Ask for costmod in [0.1,4.0] linearly and temperature in [0.001,1.0] logarithmically.
+
+For EACH ask: construct a fresh RandomGreedyOptimizer(max_repeats=1, costmod=float(...), temperature=float(...), seed=proposal_seed, accel=False, parallel=False, simplify=True); call search exactly once; convert its complete tree path with the existing canonical adapter; lower/admit; evaluate the selected objective; tell before the next ask. No extra annealing, reconfiguration, slicing, inner repetitions or reuse of optimizer best-path state.
+
+Use master_seed=20260909. Derive sampler and proposal seeds from SHA-256 of sorted compact UTF-8 JSON containing a seed-domain label, master seed, workload/cell identity, stage/round and proposal ordinal where applicable; take the first four digest bytes as an unsigned big-endian integer. Pair F and U by the same sampler seed and ordinal proposal-seed schedule so differing scores, not differing seeds, can alter later parameters. Model/profile hashes belong in trace identity, not in the paired seed. The first startup proposals may coincide; later proposal dependence must be demonstrated.
+
+Known deterministic infeasibility consumes its proposal and is reported to the minimizer as positive infinity, with a JSON-safe rejected status/reason and null finite score. Duplicates consume proposals, receive the correct score and remain in the trace. Unexpected exceptions, nonfinite eligible scores, or wall-time interruption abort the trace; do not turn bugs/timeouts into conveniently excluded paths or resample until 128 successful paths exist. Qualify pinned Optuna's rejected-trial behavior before use. An interrupted trace is not a completed search.
+
+Record proposal number, parameters, seeds, path/plan IDs, feasibility, raw facts, score, objective/profile identity and tell order. Two fresh-process runs must match parameters, paths, decisions and scores exactly, excluding timestamps. Persist every attempted proposal. Optuna's ask/tell interface provides the required feedback order; sequential execution and a deterministic objective remain necessary. [Ask/tell](https://optuna.readthedocs.io/en/v4.5.0/tutorial/20_recipes/009_ask_and_tell.html), [reproducibility guidance](https://optuna.readthedocs.io/en/v4.5.0/faq.html)
+
+Avoid a cache framework. A bounded per-search map may memoize deterministic facts by circuit/path/executor/extractor/numeric identity and scores by those keys plus model/scales/weights. No cross-profile/global mutable cache. Changed identity must force recomputation. A duplicate must still be told to TPE and counted.
+
+### 11.6 Physical feedback and the four evaluation methods
+
+All search calls use the same 128-proposal engine. FLOP-guided calls tell the conventional complete-tree FLOP cost; UPMEM-guided calls tell C_theta. Apply the same deterministic feasibility and proposal rules to both.
+
+Round 0, development only: run a FLOP-guided trace per cell; include G, its FLOP-best path F and the uniform-score reranked path R. Deduplicate, then fill only up to the effective initial-path cap in 11.7 by farthest-first L1 distance on z=X/s. At each step maximize minimum distance to the selected set, tie by path_id. Do not use timing for membership. Qualify selected paths, freeze the round manifest, collect one warmup and three randomized complete measured blocks. Archive and accept the entire round before fitting theta1.
+
+Rounds 1 and 2: use the current frozen theta to guide a NEW 128-proposal trace per development cell. From eligible previously unmeasured paths choose the lowest-cost path, then one diverse path using the same distance rule relative to the chosen path and G. Add a fresh G control, deduplicate to at most three paths. If there is no new eligible path, skip that cell without another search. Collect 1+3 blocks, archive/accept the complete declared round, append observations, enumerate the grid and freeze the next theta. Stop adaptation after round 2, including rounds with no new choices.
+
+Before evaluation, freeze theta, scales, source/binaries, extractor, search settings/seeds, timing and accuracy policy, and all evaluation membership. Generate and freeze ALL evaluation traces and method selections before any evaluation timing:
+
+| Method | Definition |
+|---|---|
+| G | Existing deterministic greedy control |
+| F | Lowest-FLOP eligible path from its 128-proposal FLOP-guided trace plus G |
+| R | Lowest-C_theta eligible path from EXACTLY F's recorded trace plus G |
+| U | Lowest-C_theta eligible path from a separate 128-proposal UPMEM-guided trace plus G |
+
+U must not receive F's trace as extra candidates. Physical method coincidences are measured once per cell/block, retaining every method label. Evaluation uses one warmup and five randomized complete blocks, including G in each block. After any evaluation timing, no changes to features, scales, weights, search settings, candidates or model selection are permitted.
+
+Compare U versus R to isolate feedback-guided generation beyond reranking, and U versus F/G for conventional controls. Report method identities, coincident paths, per-cell medians/MADs/paired intervals, session-inclusive and steady execution, kernel/H2D/D2H/host costs, planning/search time, geometric summaries, worst cells and regressions. Equal proposal counts are not equal search wall time. Include complete job time before claiming end-to-end acceleration; report planning break-even only for positive savings. This is instance/size transfer within six represented families, not family-held-out generalization.
+
+### 11.7 Mechanically bounded execution
+
+Read development/evaluation cells from the unchanged manifest, including topology. For this packet nD=nE=12. The new contract's unconstrained ceiling is 48*nD+24*nE=864 attempts, but the already declared 792-attempt cap takes precedence.
+
+Keep two feedback rounds and all four final methods. Derive a uniform initial-path cap before any timing:
+
+\[
+m_0=\min\left(6,\left\lfloor
+\frac{B-24n_D-24n_E}{4n_D}
+\right\rfloor\right).
+\]
+
+Here B=792 yields m0=4. A cap below the mandatory distinct initial roles is a preflight budget failure, not permission to omit roles/families. The effective maximum is:
+
+| Stage | Maximum attempts |
+|---|---:|
+| Initial: 12 cells * 4 paths * (1+3) | 192 |
+| Feedback 1: 12 * 3 * (1+3) | 144 |
+| Feedback 2: 12 * 3 * (1+3) | 144 |
+| Final G/F/R/U: 12 * 4 * (1+5) | 288 |
+| Total | 768 |
+
+The remaining 24 attempts are unallocated, not a retry/refill reserve. Actual counts come from frozen deduplicated route sets; failed attempts count. No former training-confirmation stage or separate validation campaign is added. Old 92 observations and abandoned preparation have separate ledgers and never enter this fit.
+
+Keep the current 86,400-second cumulative physical-stage ceiling and 120-second per-attempt runner timeout. Preserve the existing 300-second parent guard for each proposal and 60-second lowering guard, with a 7,200-second whole-search ceiling. Pass only supported parameters to RandomGreedyOptimizer: it has no max_time argument in 0.7.5. Hitting a wall-time guard aborts/incompletes the trace rather than changing membership. No unbounded retry, automatic budget increase or additional feedback round.
+
+Use the existing private flock, one physical controller on safari-baguette1, known-good admitted rank, CPU affinity/governor/SDK records, exact binaries/configs and writable evidence storage. Availability is not reservation. Stop on the first failed/unsupported/fallback execution; retrieve the complete partial stage, release owned resources and diagnose without splicing replacements.
+
+A stage is accepted only after remote sorted relative SHA256SUMS, durable local retrieval, checksum and canonical verification, exact sample/session/route/block identities, portable archive plus outer hash, and two independently verified copies. Do not delete volatile data first. Do not re-execute an accepted round. Persistent state binds study/round hashes and records frozen, running, accepted or failed using the existing controller conventions; no workflow framework or new public evidence schema.
+
+### 11.8 Five implementation checkpoints and file ownership
+
+One bounded implementer, one independent read-only reviewer, and the lead as sole physical controller suffice. No recursive delegation. Reviews target mathematical correctness, dependency/ownership safety, feedback validity and evidence leakage, not generic refactors.
+
+| Checkpoint | Implementation boundary | Acceptance and stop condition |
+|---|---|---|
+| 1. Bind | Existing family manifest/QASM; new private study config; implementation/pyproject.toml research pins; private freeze record | Exact sources/binaries/workload/scales-input membership and effective 768 budget bound; library signatures/smoke tests qualified; old fixed-pool study explicitly superseded. Stop on any mismatch. |
+| 2. Score | execution_features.py metadata facts and path_heuristic.py pure scale/score functions | Host-pass inventory, physical-launch mapping, joint maximum, four-product counts and metadata-only lowering tests pass. No executor behavior changes. |
+| 3. Search | A small private search adapter/CLI, preferably scripts/upmem_cost_guided_path.py, reusing existing canonical path and plan helpers | Fresh single-candidate cotengra, ask/evaluate/tell order, no hidden execution, two-process full-trace reproducibility and objective-responsive proposals pass. |
+| 4. Control | Pure grid/batch functions and thin campaign commands; reuse qualify_upmem_path_candidates.py and existing collection/evidence helpers | All 1001 tuples and tie-breaks verified; fake-runner counts, failure, dedup, accepted-round idempotency and leakage/freeze tests pass. No real hardware yet. |
+| 5. Execute and close | Existing CPU/SDK/physical runner, extraction, archive and report path | Full suite/Ruff/diff/CI; small strict SDK candidate check; bounded rounds durably accepted; frozen evaluation; final report/profile/raw evidence retained. Negative performance completes the study. |
+
+These are four responsibilities (facts/score, search, fitting/batches, campaign CLI), not four class hierarchies. Extend existing pure helpers where appropriate. The historical score/extractor identities remain interpretable for old artifacts; do not silently change their mathematics. Do not add compatibility readers, registries, plugins, generic scheduling/cache systems, or another physical runner.
+
+Required tests:
+- Compute-only work (4,4): one two-DPU launch scores 4; two serial launches score 8.
+- Joint maximum: slots (M,W)=(10,0),(0,10), half weights, unit scales score 5, not 10.
+- Generic four launches versus fused one: identical total real MAC count; only applicable launches/movement/packing differ.
+- Extracted kernels, slots, products, extents, resource facts and launches equal production-lowered controls.
+- Spy/fail SDK/contraction calls and large allocation attempts during scoring/search; metadata-only preparation remains valid.
+- Exactly 1001 integer tuples; synthetic paired timing tables exercise every tie-break, missing controls, warmup exclusion and family weighting.
+- Fake ask/tell verifies tell precedes next ask; a nonconstant toy objective changes post-startup proposal traces when scores change.
+- Fresh-process deterministic 128-entry traces; no hidden inner repeats, automatic backend or score-smudge/compression.
+- Duplicate and known-infeasible proposals count once each; unexpected errors abort; cache identities cover all semantic inputs.
+- Fake physical runner enforces frozen exact counts, role deduplication, first-failure stop, two-copy acceptance and no accepted-round rerun.
+- Fitting rejects evaluation data and missing development controls; pretest freeze forbids further adaptation.
+- Existing complete-path/CPU numerical checks plus representative strict SDK paths; never assert a required speedup.
+
+### 11.9 Artifacts, closure, and claims
+
+Retain a compact private bundle: binding.json; normalization.json; per-call search_trace.jsonl and path/fact tables; round manifests; raw sample/session evidence and runtime tables; 1001-row fit tables and integer profiles; final_freeze.json; evaluation method mappings/results; report.md; relative SHA256SUMS and outer archive digests. Each binds source, executor/binaries, workload/QASM, path/plan, model/extractor/scales/profile, seeds, split, timing/numeric policy and environment as applicable.
+
+Report the new model's explicit relationship to SLR section 9.3: operationalized host traffic, host array work, coordination, local movement and arithmetic; constraints remain separate. Do not call coefficients exact architectural constants or the unique physical model. Do not claim literal cotengra annealing or global path optimality: this is UPMEM-cost-guided hyperparameter search over cotengra-generated complete paths.
+
+The decisive completion evidence is a trace showing full-plan cost feedback changes subsequent search proposals, followed by a frozen G/F/R/U evaluation through the unchanged executor. A favorable reranking result alone does not complete this milestone. No further optimization follows the declared evaluation; publish only after the complete evidence has two verified copies.
 
 ## 12. Thesis ablations and reporting
 
@@ -409,11 +550,11 @@ A completed stage is accepted only after sorted relative checksums, complete imm
 
 Use deep research only for unresolved consequential choices: source/toolchain capability, numerical equivalence, scheduling legality, memory/communication behavior, or a library-reuse decision. Routine coding, naming, and style do not need another literature review. Escalation produces a short supported decision, not new speculative research documents or broad scope changes.
 
-## 14. Replacement goal text
+## 14. Remaining goal text
 
-> **Objective:** Complete the UPMEM execution-system development milestone before final contraction-path optimization. Reconcile the actual repository and reuse already integrated/qualified work. Implement and independently audit minimal kernel dispatch, one-launch four-product complex execution and a census-selected geometry specialization, plus genuine static dependency-ready DAG-wave execution across disjoint DPU groups. Preserve existing tasklet/tile parallelism, exact untruncated full-statevector semantics, packed transport, numerical policies and provenance. Evaluate resident subgraphs and exact slice concurrency through the bounded probe in this plan; retain only supported, qualified improvements. Do not add CPU/GPU contraction placement or a generic scheduling framework.
+> Complete only the cost-guided path-optimization phase against the accepted frozen UPMEM executor. Preserve the twelve family-aligned circuit instances, complete statevector query, numerical/resource contracts and existing evidence runner. Implement one metadata-only five-term launch-aware cost with fixed development-greedy scales, one serial Optuna TPE ask/tell route using exactly one fresh cotengra candidate per proposal, and the deterministic 1001-tuple fitting/batch procedure in Section 11.
 >
-> Use bounded software agents for independent work and review, with one owner for protocol integration and exactly one ETH hardware controller. Complete fixed-path, fixed-resource physical comparisons and durable evidence retrieval before accepting each mechanism. Distinguish implementation correctness, numerical quality, and measured benefit; a negative result is acceptable. Freeze kernels, dispatch, scheduling, numerical rules, memory policy, resource profiles and cost extraction before the final bounded physical-feedback path search. Then freeze the pretest profile, run untouched evaluation without retuning, and release source/evidence. Use deep research for unresolved consequential technical questions only. Do not silently move the named kernel and DAG-parallelism deliverables back to future work; document any scope change and its evidence.
+> Prove that the whole-plan cost guides subsequent proposals, not merely reranking. Use one implementer, one independent reviewer and one hardware controller. Complete at most two feedback rounds within the existing 792 cap using the derived 768-attempt ceiling, then freeze all final G/F/R/U paths before timing. Archive, verify and report positive, neutral or negative outcomes without retuning. Do not reopen executor integration, parallelization, kernels, quantization, slicing, residency, transport or multi-rank work. Planning updates do not themselves launch execution.
 
 ## Sources
 

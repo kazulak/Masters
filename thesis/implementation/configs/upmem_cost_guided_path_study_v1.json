@@ -1,0 +1,93 @@
+{
+  "study_id": "upmem_cost_guided_path_study_v1",
+  "status": "software_implementation_pending",
+  "preparation_parent": "29ebaa2d1b20a1f6469435efe7309f89e161f263",
+  "supersedes_protocol_only": "upmem_family_aligned_path_study_v1",
+  "controlling_plan": "thesis/upmem-system-and-path-optimization-plan-v2.md section 11",
+  "workload": {
+    "path": "configs/upmem_family_aligned_workload_v1.json",
+    "sha256": "f2c85f27508d9b9fb5f55d13b89334939aa424330e27555dfafe3216452382d7",
+    "development_split": "training",
+    "evaluation_split": "test"
+  },
+  "executor": {
+    "source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "tag": "thesis-upmem-kernel-schedule-system-v1",
+    "schedule_policy": "static_dag_waves_v1",
+    "request_transport": "packed_wave_v1",
+    "fuse_complex": true,
+    "geometry_policy": "panel_only_v1",
+    "numeric_policy": "split_complex_float32_v1",
+    "intermediate_policy": "host_roundtrip_v1",
+    "topologies": [
+      {"topology_id": "1dpu_t8", "dpu_count": 1, "tasklets_per_dpu": 8, "rank_count": 1},
+      {"topology_id": "4dpu_t8", "dpu_count": 4, "tasklets_per_dpu": 8, "rank_count": 1}
+    ],
+    "binaries": {
+      "dpu_wave_v5_t8": "beb78cbe2d7116ff4970202e6804e33c3b8d739daaa411d71cebdbe08f4e43da",
+      "host_upmem_execution_plan_v4_t8": "92758743809a8c62279c2e96d7c96f97ff324388525c60afc99c33a94f230958",
+      "dpu_simplepim_management_init_t8": "2aca66265f5f57c7529492402a1f0d89339b61598c651923268e19544469eab6"
+    }
+  },
+  "score": {
+    "model_id": "upmem_launch_cost_v1",
+    "terms": ["H", "P", "N", "M", "W"],
+    "normalization": "max(1,median(development_greedy_feature_total))",
+    "launch_aggregation": "sum_launches(max_dpu(weighted_M_plus_weighted_W))",
+    "coefficient_denominator": 10,
+    "initial_integer_coefficients": [2, 2, 2, 2, 2],
+    "grid_size": 1001,
+    "fit_objective": "family_balanced_paired_block_median_log_speedup",
+    "tie_break": ["maximum_round_J_12", "maximum_worst_cell_log_speedup", "minimum_squared_distance_from_uniform", "lexicographically_smallest_integer_tuple"],
+    "timing_primary": "session_open_s + steady_execution_v1.total_wall_s + session_close_s",
+    "timing_secondary": "steady_execution_v1.total_wall_s",
+    "historical_observations_allowed": false,
+    "evaluation_observations_allowed_for_fit": false
+  },
+  "search": {
+    "cotengra_version": "0.7.5",
+    "optuna_version": "4.5.0",
+    "sampler": "TPESampler",
+    "startup_trials": 16,
+    "proposals": 128,
+    "master_seed": 20260909,
+    "serial": true,
+    "generator": "fresh_RandomGreedyOptimizer",
+    "max_repeats": 1,
+    "accel": false,
+    "parallel": false,
+    "simplify": true,
+    "costmod": {"low": 0.1, "high": 4.0, "log": false},
+    "temperature": {"low": 0.001, "high": 1.0, "log": true},
+    "duplicates_consume_proposals": true,
+    "known_infeasible_score": "positive_infinity",
+    "unexpected_error": "abort_trace",
+    "seed_derivation": "sha256_sorted_compact_utf8_json_first_four_bytes_big_endian",
+    "paired_objective_seeds": true,
+    "proposal_timeout_s": 300,
+    "lowering_timeout_s": 60,
+    "search_timeout_s": 7200,
+    "maximum_planned_work_units": 400,
+    "maximum_semantic_identity_expansion_units": 1000000,
+    "host_memory_admission_bytes": 536870912
+  },
+  "campaign": {
+    "authorized_attempt_cap": 792,
+    "effective_attempt_cap": 768,
+    "initial_paths_per_cell": 4,
+    "feedback_rounds": 2,
+    "feedback_paths_per_cell": 3,
+    "calibration_warmup_blocks": 1,
+    "calibration_measurement_blocks": 3,
+    "evaluation_methods": ["G", "F", "R", "U"],
+    "evaluation_warmup_blocks": 1,
+    "evaluation_measurement_blocks": 5,
+    "physical_stage_timeout_s": 86400,
+    "attempt_timeout_s": 120,
+    "deduplicate_method_paths": true,
+    "retry_or_replacement": false,
+    "unused_attempts_reallocated": false,
+    "acceptance_requires_verified_copies": 2,
+    "frozen_evaluation_before_first_evaluation_timing": true
+  }
+}

@@ -203,6 +203,135 @@ def _cheap_prepared_memory_bound(dag: ContractionDAG, plan: UpmemPlan) -> int:
     return inputs + outputs + encoded + prod(dag.output.shape) * 8
 
 
+def extract_launch_cost_features(
+    dag: ContractionDAG, plan: UpmemPlan, *, fuse_complex: bool = True,
+    geometry_policy: str = "panel_only_v1",
+) -> dict[str, object]:
+    """Observe the frozen float32 route, including named host-array passes.
+
+    The historical execution-feature record is not redefined. Host passes are
+    a separate semantic byte-volume proxy, not memory capacity or measured CPU
+    traffic. This observer neither prepares operands nor executes contractions.
+    """
+    if plan.numeric_policy != "split_complex_float32_v1":
+        raise ValueError("launch-cost host-pass inventory is float32-only")
+    execution = extract_execution_features(
+        dag, plan, fuse_complex=fuse_complex, geometry_policy=geometry_policy,
+    )
+    passes = _host_array_passes(dag, execution)
+    totals = execution["totals"]
+    return {
+        "model_id": "upmem_launch_cost_v1",
+        "execution": execution,
+        "host_array_passes": passes,
+        "H": totals["h2d_bytes"] + totals["d2h_bytes"],
+        "P": sum(passes.values()),
+        "N": totals["cohort_count"] + totals["launch_count"],
+        "launches": [
+            {
+                "M": [slot["local_traffic"]["mram_aligned_transfer_bytes_estimate"]
+                      for slot in wave["slots"]],
+                "W": [slot["real_mac_count"] for slot in wave["slots"]],
+            }
+            for wave in execution["waves"]
+        ],
+    }
+
+
+def _host_array_passes(dag, execution):
+    """Byte reads+writes for named passes; see the study's host-pass inventory."""
+    passes = dict.fromkeys((
+        "operand_copy", "component_cast", "operand_reduce", "canonical_copy",
+        "complex_canonical_and_encoded_copy", "tile_contiguous_copy",
+        "tile_bytes_and_padding", "envelope_payload_copy", "lane_assembly",
+        "complex_decode_and_copy", "graph_reduce", "final_copy",
+    ), 0)
+    dtypes = {tensor.id: np.dtype(tensor.dtype) for tensor in dag.tensors}
+    geometry = {}
+    for node in dag.nodes:
+        if isinstance(node, ReduceNode):
+            count = prod(node.output.shape)
+            passes["graph_reduce"] += 16 * count + 24 * count * (len(node.inputs) - 1)
+            # A source cast is separate from the complex64 summation passes.
+            for view in node.inputs:
+                dtype = dtypes[view.tensor_id]
+                if dtype != np.dtype("complex64"):
+                    passes["component_cast"] += (dtype.itemsize + 8) * prod(view.shape)
+            dtypes[node.output.id] = np.dtype("complex64")
+            continue
+        if not isinstance(node, ContractNode):
+            raise TypeError("unsupported host-pass node")
+        b, m, k, n = canonical_label_geometry(
+            node.left.labels, node.left.shape, node.right.labels,
+            node.right.shape, node.output_labels,
+        )
+        geometry[node.node_id] = (b, m, k, n)
+        output = set(node.output_labels)
+        shared = set(node.left.labels) & set(node.right.labels)
+        batch = tuple(label for label in node.left.labels if label in shared & output)
+        contracted = tuple(label for label in node.left.labels if label in shared - output)
+        free_left = tuple(label for label in node.left.labels if label in output - shared)
+        free_right = tuple(label for label in node.right.labels if label in output - shared)
+        for view, target in (
+            (node.left, batch + free_left + contracted),
+            (node.right, batch + contracted + free_right),
+        ):
+            dtype = dtypes[view.tensor_id]
+            if dtype not in (np.dtype("complex64"), np.dtype("complex128")):
+                raise ValueError("host-pass inventory requires complex operand metadata")
+            dimensions = dict(zip(view.labels, view.shape, strict=True))
+            original = prod(view.shape)
+            remaining = tuple(label for label in view.labels if label in target)
+            reduced = len(remaining) != len(view.labels)
+            elements = prod(dimensions[label] for label in remaining)
+            passes["operand_copy"] += 2 * original * dtype.itemsize
+            cast = dtype != np.dtype("complex64")
+            if cast:
+                passes["component_cast"] += 2 * original * (dtype.itemsize // 2 + 4)
+            if reduced:
+                passes["operand_reduce"] += 8 * (original + elements)
+            source_axes = tuple(label for label in remaining if dimensions[label] > 1)
+            target_axes = tuple(label for label in target if dimensions[label] > 1)
+            # Uncast complex64 component views retain the interleaved stride.
+            copy = elements > 1 and (
+                source_axes != target_axes or (not cast and not reduced)
+            )
+            passes["canonical_copy"] += 16 * elements * copy
+        passes["complex_canonical_and_encoded_copy"] += 32 * b * k * (m + n)
+        count = prod(node.output.shape)
+        passes["lane_assembly"] += 64 * count
+        passes["complex_decode_and_copy"] += 56 * count
+        dtypes[node.output.id] = np.dtype("complex64")
+
+    for wave in execution["waves"]:
+        for slot in wave["slots"]:
+            if not slot["active"]:
+                continue
+            _, _, full_k, full_n = geometry[slot["node_id"]]
+            for index, (_, aligned) in enumerate(slot["planes"][:4]):
+                if not aligned:
+                    continue
+                rows, columns, full_columns = (
+                    (slot["m"], slot["k"], full_k) if index < 2
+                    else (slot["k"], slot["n"], full_n)
+                )
+                length = rows * columns * 4
+                if aligned < length:
+                    raise ValueError("input plane is shorter than its logical payload")
+                copy = rows > 1 and columns != full_columns
+                passes["tile_contiguous_copy"] += 2 * length * copy
+                passes["tile_bytes_and_padding"] += length + aligned
+                if aligned > length:
+                    passes["tile_bytes_and_padding"] += 2 * aligned
+                passes["envelope_payload_copy"] += 2 * aligned
+            passes["lane_assembly"] += (
+                12 * slot["product_count"] * slot["m"] * slot["n"]
+            )
+    output_dtype = dtypes[dag.output.tensor_id]
+    passes["final_copy"] = (output_dtype.itemsize + 8) * prod(dag.output.shape)
+    return passes
+
+
 def _cohort_snapshot_from_controls(stage, controls, envelope_bytes, result_bytes):
     inputs = [sum(length for _, length in c.planes[:4]) for w in controls for c in w]
     outputs = [sum(length for _, length in c.planes[4:]) for w in controls for c in w]

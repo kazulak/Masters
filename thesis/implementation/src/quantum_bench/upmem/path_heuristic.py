@@ -13,6 +13,7 @@ from dataclasses import dataclass
 import hashlib
 import json
 import math
+from statistics import median
 from types import MappingProxyType
 from typing import Callable, Literal
 
@@ -308,6 +309,186 @@ FEATURE_DEPENDENCY_METADATA = (
 
 def feature_dependency_metadata() -> tuple[FeatureDependency, ...]:
     return FEATURE_DEPENDENCY_METADATA
+
+
+LAUNCH_COST_MODEL_ID = "upmem_launch_cost_v1"
+_LAUNCH_COST_WEIGHT_COUNT = 5
+_LAUNCH_COST_WEIGHT_SUM = 10
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchCostLaunch:
+    """Per-DPU local movement and real-MAC facts for one physical launch."""
+
+    m_by_dpu: tuple[float, ...]
+    w_by_dpu: tuple[float, ...]
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.m_by_dpu, tuple) or not isinstance(self.w_by_dpu, tuple):
+            raise TypeError("launch M/W facts must be immutable tuples")
+        if not self.m_by_dpu:
+            raise ValueError("a physical launch must contain at least one DPU")
+        if len(self.m_by_dpu) != len(self.w_by_dpu):
+            raise ValueError("launch M/W facts must have the same DPU count")
+        for name, values in (("M", self.m_by_dpu), ("W", self.w_by_dpu)):
+            for index, value in enumerate(values):
+                _require_finite_nonnegative(f"launch {name}[{index}]", value)
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchCostFacts:
+    """Complete-plan facts used by ``upmem_launch_cost_v1``."""
+
+    h: float
+    p: float
+    n: float
+    launches: tuple[LaunchCostLaunch, ...]
+
+    def __post_init__(self) -> None:
+        for name, value in (("H", self.h), ("P", self.p), ("N", self.n)):
+            _require_finite_nonnegative(name, value)
+        if not isinstance(self.launches, tuple):
+            raise TypeError("launch facts must be an immutable tuple")
+        for launch in self.launches:
+            if not isinstance(launch, LaunchCostLaunch):
+                raise TypeError("launch facts must contain LaunchCostLaunch records")
+
+    def total_m(self) -> float:
+        return sum(sum(launch.m_by_dpu) for launch in self.launches)
+
+    def total_w(self) -> float:
+        return sum(sum(launch.w_by_dpu) for launch in self.launches)
+
+    def as_tuple(self) -> tuple[float, float, float, float, float]:
+        return (float(self.h), float(self.p), float(self.n), self.total_m(), self.total_w())
+
+    @classmethod
+    def from_mapping(cls, features: Mapping[str, object]) -> LaunchCostFacts:
+        if features.get("model_id") != LAUNCH_COST_MODEL_ID:
+            raise ValueError("launch-cost extractor model identity mismatch")
+        return cls(
+            h=features["H"], p=features["P"], n=features["N"],
+            launches=tuple(
+                LaunchCostLaunch(tuple(launch["M"]), tuple(launch["W"]))
+                for launch in features["launches"]
+            ),
+        )
+
+
+@dataclass(frozen=True, slots=True)
+class LaunchCostScales:
+    """Frozen global development-greedy normalization scales in H/P/N/M/W order."""
+
+    h: float
+    p: float
+    n: float
+    m: float
+    w: float
+
+    def __post_init__(self) -> None:
+        values = (self.h, self.p, self.n, self.m, self.w)
+        for name, value in zip(("H", "P", "N", "M", "W"), values, strict=True):
+            checked = _require_finite_nonnegative(name, value)
+            if checked <= 0.0:
+                raise ValueError(f"scale {name} must be positive")
+
+    def as_tuple(self) -> tuple[float, float, float, float, float]:
+        return (float(self.h), float(self.p), float(self.n), float(self.m), float(self.w))
+
+    def as_mapping(self) -> dict[str, float]:
+        return dict(zip(("H", "P", "N", "M", "W"), self.as_tuple(), strict=True))
+
+
+def validate_launch_cost_weights(weights: Sequence[int]) -> tuple[int, ...]:
+    """Validate the authoritative integer tenth-simplex coefficient tuple."""
+
+    if isinstance(weights, (str, bytes)):
+        raise TypeError("launch-cost weights must be a sequence of integers")
+    values = tuple(weights)
+    if len(values) != _LAUNCH_COST_WEIGHT_COUNT:
+        raise ValueError("launch-cost weights must contain five integers")
+    if any(isinstance(value, bool) or not isinstance(value, int) for value in values):
+        raise TypeError("launch-cost weights must contain integers")
+    if any(value < 0 for value in values):
+        raise ValueError("launch-cost weights must be nonnegative")
+    if sum(values) != _LAUNCH_COST_WEIGHT_SUM:
+        raise ValueError("launch-cost weights must sum to ten")
+    return values
+
+
+def launch_cost_weight_grid() -> tuple[tuple[int, int, int, int, int], ...]:
+    """Return all 1001 nonnegative integer five-term weights summing to ten."""
+
+    return tuple(
+        (h, p, n, m, _LAUNCH_COST_WEIGHT_SUM - h - p - n - m)
+        for h in range(_LAUNCH_COST_WEIGHT_SUM + 1)
+        for p in range(_LAUNCH_COST_WEIGHT_SUM - h + 1)
+        for n in range(_LAUNCH_COST_WEIGHT_SUM - h - p + 1)
+        for m in range(_LAUNCH_COST_WEIGHT_SUM - h - p - n + 1)
+    )
+
+
+def development_greedy_scales(
+    cells: Mapping[str, tuple[str, LaunchCostFacts]],
+) -> LaunchCostScales:
+    """Compute global median scales from explicitly marked training greedy facts.
+
+    Test cells are accepted as context but never contribute to the medians.
+    The returned scales are fixed plan facts, not timing-derived values.
+    """
+
+    values = []
+    for cell_id, entry in cells.items():
+        if not isinstance(cell_id, str) or not cell_id:
+            raise ValueError("launch-cost cell IDs must be nonempty strings")
+        if not isinstance(entry, tuple) or len(entry) != 2:
+            raise TypeError("launch-cost cells must be (split, greedy_facts) tuples")
+        split, facts = entry
+        if split not in {"training", "test"}:
+            raise ValueError(f"unsupported launch-cost cell split: {split!r}")
+        if not isinstance(facts, LaunchCostFacts):
+            raise TypeError("launch-cost cells must contain LaunchCostFacts")
+        if split == "training":
+            values.append(facts.as_tuple())
+    if not values:
+        raise ValueError("at least one training greedy cell is required for scales")
+    columns = tuple(zip(*values, strict=True))
+    scales = tuple(max(1.0, float(median(column))) for column in columns)
+    return LaunchCostScales(*scales)
+
+
+def upmem_launch_cost_v1(
+    facts: LaunchCostFacts,
+    weights: Sequence[int],
+    scales: LaunchCostScales,
+) -> float:
+    """Score one complete lowered plan using the launch-aware five-term model.
+
+    The first three terms are serial H/P/N contributions.  For every physical
+    launch, each DPU's weighted M+W contribution is formed first, then the
+    maximum DPU contribution is added.  This function has no timing, executor,
+    path-search, or legacy log-ratio behavior.
+    """
+
+    if not isinstance(facts, LaunchCostFacts):
+        raise TypeError("launch-cost scoring requires LaunchCostFacts")
+    if not isinstance(scales, LaunchCostScales):
+        raise TypeError("launch-cost scoring requires LaunchCostScales")
+    integer_weights = validate_launch_cost_weights(weights)
+    theta = tuple(value / _LAUNCH_COST_WEIGHT_SUM for value in integer_weights)
+    serial = (
+        theta[0] * float(facts.h) / scales.h
+        + theta[1] * float(facts.p) / scales.p
+        + theta[2] * float(facts.n) / scales.n
+    )
+    launch_total = 0.0
+    for launch in facts.launches:
+        dpu_costs = (
+            theta[3] * movement / scales.m + theta[4] * work / scales.w
+            for movement, work in zip(launch.m_by_dpu, launch.w_by_dpu, strict=True)
+        )
+        launch_total += max(dpu_costs)
+    return _require_finite_nonnegative("upmem launch cost", serial + launch_total)
 
 
 @dataclass(frozen=True, slots=True)
@@ -1479,8 +1660,16 @@ def explain_score(
 __all__ = [
     "COST_MODEL_ID",
     "WAVE_COST_MODEL_ID",
+    "LAUNCH_COST_MODEL_ID",
     "extract_wave_path_features",
     "score_wave_path_features",
+    "LaunchCostLaunch",
+    "LaunchCostFacts",
+    "LaunchCostScales",
+    "validate_launch_cost_weights",
+    "launch_cost_weight_grid",
+    "development_greedy_scales",
+    "upmem_launch_cost_v1",
     "FEATURE_NAMES",
     "GROUP_FEATURE_NAMES",
     "SIX_TERM_FEATURE_MODEL",
