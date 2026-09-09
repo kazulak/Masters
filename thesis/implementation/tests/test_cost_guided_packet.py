@@ -159,6 +159,114 @@ def test_staged_packet_matches_existing_private_archive_verifier(packet, tmp_pat
         search.write_execution_packet(directory, "initial", output, ROOT, study, workload)
 
 
+def test_adapter_packets_are_deterministic_and_cpu_replays_two_paths(tmp_path, monkeypatch):
+    from tests.test_upmem_cost_guided_search import search
+    from quantum_bench.report import verify_artifacts
+
+    study, _, _ = search.load_study()
+    binding = {"source_sha": "a" * 40}
+    monkeypatch.setattr(search, "research_binding", lambda _: binding)
+    output = tmp_path / "adapter"
+    result = search.write_adapter_packets(output, ROOT, study)
+    assert result["cpu"]["expected_attempts"] == 2
+    assert result["sdk"]["expected_attempts"] == 4
+    selection = json.loads((output / "selection.json").read_text())
+    workload = json.loads((output / "workload.json").read_text())
+    expected = qualifier.cost_guided_adapter_fixture(
+        binding, {"purpose": "adapter_correctness_only"}, {"purpose": "adapter_correctness_only"},
+    )
+    assert [selection, workload] == json.loads(json.dumps(expected))
+    # Both records are qualification-only; their four physical cell labels are
+    # never used as calibration observations.
+    assert selection["purpose"] == "adapter_correctness_only"
+    raw = output / "cpu" / "raw"
+    config = output / "cpu" / "preregistration" / "physical.yml"
+    assert cli.run_command(str(config), str(raw), allow_physical=False)["status"] == "completed"
+    report = verify_artifacts(raw)
+    assert report["failed_count"] == 0
+    samples = [json.loads(line) for line in (raw / "samples.jsonl").read_text().splitlines()]
+    assert len(samples) == 2
+    assert all(s["status"] == "success" and s["validation"]["full_precision_passed"] for s in samples)
+    expected_ids = {p["facts"]["logical_plan_id"] for c in selection["cells"].values() for p in c["candidates"].values()}
+    assert {s["identities"]["logical_plan_id"] for s in samples} == expected_ids
+    with pytest.raises(FileExistsError):
+        search.write_adapter_packets(output, ROOT, study)
+
+
+def test_handoff_reverifies_qualification_and_is_non_overwriting(packet, tmp_path, monkeypatch):
+    from tests.test_upmem_cost_guided_search import search
+    import upmem_cost_guided_evidence as evidence
+    from qualify_quantized_upmem_execution import write_checksums
+
+    manifest, workload = deepcopy(packet)
+    study, _, _ = search.load_study()
+    binding = {"source_sha": "a" * 40}
+    normalization = {"scales": {k: 1.0 for k in ("H", "P", "N", "M", "W")}}
+    profile = {"integer_weights": [2, 2, 2, 2, 2]}
+    manifest.update(binding_hash=search.record_hash(binding), profile_hash=search.record_hash(profile),
+                    normalization_hash=search.record_hash(normalization))
+    directory = tmp_path / "prepared"
+    directory.mkdir()
+    (directory / "initial_round.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(search, "_load_preparation", lambda *_: (binding, normalization, profile))
+    monkeypatch.setattr(search, "research_binding", lambda _: binding)
+    physical = tmp_path / "physical"
+    search.write_execution_packet(directory, "initial", physical, ROOT, study, workload)
+    qualification = tmp_path / "adapter"
+    search.write_adapter_packets(qualification, ROOT, study)
+    calls = []
+
+    def verify(root, selected, population, frozen, config, *, target):
+        calls.append((root, selected, population, frozen, target))
+        return {"all_passed": True, "target": target, "round_manifest_hash": search.record_hash(selected)}
+
+    monkeypatch.setattr(evidence, "verify_qualification", verify)
+    candidate_cpu = tmp_path / "candidate_cpu" / "raw"
+    result = search.export_execution_handoff(directory, "initial", physical, qualification, candidate_cpu, study, workload)
+    handoff_path = Path(result["handoff"])
+    handoff = json.loads(handoff_path.read_text())
+    assert hashlib.sha256(handoff_path.read_bytes()).hexdigest() == result["handoff_sha256"]
+    assert handoff["predecessors"] == []
+    assert handoff["budget"]["stage_attempts"] == manifest["expected_attempts"]
+    assert [call[-1] for call in calls] == ["cpu", "sdk", "cpu"]
+    assert calls[-1][0:3] == (candidate_cpu, manifest, workload)
+    assert handoff["qualification_hash"] == search.record_hash(handoff["qualification_receipt"])
+    with pytest.raises(FileExistsError):
+        search.export_execution_handoff(directory, "initial", physical, qualification, candidate_cpu, study, workload)
+    corrupted = {**binding, "source_sha": "b" * 40}
+    (physical / "binding.json").write_text(json.dumps(corrupted))
+    write_checksums(physical)
+    with pytest.raises(ValueError, match="binding differs"):
+        search.export_execution_handoff(directory, "initial", physical, qualification, candidate_cpu, study, workload)
+
+
+def test_handoff_propagates_raw_qualification_failure(packet, tmp_path, monkeypatch):
+    from tests.test_upmem_cost_guided_search import search
+    import upmem_cost_guided_evidence as evidence
+
+    study, _, _ = search.load_study()
+    manifest, workload = packet
+    binding, normalization, profile = {"source_sha": "a" * 40}, {}, {}
+    manifest.update(binding_hash=search.record_hash(binding), profile_hash=search.record_hash(profile),
+                    normalization_hash=search.record_hash(normalization))
+    directory = tmp_path / "prepared"
+    directory.mkdir()
+    (directory / "initial_round.json").write_text(json.dumps(manifest))
+    monkeypatch.setattr(search, "_load_preparation", lambda *_: (binding, normalization, profile))
+    monkeypatch.setattr(search, "research_binding", lambda _: binding)
+    physical, qualification = tmp_path / "physical", tmp_path / "adapter"
+    search.write_execution_packet(directory, "initial", physical, ROOT, study, workload)
+    search.write_adapter_packets(qualification, ROOT, study)
+
+    def fail(*args, **kwargs):
+        raise ValueError("raw qualification failed")
+
+    monkeypatch.setattr(evidence, "verify_qualification", fail)
+    with pytest.raises(ValueError, match="raw qualification failed"):
+        search.export_execution_handoff(directory, "initial", physical, qualification, tmp_path / "cpu", study, workload)
+    assert not (directory / "initial_handoff.json").exists()
+
+
 @pytest.mark.parametrize("simulator", [False, True])
 def test_exact_selected_paths_routes_counts_and_no_search(packet, tmp_path, monkeypatch, simulator):
     before = deepcopy(packet)

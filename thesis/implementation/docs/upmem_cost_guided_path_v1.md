@@ -130,7 +130,8 @@ retain the hashes recorded above. No new SDK or physical execution was performed
 The controller now exposes `accept`, `fit`, `feedback-search`,
 `freeze-feedback`, `freeze-pretest`, `evaluation-search`, `freeze-evaluation`
 and `write-packet`, in addition to the initial preparation commands. These
-commands prepare or verify artifacts; none invokes physical hardware.
+commands prepare or verify artifacts. Only the separately guarded
+`execute-stage` command invokes physical hardware.
 
 Every nonempty accepted stage is extracted independently from two retained
 archives. Outer hashes, safe extraction, the complete relative checksum
@@ -158,14 +159,41 @@ admission or reservation. Physical packets check remaining attempt/time budgets
 from verified predecessors; running, accepted and failed stages cannot be
 issued as new physical packets.
 
-`upmem_cost_guided_execution.py` retains only the existing controller's Linux
-preflight, owned-process cleanup and archive mechanics. The remaining integration
-is an explicit once-only invocation around the existing canonical runner,
-including the private flock, qualification binding and durable running/failure
-markers. No second sampling loop is needed. That invocation, new selected-path
-CPU/SDK qualification, physical collection, fitting real observations and final
-evaluation remain incomplete. No physical acceptance is implied by these
-software checks.
+`upmem_cost_guided_execution.py` wraps the existing canonical runner with the
+private flock, preflight, owned-process cleanup and archive mechanics. A durable
+stage/source marker is created after admission but before child invocation.
+An occupied rank with zero attempts does not consume a stage; after invocation,
+a new output directory cannot bypass the marker. Process failure, interruption
+or timeout retains the complete partial artifact and never accepts or reruns it.
+There is no second sampling loop.
+
+`write-adapter-packets` prepares two small complete paths for CPU reference and
+strict SDK replay at both qualified topologies. This fixture is correctness-only,
+not part of the workload or calibration table. Each actual round also requires
+CPU replay of every unique selected DAG. `export-handoff` reopens these raw
+qualifications and all predecessor archives locally, preserving the unchanged
+accepted-record hashes. It exports an exclusive, externally SHA-256-pinned
+handoff with the remaining budget. `execute-stage` verifies that handoff and
+the portable packet on the exact remote source before admission. A successful
+return still has `accepted: false`: retrieval, both archive copies and strict
+raw verification remain mandatory.
+
+Portable comparison canonicalizes only the resolved location of staged QASM
+files back to their safe relative YAML path. The archived bytes must match
+their declared digest and the resolved path must retain that exact suffix.
+Raw manifests, configurations, experiment identities and circuit bytes are
+not rewritten. Historical archive verification keeps its original behavior;
+the cost-guided route explicitly requests this private location normalization.
+
+The 561076b468259205d28f2d31210fd1a45731a419 hosted run 34364889349 failed
+test collection because three tests imported private scripts through an extra
+local PYTHONPATH entry. The correction uses the normal Makefile environment;
+no dependency, test or external qualification is skipped. The local result
+below is historical, not evidence that that hosted run passed.
+
+New exact-source CPU/SDK qualification, physical collection, fitting real
+observations and final evaluation remain pending. None of these software
+changes establishes new physical observations or a fitted profile.
 
 Qualification of this checkpoint: all 2,368 tests passed in 257.32 seconds in
 the pinned research environment, with no skips. Ruff and diff checks passed.
@@ -174,6 +202,17 @@ The local XML report is retained under ignored
 Independent evidence and process/archive reviews found no remaining blockers
 after the numerical-policy, collection-seed, terminal-state and durable-archive
 repairs. Exact-head hosted CI remains a separate gate before experimental use.
+
+The once-only invocation continuation passed the standard `make test` target:
+2,489 tests in 292.09 seconds, without skips, using the pinned research Python
+and the Makefile's `PYTHONPATH=src`. Ruff and diff checks passed. Both cross-reviews
+found no remaining blockers after CPU zero-session handling and QASM portability
+were corrected. The passing XML is retained at
+`runs/p6-preparation/cost-guided-research/invocation-qualification/pytest-portability-fixed.xml`;
+the preceding failed QASM regression run remains separately retained as
+`invocation-qualification/pytest.xml`. No SDK or physical run is implied by
+these software test results. Exact-head hosted CI and actual source-bound
+CPU/SDK evidence remain preconditions for physical admission.
 
 ## Host-pass inventory
 

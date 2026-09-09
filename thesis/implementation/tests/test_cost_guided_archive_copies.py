@@ -7,7 +7,7 @@ import tempfile
 import pytest
 
 from tests.test_upmem_cost_guided_search import search
-from qualify_quantized_upmem_execution import write_checksums
+from scripts.qualify_quantized_upmem_execution import write_checksums
 
 
 def test_two_copies_are_extracted_verified_and_not_same_inode(monkeypatch):

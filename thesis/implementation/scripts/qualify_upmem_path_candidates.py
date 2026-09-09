@@ -1408,6 +1408,57 @@ def prepare_cost_guided_config(
     return config, provenance
 
 
+def cost_guided_adapter_fixture(binding, profile, normalization):
+    """Two small exact paths for adapter correctness, not workload selection."""
+    from quantum_bench.upmem.execution_features import extract_launch_cost_features
+
+    definition = {"kind": "builtin", "name": "quantization_stress",
+                  "parameters": {"n_qubits": 6, "repeat_layers": 1}}
+    identifier = "adapter_stress6"
+    job = make_simulation_job(_circuit_from_definition(definition))
+    network, _ = lower_tensor_network(job)
+    greedy, _ = plan_opt_einsum(network, optimize="greedy")
+    greedy = normalize_frozen_path([list(pair) for pair in greedy])
+    alternate = [list(pair) for pair in greedy]
+    alternate[-2] = [0, 2] if alternate[-2] == [0, 1] else [0, 1]
+    paths = (greedy, normalize_frozen_path(alternate))
+    workload = {"workload_id": "upmem_cost_guided_adapter_correctness_v1", "instances": [{
+        "instance_id": identifier, "family": "Stress", "split": "training", "circuit": definition,
+        "canonical_circuit": {"operation_identity": {"problem_id": problem_id(job)}},
+    }]}
+    def digest(value):
+        return hashlib.sha256(json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False).encode()).hexdigest()
+    manifest = {"study_id": "upmem_cost_guided_path_study_v1", "stage": "initial",
+                "purpose": "adapter_correctness_only", "binding_hash": digest(binding),
+                "profile_hash": digest(profile), "normalization_hash": digest(normalization),
+                "warmup_blocks": [0], "measurement_blocks": [1, 2, 3],
+                "expected_attempts": 16, "cells": {}}
+    for topology_id, count in (("1dpu_t8", 1), ("4dpu_t8", 4)):
+        candidates = {}
+        for path in paths:
+            path_key = path_id(path, circuit_id=identifier)
+            dag = build_contraction_dag(network, path)
+            plan = plan_upmem(dag, numeric_policy=FLOAT32, schedule_policy="static_dag_waves_v1",
+                              topology=UpmemTopology(dpu_count=count, rank_count=1, tasklets_per_dpu=8))
+            _require_wave_execution_coverage(plan)
+            facts = extract_launch_cost_features(dag, plan)
+            execution = facts.pop("execution")
+            facts.update(logical_plan_id=contraction_dag_hash(dag), physical_plan_id=physical_plan_id(plan),
+                         resource_admission=collection_resource_admission(plan),
+                         declared_host_bytes=execution["host_buffers"]["declared_executor_memory_estimate_bytes"])
+            candidates[path_key] = {"path_id": path_key, "path": path, "tree_flops": 0.0, "facts": facts}
+        keys = [path_id(path, circuit_id=identifier) for path in paths]
+        if len(set(keys)) != 2:
+            raise ValueError("adapter fixture requires two distinct complete paths")
+        manifest["cells"][f"{identifier}/{topology_id}"] = {
+            "circuit_id": identifier, "family": "Stress", "split": "training", "topology_id": topology_id,
+            "selection": {"path_ids": sorted(keys), "roles": {
+                "G": keys[0], "F": keys[0], "R": keys[0], "qualification_alternate": keys[1],
+            }}, "candidates": candidates,
+        }
+    return manifest, workload
+
+
 def prepare_config(
     *,
     dataset_path: Path,

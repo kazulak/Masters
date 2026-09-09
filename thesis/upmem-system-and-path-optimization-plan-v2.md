@@ -519,26 +519,31 @@ The decisive completion evidence is a trace showing full-plan cost feedback chan
 
 ### 11.10 Current checkpoint and ordered continuation
 
-The locally verified committed software checkpoint is
-6fad453a396773968f197f0e229d90a090d16548 on
-feature/upmem-final-system-path-search-v2. Its recorded qualification is
-2,192 passing tests without skips, Ruff and diff checks, with the detailed
-record in implementation/docs/upmem_cost_guided_path_v1.md. It includes the
-launch-aware observer/score, isolated pinned research environment, study
-configuration, adaptive search primitives, deterministic paired-observation
-fitting, batch selection and exact complete-path replay. This planning pass
-read the qualification record; it did not rerun tests or independently query
-hosted CI. This is software evidence, not physical calibration or completion
-of the campaign controller.
+The latest committed controller checkpoint is
+561076b468259205d28f2d31210fd1a45731a419 on
+feature/upmem-final-system-path-search-v2, following the score/search checkpoint
+6fad453a396773968f197f0e229d90a090d16548. The controller checkpoint recorded
+2,368 local passing tests, but hosted run 34364889349 failed collection because
+three tests depended on an extra private-script import path. It is not an
+exact-head qualified experimental source. The normal Makefile environment is
+retained; no dependency or test is weakened.
 
-At this planning update, the active worktree has uncommitted campaign commands,
-raw-evidence extraction, archive acceptance, feedback/pretest controls and their
-tests. Preserve and review those edits; do not treat their presence as proof of
-qualification. The physical-stage invocation and restart/failure guards must
-still be bound to the existing runner before admission. Do not restart the
-implemented score/search/fitting work or treat a dirty checkout as an accepted
-execution source. No new physical observations or fitted profile are established
-by this status update.
+The current continuation adds the once-only invocation around the existing
+runner, CPU/SDK qualification receipts and a hash-pinned remote handoff.
+Admission precedes a durable invocation marker; after invocation, another output
+directory cannot authorize a retry. Complete raw qualification and predecessor
+archives must be reverified before issuing the handoff. QASM relocation is
+covered explicitly: private comparison authenticates the staged bytes and uses
+their relative YAML paths without rewriting raw evidence or executor semantics.
+Detailed software results and source checkpoints are recorded in
+implementation/docs/upmem_cost_guided_path_v1.md.
+
+These changes must pass the normal full suite, independent review and exact-head
+CI before experimental use. Source-specific CPU/SDK qualification, new physical
+calibration, fitted coefficients and final evaluation are still separate pending
+gates. Do not restart the implemented score/search/fitting work or assume a
+physical gate passed. No new physical observations or fitted profile are
+established by this status update.
 
 The execution tag was checked locally to resolve to
 459935f586fdd16c82013838e6d27a12604c3093. The active workload and runtime files

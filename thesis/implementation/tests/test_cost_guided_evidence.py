@@ -2,6 +2,7 @@
 
 from copy import deepcopy
 import importlib.util
+from importlib import metadata
 import json
 from pathlib import Path
 import shutil
@@ -12,10 +13,11 @@ import yaml
 
 from quantum_bench import evidence, experiment
 from quantum_bench.upmem.path_heuristic import LaunchCostFacts, validate_launch_cost_observations
-import upmem_cost_guided_evidence as extractor
 
 
 ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "scripts"))
+import upmem_cost_guided_evidence as extractor  # noqa: E402
 
 
 def _test_module(name):
@@ -127,7 +129,9 @@ def _fixture(tmp_path, stage="initial", *, definition=None, skipped=False, colle
         "source_sha": binding["source_sha"], "workload_record_sha256": extractor._hash(workload),
         "execution_source": study["executor"]["source"],
         "configuration_sha256": wave._file_sha256(physical),
-        "normalized_configuration_sha256": wave._sha256_bytes(wave._canonical_bytes(normalized)),
+        "normalized_configuration_sha256": wave._sha256_bytes(wave._canonical_bytes(
+            wave._wave_portable_qasm_configuration(normalized, physical, provenance)
+        )),
     })
     (archive / "physical.yml.provenance.json").write_bytes(wave._canonical_bytes(provenance))
     binaries = {options[field]: study["executor"]["binaries"][Path(options[field]).name]
@@ -228,6 +232,273 @@ def _fixture(tmp_path, stage="initial", *, definition=None, skipped=False, colle
 
 def _extract(s):
     return extractor.extract_round_observations(s["root"], s["round_manifest"], s["workload"], s["binding"], s["study"])
+
+
+def _qualification_fixture(tmp_path, target, monkeypatch, *, adapter=False, definition=None):
+    s = _fixture(tmp_path, definition=definition)
+    s["binding"]["dependencies"] = {name: metadata.version(name) for name in ("numpy", "opt_einsum")}
+    if adapter:
+        s["round_manifest"], s["workload"] = packet_fixture.qualifier.cost_guided_adapter_fixture(
+            s["binding"], {"integer_weights": [2, 2, 2, 2, 2]},
+            {"scales": {key: 1.0 for key in ("H", "P", "N", "M", "W")}},
+        )
+    s["round_manifest"]["binding_hash"] = extractor._hash(s["binding"])
+    config, provenance = packet_fixture.qualifier.prepare_cost_guided_config(
+        s["round_manifest"], s["workload"], execution_root=ROOT,
+        experiment_id="cost-qualification-fixture", simulator=target == "sdk", cpu_reference=target == "cpu",
+    )
+    archive = tmp_path / "preregistration"
+    path = archive / "physical.yml"
+    path.write_text(yaml.safe_dump(config))
+    normalized = json.loads(evidence.canonical_json(experiment.load_experiment_config(path)))
+    provenance.update(
+        round_manifest_hash=extractor._hash(s["round_manifest"]), binding_hash=extractor._hash(s["binding"]),
+        source_sha=s["binding"]["source_sha"], execution_source=s["study"]["executor"]["source"],
+        workload_record_sha256=extractor._hash(s["workload"]), configuration_sha256=wave._file_sha256(path),
+        normalized_configuration_sha256=wave._sha256_bytes(wave._canonical_bytes(
+            wave._wave_portable_qasm_configuration(normalized, path, provenance)
+        )),
+    )
+    (archive / "physical.yml.provenance.json").write_bytes(wave._canonical_bytes(provenance))
+    _checksums(archive)
+    if target == "cpu":
+        # Real direct-run records have no native sessions; only source reporting is synthetic.
+        monkeypatch.setattr(extractor.cli, "_source_commit", lambda: s["binding"]["source_sha"])
+        monkeypatch.setattr(extractor.cli, "_worktree_dirty", lambda: False)
+        s["root"] = tmp_path / "cpu-raw"
+        extractor.cli.run_command(str(path), str(s["root"]), allow_physical=False)
+        s["raw_manifest"], s["samples"], s["sessions"] = evidence.load_artifacts(s["root"])
+        s["samples"], s["sessions"] = list(s["samples"]), list(s["sessions"])
+        return s
+    manifest = s["raw_manifest"]
+    manifest.update(experiment_id=normalized["experiment_id"], collection_policy_id=normalized["collection_policy_id"],
+                    expected_counts={"warmup": 0, "measurement": 2, "sessions": 2})
+    manifest["configuration"]["experiment"] = normalized
+    binaries = json.loads((archive / "binary_sha256.json").read_text())
+    for item in manifest["configuration"]["identity_bindings"]:
+        options = normalized["routes"][item["route_id"]]["options"]
+        item["executable_id"] = extractor._executable_identity(
+            {field: {"sha256": binaries[options[field]]}
+             for field in ("dpu_binary", "host_binary", "initialization_binary")},
+            s["study"]["executor"], executor="upmem_sdk_simulator",
+        )
+    samples, sessions = [], []
+    for case, plan, route, attempt, index, block, order in sorted(evidence._declared_collection_attempts(manifest)):
+        sample = deepcopy(next(row for row in s["samples"] if row["route_id"] == route))
+        session = deepcopy(next(row for row in s["sessions"] if row["session_instance_id"] == sample["session_instance_id"]))
+        sample.update(experiment_id=normalized["experiment_id"], attempt_kind=attempt, sample_index=index,
+                      block_id=block, order_index=order,
+                      sample_id=evidence.sample_id(manifest["run_id"], case, route, attempt, index,
+                                                   plan_id=plan, block_id=block, order_index=order))
+        session["experiment_id"] = normalized["experiment_id"]
+        item = next(row for row in manifest["configuration"]["identity_bindings"] if row["route_id"] == route)
+        sample["identities"]["executable_id"] = item["executable_id"]
+        for facts in (sample["backend_facts"], session["terminal_backend_facts"]):
+            facts.update(target_observed="sdk_simulator", physical_target_verified=False,
+                         hardware_kernel_executed=False, simulator_kernel_executed=True)
+            for field, value in (("simulator_target_verified", True), ("hardware_allocation_verified", False)):
+                if field in facts:
+                    facts[field] = value
+        samples.append(sample)
+        sessions.append(session)
+    s.update(samples=samples, sessions=sessions)
+    _save_raw(s)
+    return s
+
+
+def _qualify(s, target):
+    return extractor.verify_qualification(s["root"], s["round_manifest"], s["workload"],
+                                          s["binding"], s["study"], target=target)
+
+
+@pytest.mark.parametrize("target", ["cpu", "sdk"])
+def test_qualification_exact_replay_cpu_and_sdk(tmp_path, monkeypatch, target):
+    s = _qualification_fixture(tmp_path, target, monkeypatch)
+    before = deepcopy(s)
+    result = _qualify(s, target)
+    assert s == before
+    assert result["all_passed"] is True
+    assert result["purpose"] == "correctness_only"
+    assert result["sample_count"] == (1 if target == "cpu" else 2)
+    assert result["session_count"] == (0 if target == "cpu" else 2)
+    assert result["selection_hash"] == extractor._hash(s["round_manifest"])
+    assert result["round_manifest_hash"] == result["selection_hash"]
+    assert result["source_sha"] == s["binding"]["source_sha"]
+
+
+def test_physical_backend_guard_still_rejects_sdk(tmp_path, monkeypatch):
+    s = _qualification_fixture(tmp_path, "sdk", monkeypatch)
+    sample, session = s["samples"][0], s["sessions"][0]
+    cell = s["round_manifest"]["cells"][f"{sample['case_id']}/{sample['route_id']}"]
+    candidate = next(iter(cell["candidates"].values()))
+    topology = next(t for t in s["study"]["executor"]["topologies"] if t["topology_id"] == cell["topology_id"])
+    facts, _ = wave._joined_backend_facts(sample, session, allow_null_overrides=True)
+    with pytest.raises(ValueError, match="target_observed"):
+        wave._require_backend_contract(sample, session, facts,
+                                       {"topology": topology, "resource_admission": candidate["facts"]["resource_admission"]},
+                                       s["study"]["executor"], claim_policy="diagnostic_v1")
+
+
+def test_real_two_path_cpu_adapter_qualification(tmp_path, monkeypatch):
+    s = _qualification_fixture(tmp_path, "cpu", monkeypatch, adapter=True)
+
+    def forbidden(*args, **kwargs):
+        pytest.fail("qualification verification must not search or open an executor")
+
+    for name in ("plan_opt_einsum", "plan_cotengra", "open_upmem", "open_upmem_simulator"):
+        monkeypatch.setattr(extractor.cli, name, forbidden)
+    monkeypatch.setattr(packet_fixture.qualifier, "plan_opt_einsum", forbidden)
+    result = _qualify(s, "cpu")
+    assert result["sample_count"] == 2
+    assert result["session_count"] == 0
+    assert len({row["identities"]["logical_plan_id"] for row in s["samples"]}) == 2
+
+
+@pytest.mark.parametrize("target", ["cpu", "sdk"])
+@pytest.mark.parametrize("mutation", [
+    "source", "dirty", "missing_sample", "duplicate_sample", "numeric", "accuracy", "replay",
+    "logical", "physical", "executable", "default_policy", "output_digest", "scope", "block",
+])
+def test_qualification_raw_corruption_rejected(tmp_path, monkeypatch, target, mutation):
+    s = _qualification_fixture(tmp_path, target, monkeypatch)
+    sample, manifest = s["samples"][0], s["raw_manifest"]
+    if mutation == "source":
+        manifest["source_commit"] = "e" * 40
+    elif mutation == "dirty":
+        manifest["source_worktree_dirty"] = True
+    elif mutation == "missing_sample":
+        s["samples"].pop()
+    elif mutation == "duplicate_sample":
+        s["samples"].append(deepcopy(sample))
+    elif mutation == "numeric":
+        sample["numeric_facts"]["numeric_policy"] = "split_complex_int8_v1"
+    elif mutation in {"accuracy", "replay"}:
+        sample["validation"]["full_precision_passed" if mutation == "accuracy" else "policy_reference_passed"] = False
+        if mutation == "accuracy":
+            sample["validation"]["accuracy_qualified"] = False
+    elif mutation in {"logical", "physical", "executable"}:
+        field = f"{mutation}_plan_id" if mutation != "executable" else "executable_id"
+        sample["identities"][field] = "a" * 64
+        for row in manifest["configuration"]["identity_bindings"]:
+            if row["route_id"] == sample["route_id"]:
+                row[field] = "a" * 64
+    elif mutation == "default_policy":
+        policy = manifest["configuration"]["validation_policy"]
+        policy["float32_atol"] = 1.0
+        policy_id = evidence.validation_policy_id(policy)
+        manifest["validation_policy_id"] = policy_id
+        for row in manifest["configuration"]["identity_bindings"]:
+            row["validation_policy_id"] = policy_id
+        for row in s["samples"]:
+            row["identities"]["validation_policy_id"] = policy_id
+    elif mutation == "output_digest":
+        sample["output_sha256"] = "not-a-hash"
+    elif mutation == "scope":
+        sample["measurement"]["scope_id"] = "simulation_end_to_end_v1"
+    else:
+        sample["block_id"] += 1
+    _save_raw(s)
+    with pytest.raises(ValueError):
+        _qualify(s, target)
+
+
+@pytest.mark.parametrize("target", ["cpu", "sdk"])
+@pytest.mark.parametrize("mutation", ["executor_source", "binding_executor", "binding_study", "binding_workload", "selection_binding", "numeric_policy", "config"])
+def test_qualification_input_binding_rejected(tmp_path, monkeypatch, target, mutation):
+    s = _qualification_fixture(tmp_path, target, monkeypatch)
+    if mutation == "executor_source":
+        s["study"]["executor"]["source"] = "a" * 40
+        s["binding"]["executor_source"] = "a" * 40
+        _rebind_private(s)
+    elif mutation == "numeric_policy":
+        s["study"]["executor"]["numeric_policy"] = "split_complex_int8_v1"
+        _rebind_private(s)
+    elif mutation.startswith("binding_"):
+        field = {"binding_executor": "executor_source", "binding_study": "study_hash", "binding_workload": "workload_hash"}[mutation]
+        s["binding"][field] = "a" * (40 if mutation == "binding_executor" else 64)
+    elif mutation == "selection_binding":
+        s["round_manifest"]["binding_hash"] = "a" * 64
+    else:
+        # Rehash a real normalized config so the expected packet comparison is exercised.
+        archive = tmp_path / "preregistration"
+        path = archive / "physical.yml"
+        config = yaml.safe_load(path.read_text())
+        config["defaults"]["timeout_s"] = 121
+        path.write_text(yaml.safe_dump(config))
+        normalized = json.loads(evidence.canonical_json(experiment.load_experiment_config(path)))
+        manifest = s["raw_manifest"]
+        manifest["configuration"]["experiment"] = normalized
+        manifest["experiment_id"] = normalized["experiment_id"]
+        for row in [*s["samples"], *s["sessions"]]:
+            row["experiment_id"] = normalized["experiment_id"]
+        sidecar = archive / "physical.yml.provenance.json"
+        provenance = json.loads(sidecar.read_text())
+        provenance.update(configuration_sha256=wave._file_sha256(path),
+                          normalized_configuration_sha256=wave._sha256_bytes(wave._canonical_bytes(normalized)))
+        sidecar.write_bytes(wave._canonical_bytes(provenance))
+        _checksums(archive)
+        _save_raw(s)
+    with pytest.raises(ValueError):
+        _qualify(s, target)
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("cpu_fallback_used", True), ("test_double_execution", True), ("simulator_kernel_executed", True),
+    ("backend_id", "other"), ("execution_class", "other"),
+])
+def test_cpu_qualification_rejects_wrong_backend(tmp_path, monkeypatch, field, value):
+    s = _qualification_fixture(tmp_path, "cpu", monkeypatch)
+    s["samples"][0]["backend_facts"][field] = value
+    _save_raw(s)
+    with pytest.raises(ValueError, match="CPU qualification"):
+        _qualify(s, "cpu")
+
+
+@pytest.mark.parametrize(("field", "value"), [
+    ("cpu_fallback_used", True), ("test_double_execution", True), ("target_observed", "physical_hardware"),
+    ("execution_resource_admission_passed", False), ("execution_resource_admission_passed", 1),
+    ("execution_resource_admission_passed", None), ("startup_resource_admission_passed", False),
+    ("active_dpus", 99), ("rank_count", 2),
+    ("active_dpus", True), ("requested_dpus", True), ("allocated_dpus", True),
+    ("execution_active_dpu_count", True),
+    ("logical_plan_id", "a" * 64), ("physical_plan_id", "a" * 64), ("output_hash", "invalid"),
+])
+def test_sdk_qualification_rejects_wrong_backend(tmp_path, monkeypatch, field, value):
+    s = _qualification_fixture(tmp_path, "sdk", monkeypatch)
+    s["samples"][0]["backend_facts"][field] = value
+    _save_raw(s)
+    with pytest.raises(ValueError):
+        _qualify(s, "sdk")
+
+
+@pytest.mark.parametrize("mutation", ["release", "binary", "simulator_target", "missing_session", "duplicate_session", "null_startup", "boolean_count"])
+def test_sdk_qualification_rejects_session_corruption(tmp_path, monkeypatch, mutation):
+    s = _qualification_fixture(tmp_path, "sdk", monkeypatch)
+    if mutation == "release":
+        s["sessions"][0]["release_verified"] = False
+    elif mutation == "binary":
+        s["sessions"][0]["terminal_backend_facts"]["dpu_binary_sha256"] = "a" * 64
+    elif mutation == "simulator_target":
+        s["sessions"][0]["terminal_backend_facts"]["simulator_target_verified"] = False
+    elif mutation == "missing_session":
+        s["sessions"].pop()
+    elif mutation == "null_startup":
+        s["samples"][0]["backend_facts"]["startup_resource_admission_passed"] = None
+        s["sessions"][0]["terminal_backend_facts"]["startup_resource_admission_passed"] = None
+    elif mutation == "boolean_count":
+        s["sessions"][0]["terminal_backend_facts"]["allocated_dpu_count"] = True
+    else:
+        s["sessions"].append(deepcopy(s["sessions"][0]))
+    _save_raw(s)
+    with pytest.raises(ValueError):
+        _qualify(s, "sdk")
+
+
+def test_sdk_qualification_joins_terminal_startup_fact(tmp_path, monkeypatch):
+    s = _qualification_fixture(tmp_path, "sdk", monkeypatch)
+    s["samples"][0]["backend_facts"]["startup_resource_admission_passed"] = None
+    _save_raw(s)
+    assert _qualify(s, "sdk")["all_passed"] is True
 
 
 @pytest.mark.parametrize("stage", ["initial", "feedback_1", "feedback_2", "evaluation"])
@@ -479,11 +750,86 @@ def test_qasm_archive_byte_binding(tmp_path):
                   "parameters": {"qasm_sha256": wave._file_sha256(source)}}
     s = _fixture(tmp_path, definition=definition)
     assert len(_extract(s)["rows"]) == 8
-    staged = next((tmp_path / "preregistration/qasm").rglob("*.qasm"))
+    original_manifest = deepcopy(s["raw_manifest"])
+    relocated = tmp_path / "durable-copy"
+    relocated.mkdir()
+    for name in ("preregistration", "raw"):
+        shutil.copytree(tmp_path / name, relocated / name)
+    shutil.copyfile(tmp_path / "terminal.json", relocated / "terminal.json")
+    shutil.rmtree(tmp_path / "preregistration")
+    s["root"] = relocated / "raw"
+    assert len(_extract(s)["rows"]) == 8
+    assert s["raw_manifest"] == original_manifest
+    assert json.loads((s["root"] / "manifest.json").read_text()) == original_manifest
+    with pytest.raises(ValueError, match="normalized_configuration_sha256"):
+        wave._wave_private_archive(
+            s["root"], relocated / "preregistration/physical.yml.provenance.json", original_manifest,
+        )
+    staged = next((relocated / "preregistration/qasm").rglob("*.qasm"))
     staged.write_text(staged.read_text() + "\n// different bytes\n")
     _checksums(staged.parents[2])
     with pytest.raises(ValueError, match="archived QASM bytes"):
         _extract(s)
+
+
+@pytest.mark.parametrize("mutation", ["suffix", "traversal", "absolute_yaml", "missing_binding", "hash"])
+def test_portable_qasm_normalization_rejects_unbound_paths(tmp_path, mutation):
+    qasm = tmp_path / "qasm/test.qasm"
+    qasm.parent.mkdir()
+    qasm.write_text('OPENQASM 2.0;\nqreg q[1];\nh q[0];\n')
+    raw = {"cases": {"case": {"circuit": {"kind": "qasm_file", "path": "qasm/test.qasm"}}}}
+    normalized = deepcopy(raw)
+    normalized["cases"]["case"]["circuit"]["path"] = "/remote/packet/qasm/test.qasm"
+    normalized["experiment_identity_payload"] = {"configuration": deepcopy(raw)}
+    normalized["routes"] = {"unchanged": {"path": "/remote/runtime/binary"}}
+    provenance = {"qasm_source_bindings": [
+        {"prepared_path": "qasm/test.qasm", "qasm_sha256": wave._file_sha256(qasm)},
+    ]}
+    path = tmp_path / "physical.yml"
+    path.write_text(yaml.safe_dump(raw))
+    before = deepcopy(normalized)
+    portable = wave._wave_portable_qasm_configuration(normalized, path, provenance)
+    expected = deepcopy(before)
+    expected["cases"]["case"]["circuit"]["path"] = "qasm/test.qasm"
+    assert portable == expected
+    assert normalized == before
+    if mutation == "suffix":
+        normalized["cases"]["case"]["circuit"]["path"] = "/remote/wrong/test.qasm"
+    elif mutation in {"traversal", "absolute_yaml"}:
+        raw["cases"]["case"]["circuit"]["path"] = (
+            "../qasm/test.qasm" if mutation == "traversal" else str(qasm)
+        )
+        path.write_text(yaml.safe_dump(raw))
+    elif mutation == "missing_binding":
+        provenance["qasm_source_bindings"] = []
+    else:
+        provenance["qasm_source_bindings"][0]["qasm_sha256"] = "0" * 64
+    with pytest.raises(ValueError, match="QASM"):
+        wave._wave_portable_qasm_configuration(normalized, path, provenance)
+
+
+def test_real_qasm_cpu_qualification_after_archive_relocation(tmp_path, monkeypatch):
+    source = tmp_path / "stress.qasm"
+    source.write_text('OPENQASM 2.0;\ninclude "qelib1.inc";\nqreg q[6];\n'
+                      + "\n".join(f"ry(0.7) q[{i}];" for i in range(6))
+                      + "\n"
+                      + "\n".join(f"cx q[{i}],q[{i+1}];" for i in range(5)))
+    definition = {"kind": "qasm_file", "name": None, "path": str(source),
+                  "parameters": {"qasm_sha256": wave._file_sha256(source)}}
+    s = _qualification_fixture(tmp_path, "cpu", monkeypatch, definition=definition)
+    assert _qualify(s, "cpu")["all_passed"] is True
+    original_manifest = (s["root"] / "manifest.json").read_bytes()
+    relocated = tmp_path / "durable-copy"
+    relocated.mkdir()
+    shutil.copytree(tmp_path / "preregistration", relocated / "preregistration")
+    shutil.copytree(s["root"], relocated / "raw")
+    shutil.rmtree(tmp_path / "preregistration")
+    s["root"] = relocated / "raw"
+    result = _qualify(s, "cpu")
+    assert result["all_passed"] is True
+    assert result["sample_count"] == 1
+    assert result["session_count"] == 0
+    assert (s["root"] / "manifest.json").read_bytes() == original_manifest
 
 
 def test_skipped_cells_are_not_invented_as_observations(tmp_path):

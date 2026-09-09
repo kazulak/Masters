@@ -22,6 +22,8 @@ import sys
 import time
 from typing import Any
 
+import yaml
+
 from quantum_bench.circuits import (
     builtin_circuit,
     parse_openqasm2,
@@ -2683,6 +2685,8 @@ def _joined_backend_facts(
 def _fact_matches_expected(actual: Any, expected: Any) -> bool:
     if type(expected) is bool:
         return type(actual) is bool and actual is expected
+    if type(expected) is int:
+        return type(actual) is int and actual == expected
     return actual == expected
 
 
@@ -2695,20 +2699,24 @@ def _require_backend_contract(
     binary_bindings: Mapping[str, Mapping[str, str]] | None = None,
     *,
     claim_policy: str | None = None,
+    execution_target: str = "physical_hardware",
 ) -> None:
+    if execution_target not in {"physical_hardware", "sdk_simulator"}:
+        raise ValueError("unsupported qualification execution target")
+    physical = execution_target == "physical_hardware"
     if session.get("status") != "success":
         raise ValueError("calibration contains a non-success session")
     for field in ("release_attempted", "release_succeeded", "release_verified"):
         if session.get(field) is not True:
             raise ValueError(f"session {field} must be true")
     expected_terminal = {
-        "target_observed": "physical_hardware",
-        "physical_target_verified": True,
-        "hardware_kernel_executed": True,
-        "simulator_kernel_executed": False,
+        "target_observed": execution_target,
+        "physical_target_verified": physical,
+        "hardware_kernel_executed": physical,
+        "simulator_kernel_executed": not physical,
         "cpu_fallback_used": False,
         "allocation_verified": True,
-        "hardware_allocation_verified": True,
+        "hardware_allocation_verified": physical,
         "binary_identity_verified": True,
         "native_identity_verified": True,
         "hardware_release_verified": True,
@@ -2724,10 +2732,10 @@ def _require_backend_contract(
     tasklets = int(expected_topology["tasklets_per_dpu"])
     diagnostic_scaling = contract is not None and claim_policy == "diagnostic_v1"
     expected_facts = {
-        "target_observed": "physical_hardware",
-        "physical_target_verified": True,
-        "hardware_kernel_executed": True,
-        "simulator_kernel_executed": False,
+        "target_observed": execution_target,
+        "physical_target_verified": physical,
+        "hardware_kernel_executed": physical,
+        "simulator_kernel_executed": not physical,
         "cpu_fallback_used": False,
         "execution_resource_admission_passed": True,
         "startup_resource_admission_passed": True,
@@ -2756,7 +2764,7 @@ def _require_backend_contract(
         "startup_allocated_dpu_count": dpu_count,
         "startup_requested_tasklets_per_dpu": tasklets,
     }.items():
-        if terminal.get(field) != value:
+        if not _fact_matches_expected(terminal.get(field), value):
             raise ValueError(f"terminal resource fact {field} is not qualified")
     if sample.get("validation", {}).get("accuracy_qualified") is not True:
         raise ValueError("calibration sample accuracy is not qualified")
@@ -2829,12 +2837,12 @@ def _require_backend_contract(
         ("complex_launch_policy", WAVE_COMPLEX_LAUNCH_POLICY),
         ("geometry_kernel_policy", contract["geometry_policy"]),
         ("kernel_implementation_id", WAVE_KERNEL_IMPLEMENTATION),
-        ("target_observed", "physical_hardware"),
-        ("physical_target_verified", True),
-        ("hardware_kernel_executed", True),
+        ("target_observed", execution_target),
+        ("physical_target_verified", physical),
+        ("hardware_kernel_executed", physical),
         ("native_kernel_executed", True),
-        ("simulator_kernel_executed", False),
-        ("simulator_target_verified", False),
+        ("simulator_kernel_executed", not physical),
+        ("simulator_target_verified", not physical),
         ("cpu_fallback_used", False),
         ("ready_verified", True),
         ("hardware_release_attempted", True),
@@ -2855,9 +2863,9 @@ def _require_backend_contract(
         raise ValueError("terminal physical profile is not prepared_wave_v1")
     if terminal.get("hardware_profile") != "prepared_wave_v1":
         raise ValueError("terminal hardware profile is not prepared_wave_v1")
-    if terminal.get("observed_rank_count") != 1:
+    if not _fact_matches_expected(terminal.get("observed_rank_count"), 1):
         raise ValueError("terminal rank count is not one")
-    if terminal.get("tasklets_per_dpu") != tasklets:
+    if not _fact_matches_expected(terminal.get("tasklets_per_dpu"), tasklets):
         raise ValueError("terminal tasklet count does not match route")
     if terminal.get("active_rank_indices") != [0]:
         raise ValueError("terminal active rank set is not exactly one rank")
@@ -5151,6 +5159,60 @@ def _wave_normalized_configuration(path: Path) -> tuple[dict[str, Any], str]:
     return normalized_mapping, _sha256_bytes(_canonical_bytes(normalized_mapping))
 
 
+def _wave_portable_qasm_configuration(
+    normalized: Mapping[str, Any], configuration_path: Path, provenance: Mapping[str, Any]
+) -> dict[str, Any]:
+    """Canonicalize staged QASM locations for private comparison, not raw evidence."""
+
+    configuration_path = Path(configuration_path)
+    raw = _mapping(yaml.safe_load(configuration_path.read_text()), "raw configuration")
+    raw_cases = _mapping(raw.get("cases"), "raw cases")
+    result = json.loads(canonical_json(normalized))
+    cases = _mapping(result.get("cases"), "normalized cases")
+    if set(cases) != set(raw_cases):
+        raise ValueError("portable QASM normalized case set differs from YAML")
+    bindings: dict[str, str] = {}
+    for binding in provenance.get("qasm_source_bindings", []):
+        binding = _mapping(binding, "QASM source binding")
+        prepared = binding.get("prepared_path")
+        digest = _wave_lower_sha(binding.get("qasm_sha256"), "QASM source hash", 64)
+        if not isinstance(prepared, str) or not prepared:
+            raise ValueError("portable QASM source binding lacks prepared_path")
+        if prepared in bindings and bindings[prepared] != digest:
+            raise ValueError("portable QASM conflicting source bindings")
+        bindings[prepared] = digest
+    used = set()
+    for case_id, raw_case in raw_cases.items():
+        circuit = _mapping(_mapping(raw_case, "raw case").get("circuit"), "raw circuit")
+        target = _mapping(_mapping(cases[case_id], "normalized case").get("circuit"), "normalized circuit")
+        if circuit.get("kind") != "qasm_file":
+            continue
+        relative = circuit.get("path")
+        if (not isinstance(relative, str) or not relative
+                or Path(relative).is_absolute() or ".." in Path(relative).parts
+                or Path(relative).as_posix() != relative):
+            raise ValueError("portable QASM requires a safe relative YAML path")
+        observed = target.get("path")
+        if not isinstance(observed, str) or ".." in Path(observed).parts:
+            raise ValueError("portable QASM normalized path is invalid")
+        observed_path, relative_path = Path(observed), Path(relative)
+        if (target.get("kind") != "qasm_file"
+                or (observed_path.is_absolute()
+                    and observed_path.parts[-len(relative_path.parts):] != relative_path.parts)
+                or (not observed_path.is_absolute() and observed != relative)):
+            raise ValueError("portable QASM normalized path differs from YAML suffix")
+        archived = configuration_path.parent / relative
+        if (not archived.resolve().is_relative_to(configuration_path.parent.resolve())
+                or not archived.is_file() or relative not in bindings
+                or _file_sha256(archived) != bindings[relative]):
+            raise ValueError("archived QASM bytes do not match private source binding")
+        used.add(relative)
+        target["path"] = relative
+    if used != set(bindings):
+        raise ValueError("portable QASM source bindings differ from configured paths")
+    return result
+
+
 def _wave_sha256sums(archive_root: Path) -> dict[str, str]:
     """Read the fixed archive checksum file without mixing binary identities."""
 
@@ -5203,6 +5265,8 @@ def _wave_private_archive(
     raw_root: Path,
     provenance_path: Path,
     manifest: Mapping[str, Any],
+    *,
+    portable_qasm: bool = False,
 ) -> dict[str, Any]:
     """Verify the fixed prelaunch archive used by the physical runner."""
 
@@ -5249,6 +5313,9 @@ def _wave_private_archive(
         "SHA256SUMS": _file_sha256(checksums_path),
     }
     normalized, normalized_sha = _wave_normalized_configuration(configuration_path)
+    if portable_qasm:
+        normalized = _wave_portable_qasm_configuration(normalized, configuration_path, provenance)
+        normalized_sha = _sha256_bytes(_canonical_bytes(normalized))
     configuration_sha = _file_sha256(configuration_path)
     if provenance.get("configuration_sha256") != configuration_sha:
         raise ValueError("wave provenance configuration_sha256 does not match physical.yml")
@@ -5261,6 +5328,10 @@ def _wave_private_archive(
         "manifest normalized experiment configuration",
     )
     manifest_normalized = json.loads(canonical_json(manifest_experiment))
+    if portable_qasm:
+        manifest_normalized = _wave_portable_qasm_configuration(
+            manifest_normalized, configuration_path, provenance
+        )
     if manifest_normalized != normalized:
         raise ValueError(
             "manifest.configuration.experiment does not match archived physical.yml"

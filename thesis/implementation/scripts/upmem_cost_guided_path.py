@@ -1497,12 +1497,7 @@ def write_execution_packet(directory: Path, stage: str, output: Path, execution_
                             study: dict, workload: dict, *, simulator: bool = False,
                             cpu_reference: bool = False) -> dict:
     """Stage the selected paths for the existing runner; never start execution."""
-    import yaml
-    from quantum_bench.evidence import canonical_json
-    from quantum_bench.experiment import load_experiment_config
     from qualify_upmem_path_candidates import prepare_cost_guided_config
-    from qualify_quantized_upmem_execution import write_checksums, verify_checksums
-    from upmem_path_heuristic import _canonical_bytes
 
     binding, normalization, initial_profile = _load_preparation(directory, study, workload)
     predecessors = _stage_prefix(stage)
@@ -1523,6 +1518,17 @@ def write_execution_packet(directory: Path, stage: str, output: Path, execution_
                                                      cpu_reference=cpu_reference)
     if not simulator and not cpu_reference:
         provenance["execution_budget"] = remaining_execution_budget(directory, stage, manifest, study, workload)
+    return _write_packet_files(output, execution_root, config, provenance, manifest, binding, profile,
+                               normalization, study)
+
+
+def _write_packet_files(output, execution_root, config, provenance, manifest, binding, profile, normalization, study):
+    import yaml
+    from quantum_bench.evidence import canonical_json
+    from quantum_bench.experiment import load_experiment_config
+    from qualify_quantized_upmem_execution import write_checksums, verify_checksums
+    from upmem_path_heuristic import _canonical_bytes, _wave_portable_qasm_configuration
+
     output.mkdir(parents=True, exist_ok=False)
     for source in provenance["qasm_source_bindings"]:
         data = Path(source["source_path"]).read_bytes()
@@ -1536,6 +1542,7 @@ def write_execution_packet(directory: Path, stage: str, output: Path, execution_
     with configuration.open("x", encoding="utf-8") as stream:
         yaml.safe_dump(config, stream, sort_keys=False, allow_unicode=False)
     normalized = json.loads(canonical_json(load_experiment_config(configuration)))
+    normalized = _wave_portable_qasm_configuration(normalized, configuration, provenance)
     binary_manifest = {str(execution_root / "native/upmem/runtime/bin" / name): digest
                        for name, digest in study["executor"]["binaries"].items()}
     _write_new_json(output / "binary_sha256.json", binary_manifest)
@@ -1551,9 +1558,86 @@ def write_execution_packet(directory: Path, stage: str, output: Path, execution_
     _write_new_json(output / "normalization.json", normalization)
     write_checksums(output)
     verify_checksums(output)
-    return {"experiment_id": experiment_id, "configuration_sha256": _file_digest(configuration),
+    return {"experiment_id": config["experiment_id"], "configuration_sha256": _file_digest(configuration),
             "packet_checksums_sha256": _file_digest(output / "SHA256SUMS"),
             "expected_attempts": provenance["expected_prepared_attempts"], "physical_admission": "not_performed"}
+
+
+def write_adapter_packets(output: Path, execution_root: Path, study: dict) -> dict:
+    """Small source-specific CPU/SDK check; never a calibration observation."""
+    from qualify_upmem_path_candidates import cost_guided_adapter_fixture, prepare_cost_guided_config
+
+    binding = research_binding(study)
+    normalization = {"purpose": "adapter_correctness_only"}
+    profile = {"purpose": "adapter_correctness_only"}
+    manifest, workload = cost_guided_adapter_fixture(binding, profile, normalization)
+    output.mkdir(parents=True, exist_ok=False)
+    for name, value in (("selection", manifest), ("workload", workload), ("binding", binding)):
+        _write_new_json(output / f"{name}.json", value)
+    results = {}
+    for target in ("cpu", "sdk"):
+        config, provenance = prepare_cost_guided_config(
+            manifest, workload, execution_root=execution_root,
+            experiment_id=f"upmem-cost-guided-adapter-{target}-{binding['source_sha'][:8]}",
+            simulator=target == "sdk", cpu_reference=target == "cpu",
+        )
+        results[target] = _write_packet_files(output / target / "preregistration", execution_root,
+                                              config, provenance, manifest, binding, profile, normalization, study)
+    return results
+
+
+def export_execution_handoff(directory: Path, stage: str, packet: Path, qualification: Path,
+                              candidate_cpu: Path, study: dict, workload: dict) -> dict:
+    """Pin locally reverified raw evidence for an exact remote once-only invocation."""
+    from quantum_bench.experiment import default_validation_policy_id
+    from qualify_upmem_path_candidates import cost_guided_adapter_fixture
+    from qualify_quantized_upmem_execution import verify_checksums
+    from upmem_cost_guided_evidence import verify_qualification
+
+    binding, normalization, initial = _load_preparation(directory, study, workload)
+    prefix = _stage_prefix(stage)
+    profile = (initial if stage == "initial" else _pretest_profile(directory, study, workload)
+               if stage == "evaluation" else _fitted_profile(directory, prefix[-1], study, workload))
+    manifest = _read_json(directory / f"{stage}_round.json")
+    verify_checksums(packet)
+    for name, value in (("binding", binding), ("normalization", normalization),
+                        ("profile", profile), ("round_manifest", manifest)):
+        if _read_json(packet / f"{name}.json") != value:
+            raise ValueError(f"Physical packet {name} differs from preparation")
+    budget = remaining_execution_budget(directory, stage, manifest, study, workload)
+    if _read_json(packet / "physical.yml.provenance.json").get("execution_budget") != budget:
+        raise ValueError("Physical packet budget differs from verified predecessors")
+    adapter_manifest, adapter_workload = cost_guided_adapter_fixture(
+        binding, {"purpose": "adapter_correctness_only"}, {"purpose": "adapter_correctness_only"},
+    )
+    if (_read_json(qualification / "binding.json") != binding
+            or _read_json(qualification / "selection.json") != adapter_manifest
+            or _read_json(qualification / "workload.json") != adapter_workload):
+        raise ValueError("Adapter qualification must use the unchanged source-specific fixture")
+    reports = {target: verify_qualification(qualification / target / "raw", adapter_manifest,
+                                           adapter_workload, binding, study, target=target)
+               for target in ("cpu", "sdk")}
+    reports["candidate_cpu"] = verify_qualification(candidate_cpu, manifest, workload, binding, study, target="cpu")
+    receipt = {"all_passed": True, "source_sha": binding["source_sha"],
+               "executor_source": study["executor"]["source"], "study_hash": record_hash(study),
+               "numeric_policy": study["executor"]["numeric_policy"],
+               "binary_sha256": study["executor"]["binaries"],
+               "validation_policy_id": default_validation_policy_id(), **reports}
+    predecessors = []
+    for previous in prefix:
+        prior, accepted = _accepted_round(directory, previous, study, workload)
+        predecessors.append({"stage": previous, "manifest": prior, "accepted": accepted})
+    handoff = {"kind": "upmem_cost_guided_execution_handoff_v1", "stage": stage,
+               "source_sha": binding["source_sha"], "executor_source": study["executor"]["source"],
+               "study_hash": record_hash(study), "binding_hash": record_hash(binding),
+               "round_manifest_hash": record_hash(manifest), "profile_hash": record_hash(profile),
+               "normalization_hash": record_hash(normalization),
+               "packet_checksums_sha256": _file_digest(packet / "SHA256SUMS"),
+               "qualification_receipt": receipt, "qualification_hash": record_hash(receipt),
+               "predecessors": predecessors, "budget": budget}
+    path = directory / f"{stage}_handoff.json"
+    _write_new_json(path, handoff)
+    return {"handoff": str(path), "handoff_sha256": _file_digest(path), "physical_admission": "not_performed"}
 
 
 def main() -> None:
@@ -1561,7 +1645,7 @@ def main() -> None:
     parser.add_argument("command", choices=(
         "inspect", "initialize", "initial-search", "freeze-initial", "accept", "fit",
         "feedback-search", "freeze-feedback", "freeze-pretest", "evaluation-search", "freeze-evaluation",
-        "write-packet",
+        "write-packet", "write-adapter-packets", "export-handoff", "execute-stage",
     ))
     parser.add_argument("--study", type=Path, default=DEFAULT_STUDY)
     parser.add_argument("--directory", type=Path)
@@ -1573,9 +1657,30 @@ def main() -> None:
     parser.add_argument("--execution-root", type=Path)
     parser.add_argument("--simulator", action="store_true")
     parser.add_argument("--cpu-reference", action="store_true")
+    parser.add_argument("--packet", type=Path)
+    parser.add_argument("--qualification", type=Path)
+    parser.add_argument("--candidate-cpu", type=Path)
+    parser.add_argument("--handoff", type=Path)
+    parser.add_argument("--handoff-sha256")
     args = parser.parse_args()
     study, workload, budget = load_study(args.study)
     if args.command != "inspect":
+        if args.command == "execute-stage":
+            if any(value is None for value in (args.packet, args.output, args.handoff, args.handoff_sha256)):
+                parser.error("--packet, --output, --handoff and --handoff-sha256 are required")
+            from upmem_cost_guided_execution import execute_stage
+            result = execute_stage(args.packet, args.output, handoff=args.handoff,
+                                   handoff_sha256=args.handoff_sha256, study=study, workload=workload)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            if not result["success"]:
+                raise SystemExit(1)
+            return
+        if args.command == "write-adapter-packets":
+            if args.output is None or args.execution_root is None:
+                parser.error("--output and --execution-root are required")
+            result = write_adapter_packets(args.output, args.execution_root, study)
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return
         if args.directory is None:
             parser.error("--directory is required for preparation commands")
         if args.command == "initialize":
@@ -1599,6 +1704,11 @@ def main() -> None:
                 parser.error("--stage is required")
             if args.command == "accept":
                 result = accept_round(args.directory, args.stage, args.archive, study, workload)
+            elif args.command == "export-handoff":
+                if any(value is None for value in (args.packet, args.qualification, args.candidate_cpu)):
+                    parser.error("--packet, --qualification and --candidate-cpu are required")
+                result = export_execution_handoff(args.directory, args.stage, args.packet, args.qualification,
+                                                   args.candidate_cpu, study, workload)
             elif args.command == "write-packet":
                 if args.output is None or args.execution_root is None:
                     parser.error("--output and --execution-root are required for write-packet")

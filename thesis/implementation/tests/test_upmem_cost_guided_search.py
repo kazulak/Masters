@@ -20,6 +20,9 @@ from quantum_bench.model import TensorNetwork, TensorSpec
 
 
 ROOT = Path(__file__).parents[1]
+# Match the sibling-import path of the private script entry point, including
+# when this fixture is imported by a single test under the standard make target.
+sys.path.insert(0, str(ROOT / "scripts"))
 SPEC = importlib.util.spec_from_file_location(
     "upmem_cost_guided_search_test", ROOT / "scripts/upmem_cost_guided_path.py"
 )

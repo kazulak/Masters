@@ -42,11 +42,11 @@ def _digest(value, label, length=64):
     return value
 
 
-def _executable_identity(binaries, contract):
+def _executable_identity(binaries, contract, *, executor="upmem_physical"):
     # The same payload as cli._executable_identity, using verified archived
     # digests instead of reopening remote executable paths on this machine.
     return executable_id({
-        "executor": "upmem_physical", "abi_version": 5,
+        "executor": executor, "abi_version": 5,
         "static_file_sha256": {k: v["sha256"] for k, v in binaries.items()},
         "request_transport": contract["request_transport"], "source_commit": None,
         "dependency_versions": {}, "execution_policy": {
@@ -258,7 +258,9 @@ def extract_round_observations(raw_root, round_manifest, workload, binding, stud
     _equal(round_manifest["warmup_blocks"], [0], "warmup blocks")
     _equal(round_manifest["measurement_blocks"], list(range(1, measured + 1)), "measurement blocks")
     archive_root = root.parent / "preregistration"
-    archive = wave._wave_private_archive(root, archive_root / "physical.yml.provenance.json", manifest)
+    archive = wave._wave_private_archive(
+        root, archive_root / "physical.yml.provenance.json", manifest, portable_qasm=True,
+    )
     provenance = archive["provenance"]
     for field, value in {
         "round_manifest_hash": _hash(round_manifest), "binding_hash": _hash(binding),
@@ -269,7 +271,9 @@ def extract_round_observations(raw_root, round_manifest, workload, binding, stud
     _equal(manifest["source_commit"], source, "raw source commit")
     _equal(manifest["source_worktree_dirty"], False, "raw source cleanliness")
     _equal(manifest["status"], "completed", "raw completion")
-    experiment = manifest["configuration"]["experiment"]
+    experiment = wave._wave_portable_qasm_configuration(
+        manifest["configuration"]["experiment"], archive_root / "physical.yml", provenance,
+    )
     if experiment["defaults"]["timeout_s"] != 120.0:
         raise ValueError("physical attempt timeout must remain 120 seconds")
     expected = _selected(round_manifest, workload, study, experiment, archive_root)
@@ -405,3 +409,135 @@ def extract_round_observations(raw_root, round_manifest, workload, binding, stud
     result["physical_stage_elapsed_s"] = elapsed
     result["terminal_sha256"] = wave._file_sha256(terminal_path)
     return result
+
+
+def verify_qualification(raw_root, selection, workload, binding, study, *, target):
+    """Check exact replay CPU/SDK evidence, never use its timings for fitting."""
+    import yaml
+
+    if target not in {"cpu", "sdk"}:
+        raise ValueError("qualification target must be cpu or sdk")
+    root = Path(raw_root)
+    report = verify_artifacts(root)
+    manifest, samples, sessions = load_artifacts(root)
+    source = _digest(binding.get("source_sha"), "qualification source", 40)
+    contract = study["executor"]
+    _equal(contract["source"], wave.EXECUTION_SOURCE, "qualification executor source")
+    _equal(binding.get("executor_source"), contract["source"], "qualification binding executor")
+    _equal(binding.get("study_hash"), _hash(study), "qualification binding study")
+    _equal(binding.get("workload_hash"), study["workload"]["sha256"], "qualification binding workload")
+    _equal(selection.get("binding_hash"), _hash(binding), "qualification selection binding")
+    for field, value in (("request_transport", "packed_wave_v1"),
+                         ("numeric_policy", "split_complex_float32_v1"),
+                         ("schedule_policy", "static_dag_waves_v1"),
+                         ("geometry_policy", "panel_only_v1"), ("fuse_complex", True)):
+        _equal(contract[field], value, f"qualification executor {field}")
+    _equal(manifest["source_commit"], source, "qualification source")
+    _equal(manifest["source_worktree_dirty"], False, "qualification clean source")
+    _equal(manifest["status"], "completed", "qualification completion")
+    _equal(manifest["validation_policy_id"], default_validation_policy_id(), "qualification validation policy ID")
+    _equal(manifest["configuration"]["validation_policy"], dict(default_validation_policy()), "qualification validation policy")
+    experiment = manifest["configuration"]["experiment"]
+    _equal(experiment["experiment_identity_payload"]["validation_policy_id"], default_validation_policy_id(), "qualification experiment policy")
+    archive_root = root.parent / "preregistration"
+    archive = wave._wave_private_archive(
+        root, archive_root / "physical.yml.provenance.json", manifest, portable_qasm=True,
+    )
+    provenance = archive["provenance"]
+    for field, expected in {
+        "round_manifest_hash": _hash(selection), "binding_hash": _hash(binding),
+        "source_sha": source, "execution_source": study["executor"]["source"],
+        "workload_record_sha256": _hash(workload),
+    }.items():
+        _equal(provenance.get(field), expected, f"qualification {field}")
+    binaries = archive["binary_manifest"]
+    _equal({Path(path).name: digest for path, digest in binaries.items()}, study["executor"]["binaries"], "qualification binaries")
+    if len(binaries) != 3:
+        raise ValueError("qualification requires the three frozen binaries")
+    execution_root = Path(next(iter(binaries))).parents[4]
+    actual_config = yaml.safe_load((archive_root / "physical.yml").read_text())
+    expected_config, expected_provenance = qualifier.prepare_cost_guided_config(
+        selection, workload, execution_root=execution_root, experiment_id=actual_config["experiment_id"],
+        simulator=target == "sdk", cpu_reference=target == "cpu",
+    )
+    _equal(actual_config, expected_config, "qualification configuration")
+    _equal(provenance.get("expected_prepared_attempts"), expected_provenance["expected_prepared_attempts"], "qualification declared attempts")
+    expected = {}
+    for cell in selection["cells"].values():
+        for identifier, candidate in cell["candidates"].items():
+            case = cell["circuit_id"]
+            plan_key = f"path_{identifier}"
+            route = "cpu_reference" if target == "cpu" else cell["topology_id"]
+            instance = next(item for item in workload["instances"] if item["instance_id"] == case)
+            identities = {
+                "problem_id": instance["canonical_circuit"]["operation_identity"]["problem_id"],
+                "tensor_network_structure_id": experiment["plans"][plan_key]["planner"]["tensor_network_structure_id"],
+                "logical_plan_id": candidate["facts"]["logical_plan_id"],
+                "physical_plan_id": None if target == "cpu" else candidate["facts"]["physical_plan_id"],
+            }
+            expected[(case, plan_key, route)] = (identities, cell, candidate)
+    expected_sessions = len(expected) if target == "sdk" else 0
+    if len(samples) != len(expected) or len(sessions) != expected_sessions:
+        raise ValueError("qualification must contain exactly one attempt per declared route/path")
+    session_map = {s["session_instance_id"]: s for s in sessions}
+    seen, used_sessions = set(), set()
+    for sample in samples:
+        key = (sample["case_id"], sample["plan_id"], sample["route_id"])
+        if key not in expected or key in seen:
+            raise ValueError("qualification has an extra or duplicate path")
+        seen.add(key)
+        identities, cell, candidate = expected[key]
+        _equal(sample["status"], "success", "qualification success")
+        _equal(sample.get("failure"), None, "qualification failure")
+        for field, expected_identity in identities.items():
+            _equal(sample["identities"][field], expected_identity, f"qualification {field}")
+        for field in ("accuracy_qualified", "full_precision_threshold_applicable", "full_precision_passed",
+                      "policy_reference_applicable", "policy_reference_passed"):
+            _equal(sample["validation"][field], True, f"qualification {field}")
+        _equal(sample["numeric_facts"].get("numeric_policy"), contract["numeric_policy"], "qualification numeric policy")
+        _equal(sample["measurement"]["scope_id"], "steady_execution_v1", "qualification timing scope")
+        _digest(sample["output_sha256"], "qualification output digest")
+        if target == "sdk":
+            session_id = sample["session_instance_id"]
+            if session_id not in session_map or session_id in used_sessions:
+                raise ValueError("SDK qualification requires one fresh session per sample")
+            used_sessions.add(session_id)
+            session = session_map[session_id]
+            route = experiment["routes"][key[2]]
+            bindings = {field: {"path": route["options"][field], "sha256": binaries[route["options"][field]]}
+                        for field in ("dpu_binary", "host_binary", "initialization_binary")}
+            _equal(sample["identities"]["executable_id"], _executable_identity(bindings, study["executor"], executor="upmem_sdk_simulator"), "SDK executable identity")
+            facts, _ = wave._joined_backend_facts(sample, session, allow_null_overrides=True)
+            topology = next(t for t in study["executor"]["topologies"] if t["topology_id"] == cell["topology_id"])
+            wave._require_backend_contract(
+                sample, session, facts, {"topology": topology, "resource_admission": candidate["facts"]["resource_admission"]},
+                study["executor"], bindings, claim_policy="diagnostic_v1", execution_target="sdk_simulator",
+            )
+            for field in ("logical_plan_id", "physical_plan_id"):
+                _equal(facts.get(field), identities[field], f"qualification backend {field}")
+        else:
+            # NumPy is a direct route: native sessions and target flags are not emitted.
+            _equal(sample["session_instance_id"], None, "CPU qualification session")
+            for field, value in (("backend_id", "numpy_cpu_v1"), ("execution_class", "cpu_host")):
+                _equal(sample["backend_facts"].get(field), value, f"CPU qualification {field}")
+            for field in ("cpu_fallback_used", "test_double_execution", "hardware_kernel_executed", "simulator_kernel_executed"):
+                _equal(sample["backend_facts"].get(field, False), False, f"CPU qualification {field}")
+            dependencies = wave._mapping(binding.get("dependencies"), "qualification dependencies")
+            cpu_executable = executable_id({
+                "executor": "numpy_dag", "abi_version": None, "static_file_sha256": {},
+                "request_transport": None, "source_commit": source,
+                "dependency_versions": {name: dependencies[name] for name in ("numpy", "opt_einsum")},
+            })
+            _equal(sample["identities"]["executable_id"], cpu_executable, "CPU executable identity")
+    if used_sessions != set(session_map):
+        raise ValueError("qualification has unused sessions")
+    return {"purpose": "correctness_only", "target": target, "all_passed": True,
+            "source_sha": source, "executor_source": study["executor"]["source"],
+            "study_hash": _hash(study), "selection_hash": _hash(selection), "round_manifest_hash": _hash(selection),
+            "workload_hash": _hash(workload), "binary_sha256": dict(study["executor"]["binaries"]),
+            "numeric_policy": study["executor"]["numeric_policy"],
+            "validation_policy_id": default_validation_policy_id(),
+            "sample_count": len(samples), "session_count": len(sessions),
+            "canonical_report_hash": _hash(report),
+            "raw_sha256": {name: wave._file_sha256(root / name) for name in ("manifest.json", "samples.jsonl", "sessions.jsonl")},
+            "preregistration_sha256": wave._file_sha256(archive_root / "SHA256SUMS")}
