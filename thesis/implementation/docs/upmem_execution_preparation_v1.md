@@ -1,3 +1,7 @@
+> **HISTORICAL PREPARATION RECORD.** This file documents an intermediate integration
+> state. The final executor and final P6 state are recorded in `../STATUS.md`. Do not
+> interpret “pending” text below as the current work queue.
+>
 # Execution Preparation v1
 
 ## Status and Boundary

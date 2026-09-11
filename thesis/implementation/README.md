@@ -1,210 +1,196 @@
-# UPMEM Tensor-Network Quantum Simulation
+# Implementation
 
-This repository is the thesis implementation for benchmarking tensor-network
-(TN) quantum-circuit simulation across direct CPU/TN baselines and UPMEM.
-It is a research prototype, not a general-purpose quantum simulator.
+This directory contains the active implementation used for the Master's thesis research
+on exact tensor-network quantum-circuit simulation on UPMEM PIM hardware.
 
-## Active Flow
+**Final status:** research implementation frozen. The executor and P6 path-search campaign
+are complete; no further optimization is required for the thesis result.
+
+## Final execution flow
 
 ```text
 SimulationJob
   -> target-neutral TensorNetwork
-  -> planner path
+  -> complete contraction path
   -> ContractionDAG
-  -> direct NumPy / Quimb / cotengra / QuEST execution
-     or UpmemPlan -> ABI-v4 UPMEM runtime
+  -> target-specific execution
+
+CPU/TN routes:
+  NumPy same-DAG replay / Quimb / cotengra / QuEST
+
+Final UPMEM route:
+  ContractionDAG
+  -> UpmemPlan
+  -> static_dag_waves_v1
+  -> packed_wave_v1
+  -> persistent native ABI-v5 prepared-wave execution
+  -> WRAM-panel DPU kernel
+  -> deterministic host reconstruction/reduction
   -> canonical evidence
-  -> report
 ```
 
-`TensorNetwork` is semantic and non-executable: it describes tensors,
-connectivity, inputs, and the requested output. `ContractionDAG` is the sole
-logical execution IR: it records the selected contraction order, explicit
-dependencies, local slicing branches, and reductions. It contains no DPU
-placement, tiles, kernels, scales, binary paths, or machine settings.
+`TensorNetwork` contains semantic tensor-network structure only. `ContractionDAG` is the
+logical execution IR. `UpmemPlan` and the static DAG-wave scheduler contain target
+placement, tiling, topology, and execution-policy decisions.
 
-`UpmemPlan` is a target-specific mapping of a DAG. It selects the numeric
-policy, output/K tiles, topology, stages, and kernel policy without changing
-the logical plan. ABI-v4 executes real-valued tiles; complex contractions use
-four real products under the selected split-complex policy.
+## Frozen UPMEM profile
 
-## Commands
+The final retained executor is commit
+`459935f586fdd16c82013838e6d27a12604c3093`, tagged
+`thesis-upmem-kernel-schedule-system-v1`.
 
-All commands run from `thesis/implementation`.
-
-```bash
-# Create or update ../.venv, build the CPU QuEST runner, then inspect tools.
-make setup
-make doctor
-make test
-make sequential-conformance
-make sequential-baseline
-
-# Default software benchmark configuration.
-make plan CONFIG=configs/tn_benchmark_reset.yml OUTPUT=runs/reset-plan
-make run CONFIG=configs/tn_benchmark_reset.yml OUTPUT=runs/reset-run
-make verify INPUT=runs/reset-run
-make report INPUT=runs/reset-run REPORT_OUTPUT=runs/reset-report
-
-# Build the active UPMEM ABI-v4 host and DPU binaries.
-make build-upmem-runtime UPMEM_TASKLETS=1
-
-# Physical execution is opt-in. Prepare an ignored target-specific copy first.
-PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
-  --template configs/tn_benchmark_physical_smoke.yml \
-  --output runs/configs/eth/one-dpu-float32.yml \
-  --mode float32-smoke \
-  --rank-path /dev/dpu_rank0 \
-  --session-root runs/upmem_sessions/eth-one-dpu \
-  --expected-cpus 0
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify \
-  PHYSICAL_CONFIG=runs/configs/eth/one-dpu-float32.yml \
-  OUTPUT=runs/evidence/eth-one-dpu-float32
-PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
-  --input runs/evidence/eth-one-dpu-float32 \
-  --expected-samples 6 --expected-sessions 6 \
-  --numeric-policy split_complex_float32_v1
-
-```
-
-The frozen sequential one-rank/one-DPU/one-tasklet reference contract, operator
-workflow, external baseline roles, and claim limits are documented in
-[docs/sequential_upmem_baseline.md](docs/sequential_upmem_baseline.md). Its
-qualifier prepares ignored configs and inspects or bundles existing artifacts;
-it never runs hardware, tags a commit, or publishes a release.
-
-The analysis-only
-[`complex_int8_shared_scale_v1`](docs/quantized_contraction_policy_v1.md)
-policy replays every binary contraction with per-operand shared-scale int8 and
-an explicit int64 software reference. Its tracked characterization is
-numerical and logical-size evidence only; it does not execute or predict DPU
-performance and does not alter the accepted float32 route.
-
-The physically validated hierarchical diagnostic is documented in
-[docs/hierarchical_parallel_diagnostic.md](docs/hierarchical_parallel_diagnostic.md)
-and frozen at tag `thesis-upmem-hierarchical-parallel-diagnostic-v1`. It covers
-the six Stress18 tasklet/DPU routes on one rank under `diagnostic_v1` and
-`powersave`; its speedups are descriptive and not `physical_performance_v1`
-claims.
-
-`configs/tn_benchmark_reset.yml` is the default CPU/TN software smoke suite.
-`configs/tn_benchmark_physical_smoke.yml` is the one-DPU physical float32
-smoke template. Do not edit it for a target machine or rely on it as a Make
-default. The M7C physical
-preparation script creates an ignored copy below `runs/configs/eth/`, resolving
-the template paths before it writes target-specific binary, session, affinity,
-and rank paths. The probe mode emits one float32 measurement; float32 smoke
-emits one warmup plus five measurements; int8 smoke is descriptive only.
-`configs/m7c_workload_selection.json` preregisters the source-only candidate
-selection for the later scaling diagnostic. It selects the deterministic
-18-qubit quantization-stress circuit as the primary kernel-scaling workload and
-the structurally different 18-qubit GHZ chain as confirmatory evidence; neither
-choice used simulator or physical timing. Supply the later scaling configuration
-explicitly and check it before an ETH run:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python scripts/select_m7c_workload.py --check \
-  configs/m7c_workload_selection.json \
-  --config configs/tn_benchmark_physical_scaling_diagnostic.yml
-```
-
-The tracked scaling templates have distinct roles:
-
-- `tn_benchmark_physical_scaling_diagnostic.yml`: one warmup and five measured
-  complete blocks for the selected stress18 diagnostic, using NumPy plus 1 DPU
-  x 1 tasklet, 1 DPU x 8 tasklets, 2 DPUs x 8 tasklets, and 4 DPUs x 8 tasklets.
-- `tn_benchmark_physical_scaling.yml`: the conditional stress18 thesis campaign
-  with two warmup and 30 measured blocks under `physical_performance_v1`.
-- `tn_benchmark_physical_scaling_confirmation.yml`: a smaller GHZ18 diagnostic
-  that tests whether the controlled scaling observation generalizes across a
-  different circuit structure.
-
-Prepare an ignored mixed-campaign copy and invoke the committed campaign script
-only on the designated ETH machine. It runs `quantum_bench.cli run
---allow-physical`, never weakens the physical-only `qualify` command.
-
-`plan` writes a deterministic experiment plan without execution. `run` writes
-canonical evidence. `verify` checks evidence identities and integrity.
-`report` only reads existing evidence and produces tables and plots.
-
-Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v4`,
-sessions use `evidence_session_v1`, and reports use `evidence_report_v5`.
-Earlier sample evidence is unsupported. Sample `status`
-describes whether the complete attempt finished: a validator exception produces
-a failed sample, while a policy-reference or accuracy qualification miss
-remains a successful sample with its measurement and facts retained.
-Policy-reference correctness is reported separately from `accuracy_qualified`.
-
-The collection policy records deterministic warmup and measurement blocks,
-their execution order, and fresh-session lifecycle. Reports retain attempted,
-successful, failed, and unsupported measurement counts; summarize successful
-measurements with median, raw MAD, and a deterministic percentile-bootstrap
-interval; and reserve block-paired speedup intervals for admissible physical
-comparisons. Topology scaling is emitted separately in `scaling.csv`, never in
-CPU-versus-UPMEM `speedups.csv`. Scaling rows retain the semantic/logical,
-numeric, kernel, validation, collection, physical-plan, executable, resource,
-and dominant-work admission identities; primary comparisons begin from one
-DPU or one tasklet, with other increasing-resource pairs marked secondary.
-SDK-simulator reports remain diagnostic-only.
-
-## Evidence and Comparison Rules
-
-Each attempted warmup or measurement creates a canonical sample record.
-Manifests record problem, logical-plan, physical-plan, executable,
-environment, experiment, session, and sample identities. Failed and
-unsupported attempts remain visible.
-
-Timing scopes are explicit. `steady_execution_v1` excludes planning and
-session lifecycle; `simulation_end_to_end_v1` includes route-specific
-preparation through decoded output. Reference calculation, validation,
-hashing, and report writing are outside both scopes.
-
-Only evidence with compatible problem, logical-plan relationship, timing
-scope, validation, and physical provenance can support a performance claim.
-SDK-simulator runs are correctness evidence only.
-
-## Current Capability Boundary
-
-Controlled software tests cover the active CPU/TN and SDK-simulator paths,
-including ABI-v4 WRAM-panel float32/int8 simulator checks against CPU replay. Tag
-`thesis-m6-software-ready-v1` and its GitHub release bundle exist, establishing
-completed M6 software qualification. The reset physical UPMEM route remains
-pending and has **not** yet been qualified on ETH hardware. The repository
-therefore makes no reset-route claim of speedup, energy efficiency, multi-rank
-scaling, broad graph residency, or hardware-calibrated planning.
-
-The active native kernel is `dpu_real_tile_v4_wram_panel_v1`: a bounded dense
-real-tile kernel with global shared B panels and tasklet-indexed A/output WRAM
-buffers. Tag `thesis-m7a-wram-kernel-software-ready-v1` and its release bundle
-record exact-head SDK-simulator qualification for this kernel. That evidence is
-software/simulator-qualified only and does not establish a physical timing,
-scaling, energy, or kernel-competitiveness result.
-
-The active native runtime uses pinned SimplePIM management types and its
-initialization kernel around raw-SDK allocation and dispatch. It is not yet a
-qualified high-level SimplePIM scheduler or compute route. The retained
-`native/upmem/pidcomm_qualification/` source is standalone future source;
-PID-Comm is not an active communication provider or public command. ATiM is
-not integrated.
-
-## Repository Layout
+The retained study policy is:
 
 ```text
-src/quantum_bench/
-  model.py, circuits.py, lowering.py, planning.py, numerics.py, results.py
-  cpu.py, baselines.py, experiment.py, evidence.py, report.py, cli.py
-  upmem/plan.py, tiling.py, protocol.py, native_session.py, runtime.py
-
-native/upmem/runtime/       active ABI-v4 host/DPU build
-native/upmem/pidcomm_qualification/  standalone compatibility harness
-configs/tn_benchmark_reset.yml       software benchmark suite
-configs/tn_benchmark_physical_smoke.yml  one-DPU physical smoke template
-configs/m7c_workload_selection.json  preregistered M7C workload selection
-configs/tn_benchmark_physical_scaling.yml  conditional 30-block campaign
+transport:           packed_wave_v1
+schedule:            static_dag_waves_v1
+complex execution:   fused_when_admitted_v1
+geometry:            panel_only_v1
+intermediates:       host_roundtrip_v1
+primary numeric:     split_complex_float32_v1
+rank count:          1
 ```
 
-Generated evidence is written below `runs/` and is ignored by Git. Reviewed
-historical snapshots remain in `thesis_results/`; reports never edit them.
+Tasklet parallelism, multi-DPU contraction, and independent-DAG execution on disjoint DPU
+groups are part of the frozen executor. Outer-K1 specialization and production residency
+were evaluated but not retained. Exact slicing remains an explicitly declared
+transformation rather than an automatic production policy.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for ownership boundaries and
-[STATUS.md](STATUS.md) for implemented versus pending capabilities.
+## Final P6 path optimization
+
+The P6 software source is
+`2beea27411c16e90ed76988613ddb00bcc09f942`, tagged
+`thesis-upmem-cost-guided-software-v1`.
+
+The five-term launch-aware ranking surrogate is:
+
+```text
+C =
+    theta_H * H / s_H
+  + theta_P * P / s_P
+  + theta_N * N / s_N
+  + sum_launch max_dpu(
+        theta_M * M[launch,dpu] / s_M
+      + theta_W * W[launch,dpu] / s_W
+    )
+```
+
+The final frozen integer weights are:
+
+```text
+[1, 2, 1, 1, 5]
+```
+
+These are **ranking parameters** over normalized model terms. They are not measured
+runtime percentages and are not unique architectural constants.
+
+The final P6 audit package is:
+
+```text
+thesis_results/upmem_cost_guided_path_v1/
+```
+
+Its accepted physical campaign used 678 attempts within the 768-attempt ceiling, with
+zero retries and zero replacements.
+
+## Main P6 result
+
+The primary held-out comparison is R/U:
+
+```text
+R = UPMEM-aware reranking of the conventional F search trace
+U = separate search with UPMEM cost fed back during adaptive generation
+```
+
+Session-inclusive R/U:
+
+```text
+1.0013425605931643x
+descriptive paired-block 95% interval:
+[0.9948355448727421, 1.0085087497299605]
+same selected path: 8 / 12 cells
+```
+
+Therefore the bounded experiment does not resolve an additional physical benefit from
+UPMEM-guided candidate generation beyond UPMEM-aware reranking.
+
+UPMEM-aware selection does improve on the FLOP-selected path:
+
+```text
+F/U overall session-inclusive: 1.040424568249768x
+F/U 4-DPU session-inclusive:   1.0818412974163845x
+F/U 4-DPU steady wall:         1.1153755638648002x
+```
+
+Search time is an offline planning cost and is reported separately from physical
+session-inclusive execution.
+
+## Install and test
+
+From this directory:
+
+```bash
+python3.10 -m venv ../.venv
+../.venv/bin/python -m pip install --upgrade pip
+../.venv/bin/python -m pip install -c ci/constraints.txt -e '.[dev,path-search]'
+
+make PYTHON=../.venv/bin/python test
+../.venv/bin/python -m ruff check src tests scripts
+```
+
+The publication CI also builds the QuEST CPU runner and verifies the final P6 audit
+package.
+
+## Normal software commands
+
+```bash
+make PYTHON=../.venv/bin/python plan \
+  CONFIG=configs/tn_benchmark_reset.yml \
+  OUTPUT=runs/example-plan
+
+make PYTHON=../.venv/bin/python run \
+  CONFIG=configs/tn_benchmark_reset.yml \
+  OUTPUT=runs/example-run
+
+make PYTHON=../.venv/bin/python verify \
+  INPUT=runs/example-run
+
+make PYTHON=../.venv/bin/python report \
+  INPUT=runs/example-run \
+  REPORT_OUTPUT=runs/example-report
+```
+
+## Physical hardware warning
+
+Historical physical UPMEM experiments are already complete and frozen. Do not rerun them
+as part of normal repository verification.
+
+The physical controller intentionally requires exact source, binaries, SDK, resource
+ownership, CPU/governor facts, evidence storage, and a once-only invocation identity.
+A new physical campaign would be a new experiment and must not be presented as a
+reproduction of the accepted P6 observations without a separately frozen protocol.
+
+## Evidence rules
+
+Manifests use `evidence_manifest_v2`, samples use `evidence_sample_v4`, sessions use `evidence_session_v1`, and reports use `evidence_report_v5`.
+Simulator timing is never physical-performance evidence. Numerical-policy correctness is
+separate from approximation error. Missing component timings are unavailable, not zero.
+Speedup claims use compatible timing boundaries and matched controls.
+
+For P6, evaluation data never enter fitting. Method aliases that select the same path
+share one physical observation rather than being counted as independent samples.
+
+## Layout
+
+```text
+src/quantum_bench/        Python implementation
+native/                   QuEST and UPMEM native code
+configs/                  experiment/workload definitions
+scripts/                  qualification, analysis, and bounded study controllers
+tests/                    software and protocol tests
+docs/                     architecture/evidence research records
+thesis_results/           tracked compact result/evidence packages
+```
+
+See `STATUS.md` for the final capability matrix and `docs/README.md` for the document
+index.

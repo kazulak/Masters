@@ -1,3 +1,7 @@
+> **SUPERSEDED PRE-FINAL STUDY.** Retained for provenance only. The final P6 physical
+> study is `upmem_cost_guided_path_v1.md` plus
+> `../thesis_results/upmem_cost_guided_path_v1/`.
+>
 # UPMEM Path Heuristic Generalization v1
 
 ## Scope

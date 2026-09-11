@@ -1,29 +1,74 @@
 # Tracked Thesis Results
 
-These directories are tracked evidence snapshots. They have different roles
-and must not be treated as one experiment.
+This directory contains research evidence packages with different scientific roles.
+Do not combine them as though they were one experiment.
 
-| Snapshot | Role | Model/profile/schema | Allowed claims | Not allowed |
-| --- | --- | --- | --- | --- |
-| [`current/`](current/) | Selected compact mixed research evidence for thesis writing. | Report schema `research_benchmark_pack_v1`; use the recorded normalized result schema, route, and timing metadata. | Claims supported by the normalized rows, validation status, and matching rules in its report. | Claims that combine incompatible routes, unverified GPU rows, or simulator timing with physical hardware performance. |
-| [`planner_v2/`](planner_v2/) | Modeled contraction-path planner hypothesis evidence. | Report schema `research_benchmark_pack_v1`; objective `upmem_path_cost_v2`, legacy component model `upmem_pressure_v1`, profiles and normalization recorded in the manifest. | Modeled candidate, objective-component, feasibility, sensitivity, and path-structure comparisons. | Hardware performance, hardware speedup, measured runtime, energy, or executed UPMEM claims. |
-| [`physical_hardware_mvp_v1/`](physical_hardware_mvp_v1/) | Physical UPMEM bring-up functionality evidence. | Report schema `research_benchmark_pack_v1`; hardware profile `hardware_mvp_l1_v2`; fixed one-DPU/one-tasklet dense MVP route and recorded validation schema. | Exact CPU-reference validation, allocation, kernel-execution, and directional transfer-accounting functionality. | Performance, speedup, energy, scaling, multi-DPU, generic tensor-network, or quantum-circuit claims. |
-| [`quantized_contraction_policy_v1/`](quantized_contraction_policy_v1/) | CPU-only shared-scale complex-int8 numerical characterization. | Analysis schema `quantized_contraction_policy_analysis_v1`; deterministic greedy paths; int64 software reference. | Phase-sensitive numerical error, propagation, logical encoded size, and accumulator requirements for the recorded circuits. | UPMEM speedup, measured transfer reduction, resource scaling, universal accuracy sufficiency, or default-policy claims. |
+## Final thesis result package
 
-`current/` is the default thesis-writing snapshot. `planner_v2/` is a model-only
-hypothesis surface, not a hardware benchmark. `physical_hardware_mvp_v1/` is a
-small physical functionality surface, not a performance result.
+### `upmem_cost_guided_path_v1/`
 
-Generated report packs remain under `runs/comparisons/` and are ignored. The
-default location is `runs/comparisons/research_pack/<timestamp>/`; a labeled
-pack such as `--label planner_v2` is written under
-`runs/comparisons/planner_v2/<timestamp>/`. Each namespace retains its own
-`latest` link. Raw tensor dumps and native build output are intentionally not
-tracked here. Raw ETH bundles first go to the ignored `runs/inbox/eth/` area;
-only reviewed compact evidence belongs in this directory.
+This is the canonical final P6 result and audit package.
 
-Historical promotion is an explicit exception to the normal exact-`HEAD`
-promotion gate. Use a named destination and clean evidence, for example
-`make thesis-promote-historical THESIS_SNAPSHOT=thesis_results/<name>`.
-Never target `thesis_results/current`; regular `make thesis-promote` remains
-strict exact-`HEAD` promotion.
+It contains:
+
+- accepted initial, feedback-1, feedback-2, and evaluation records;
+- the development-only normalization;
+- all three 1,001-row coefficient grids and fitted profiles;
+- the frozen pretest profile;
+- the frozen evaluation method mapping;
+- final P6 readout tables;
+- model diagnostics;
+- archive hashes and attempt accounting;
+- the bounded operator/readout tools used for the campaign.
+
+Canonical identities:
+
+```text
+qualified P6 software:
+2beea27411c16e90ed76988613ddb00bcc09f942
+
+accepted P6 results package:
+8df2ebac61bacd08309ea490309be5a8dcb943b2
+```
+
+Verify the package with:
+
+```bash
+cd upmem_cost_guided_path_v1
+sha256sum -c SHA256SUMS
+python3 tools/test_p6_readout.py
+```
+
+The package is immutable. Publication corrections and thesis-safe interpretation belong
+outside it.
+
+## Supporting research packages
+
+| Package | Role |
+| --- | --- |
+| `upmem_execution_integration_v1/` | Physical execution-integration evidence preceding the final kernel/DAG system |
+| `quantized_contraction_policy_v1/` | CPU numerical characterization of shared-scale complex int8 |
+| `physical_hardware_mvp_v1/` | Early physical UPMEM functionality evidence |
+| `physical_simplepim_taskgraph_m4_5/` | Early physical TaskGraph functionality evidence |
+
+## Historical/superseded packages
+
+| Package | Status |
+| --- | --- |
+| `current/` | Older mixed research snapshot; not the final thesis result index |
+| `planner_v2/` | Model-only planner hypothesis evidence |
+| `upmem_path_heuristic_v1/` | Historical path pilot; original raw physical archives were lost |
+| `upmem_path_heuristic_generalization_v1/` | Superseded pre-final path generalization work |
+
+Historical packages remain useful for provenance and development chronology. They must not
+override the final executor or P6 result identities.
+
+## Physical executor evidence not duplicated here
+
+The detailed accepted P1-P5 physical executor record is
+`../docs/upmem_kernel_schedule_system_v1.md`, including archive hashes and evidence
+locations for fusion, geometry, DAG scheduling, locality/slicing, composition scaling,
+and the scalar microablation.
+
+The final executor is frozen at
+`459935f586fdd16c82013838e6d27a12604c3093`.

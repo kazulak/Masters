@@ -1,3 +1,8 @@
+> **SUPERSEDED RESEARCH RECORD.** This earlier final-system path-study design was not
+> the final P6 protocol. It is retained for provenance only. The authoritative completed
+> study is `upmem_cost_guided_path_v1.md` plus
+> `../thesis_results/upmem_cost_guided_path_v1/`. Do not resume this protocol.
+>
 # UPMEM Final System Path Study v2
 
 ## Superseded Final-Workload Role

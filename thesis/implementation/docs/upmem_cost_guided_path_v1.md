@@ -1,3 +1,10 @@
+> **Publication closure (2026-09-11).** P6 completed without changes to the qualified
+> production/search source `2beea27411c16e90ed76988613ddb00bcc09f942`.
+> The accepted audit package is `../thesis_results/upmem_cost_guided_path_v1/`,
+> recorded by `thesis-upmem-cost-guided-results-v1`. Earlier statements below that
+> collection, fitting, or final evaluation were pending are checkpoint-local, not the
+> current repository status.
+>
 # Cost-guided path study checkpoint
 
 The controlling contract is section 11 of

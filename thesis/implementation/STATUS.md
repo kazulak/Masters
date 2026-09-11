@@ -1,142 +1,141 @@
-# Implementation Status
+# Final Implementation Status
 
-This status applies to the active post-reset code only. It is not a summary of
-historical experiments or a performance claim.
+This file describes the final thesis implementation and accepted research state. It
+supersedes earlier status text that described physical qualification, DAG scheduling, or
+hardware-calibrated path optimization as future work.
 
-## Current Execution-System Work
+## Frozen scientific identities
 
-The active v2 milestone is described in
-[Kernel and DAG Execution System v1](docs/upmem_kernel_schedule_system_v1.md).
-It requires kernel candidates and genuine static DAG concurrency before final
-path calibration. The previous narrowed integration roadmap is historical,
-not the current work queue. Source-only preparation does not establish physical
-adoption; the unchanged seven-session integration gate remains pending.
-The approved hardware ceiling is 1,051 attempts, including qualification and
-confirmation. The older milestone entries below retain their historical scope.
+| Role | Identity |
+| --- | --- |
+| Final UPMEM executor | `459935f586fdd16c82013838e6d27a12604c3093` |
+| Executor tag | `thesis-upmem-kernel-schedule-system-v1` |
+| P6 qualified software | `2beea27411c16e90ed76988613ddb00bcc09f942` |
+| P6 software tag | `thesis-upmem-cost-guided-software-v1` |
+| P6 accepted result package | `8df2ebac61bacd08309ea490309be5a8dcb943b2` |
+| P6 results tag | `thesis-upmem-cost-guided-results-v1` |
 
-## Software Qualification State
+Later documentation/publication commits do not replace these experiment identities.
 
-Sequential UPMEM baseline v1 now has software conformance plus exact-head
-`prepare`, `inspect`, and `bundle` operator tooling. Its physical performance
-campaign remains separate; the hierarchical result below is diagnostic-only.
-See [docs/sequential_upmem_baseline.md](docs/sequential_upmem_baseline.md) and run
-`make sequential-conformance` or `make sequential-baseline` for the safe entries.
+## Final capability matrix
 
-Hierarchical Parallel Diagnostic v1 is physically validated at
-`thesis-upmem-hierarchical-parallel-diagnostic-v1` on `safari-baguette1`, rank 1,
-with 36/36 successful samples and 36/36 successful sessions. See
-[docs/hierarchical_parallel_diagnostic.md](docs/hierarchical_parallel_diagnostic.md).
+| Capability | Final status | Evidence/claim boundary |
+| --- | --- | --- |
+| Circuit -> target-neutral TN lowering | Complete | Supported circuit/query scope only |
+| Complete path -> `ContractionDAG` lowering | Complete | Exact, untruncated contraction path |
+| NumPy same-DAG replay | Complete | Correctness/reference route |
+| Quimb/cotengra CPU TN adapters | Complete | External CPU TN baselines |
+| QuEST CPU/GPU adapters | Complete | GPU claims only where real GPU execution was verified |
+| UPMEM physical mapping | Complete for retained one-rank profile | Bounded output/K tiling and declared resource admission |
+| Persistent packed-wave transport | Retained | `packed_wave_v1` |
+| WRAM-panel kernel | Retained | `panel_only_v1`, KC=64, NC=32 |
+| Tasklet parallelism | Retained and physically studied | T1-T24 build qualification; measured subsets reported explicitly |
+| Multi-DPU contraction | Retained and physically studied | One-rank resource scaling only |
+| Independent DAG-wave execution | Retained and physically studied | Dependency-ready disjoint DPU groups, synchronous cohorts |
+| Four-product complex fusion | Retained when admitted | Generic UPMEM fallback when fused layout is not admitted |
+| Outer-K1 specialization | Completed negative experiment; not retained | No general claim that all shape specialization is unhelpful |
+| Exact slicing/concurrency | Bounded experiment | Workload-dependent; not automatic production selection |
+| DPU-resident intermediate pair | Completed negative bounded experiment; not retained | Does not rule out other residency designs |
+| Shared-scale complex int8 | Complete diagnostic policy | Same-policy correctness; approximation error reported separately |
+| Hardware-aware cost model | Complete | Ranking surrogate, not seconds predictor or physical constants |
+| UPMEM-aware reranking | Complete and physically evaluated | Improves conventional selection in the tested P6 domain |
+| UPMEM-guided adaptive generation | Complete and physically evaluated | No resolved benefit over reranking under the tested budget |
+| Multi-rank execution | Out of final thesis scope | No claim |
+| Async host/DPU overlap | Out of final thesis scope | No claim |
+| Energy measurement | Not implemented | No energy-efficiency claim |
+| Automatic CPU/GPU/UPMEM placement | Out of final thesis scope | No claim |
 
-The authoritative M6 exact-head record is the annotated tag
-`thesis-m6-software-ready-v1` and its published GitHub release bundle. M6
-software qualification is complete and `software_merge_ready` is established.
-Physical UPMEM qualification remains pending.
+## Accepted execution-system findings
 
-M7A activates the bounded WRAM-panel dense real-tile kernel
-`dpu_real_tile_v4_wram_panel_v1`. Its exact-head software qualification is
-complete at `thesis-m7a-wram-kernel-software-ready-v1`; the published release
-bundle records SDK-simulator execution only. Every physical measurement remains
-pending, and no M7A performance or scaling result exists.
+The final composed Stress16 scaling diagnostic reported:
 
-| Capability | Implemented | Software/simulator validation | Physical evidence | Claimable now |
-|---|---|---|---|---|
-| Circuit to TN lowering | Yes | Yes | Not applicable | Correct lowering within supported circuit/query scope |
-| Target-neutral semantic network | Yes | Yes | Not applicable | `TensorNetwork` is non-executable semantic data |
-| Logical path/DAG lowering | Yes | Yes | Not applicable | One `ContractionDAG` is the sole logical execution IR |
-| Direct NumPy same-DAG replay | Yes | Yes | Not applicable | CPU logical-plan correctness reference |
-| Quimb/cotengra adapters | Yes | Yes | Not applicable | CPU TN baseline routes for declared scopes |
-| QuEST CPU adapter | Yes | Controlled software tests | No current reset run | Adapter availability, not CPU performance |
-| QuEST GPU adapter | Yes | Controlled software tests | No compatible GPU run | Capability detection and explicit unsupported result |
-| UPMEM physical mapping | Yes, bounded output/K tiles | Yes | M7C rank-1 diagnostic | Diagnostic topology only |
-| ABI-v4 UPMEM runtime | Yes | M6/M7A controlled SDK-simulator qualification complete | M7C physical diagnostic | Diagnostic correctness and timing only |
-| WRAM-panel dense real-tile kernel | Yes, `KC=64`, `NC=32` | M7A source, ABI, CPU replay, and SDK-simulator qualification complete | No | Bounded kernel correctness and deterministic movement facts only |
-| Split-complex float32 | Yes | M6/M7A controlled CPU replay and simulator qualification complete | M7C physical diagnostic | Diagnostic correctness only |
-| Split-complex packed int8 | Yes | M6/M7A controlled CPU replay and simulator qualification complete | Reset route pending | Controlled-test correctness and numeric facts |
-| Local contraction slicing | Yes | Yes | No M7C slice route | Logical slicing correctness only |
-| Host reduction | Yes | Yes | M7C physical diagnostic | Bounded host-round-trip correctness |
-| DPU-resident intermediates | No | No | No | No claim |
-| Tasklet-aware row ownership | Yes, fixed kernel mapping only | One and eight tasklets in controlled tests | M7C T1/T2/T4/T8 | Diagnostic scaling only |
-| Tasklet scheduling/scaling | Fixed route matrix only | Controlled simulator and physical diagnostic | M7C T1/T2/T4/T8 | Powersave diagnostic only |
-| Slice-group parallel execution | No | No | No | No claim |
-| Multi-rank execution/scaling | No | No | No | No claim |
-| PID-Comm provider | No | Standalone harness only | No | No communication claim |
-| ATiM kernel provider | No | No | No | No claim |
-| Energy measurement | No | Evidence schema supports null field | No | No energy claim |
-| Hardware-calibrated planner | No | No | No | No planner-performance claim |
-| Matched NumPy/UPMEM end-to-end scope | No | Scope mismatch is rejected | No | No end-to-end speedup claim |
+```text
+D1T1 session-inclusive median: 7.104246 s
+D1T16 session-inclusive median: 1.589183 s
+paired geometric speedup:       4.501040x
 
-## What Is Valid Today
-
-Controlled tests cover the active pipeline from `SimulationJob` through a
-target-neutral `TensorNetwork`, selected path, `ContractionDAG`, direct CPU/TN
-execution or a bounded `UpmemPlan`, canonical evidence, and reports.
-
-M6 software qualification is complete at tag `thesis-m6-software-ready-v1` and
-its release bundle. The qualification run uses the deterministic sliced complex
-4-qubit `quantization_stress` suite (four partial branches, one host reduction,
-and split-complex float32 plus shared-scale packed int8 routes on one rank, one
-DPU and one tasklet). This produces simulator-only correctness evidence.
-Simulator timing is never physical performance evidence. Sequential physical
-performance qualification remains separate from the M7C diagnostic, with no
-final physical speedup or energy claim.
-
-M7C physically validated the fixed one-rank hierarchical route matrix on
-Stress18. It demonstrates descriptive tasklet and DPU kernel scaling and more
-limited total-wall scaling under `powersave`; it does not establish a final
-`physical_performance_v1` campaign or machine-independent performance claim.
-
-## Physical Qualification State
-
-The post-reset sequential performance route is not `physical_performance_v1`
-qualified. M7C physical diagnostic evidence is qualified only for its exact
-Stress18 route matrix and rank-1/powersave environment. Before a later
-performance campaign, generate an ignored machine-specific copy and run the
-physical-only qualification command:
-
-```bash
-PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py prepare \
-  --template configs/tn_benchmark_physical_smoke.yml \
-  --output runs/configs/eth/one-dpu-float32.yml \
-  --mode float32-smoke --rank-path /dev/dpu_rank0 \
-  --session-root runs/upmem_sessions/eth-one-dpu --expected-cpus 0
-UPMEM_ALLOW_PHYSICAL_HARDWARE=1 make qualify \
-  PHYSICAL_CONFIG=runs/configs/eth/one-dpu-float32.yml \
-  OUTPUT=runs/evidence/eth-one-dpu-float32
-PYTHONPATH=src ../.venv/bin/python scripts/qualify_m7c_physical.py inspect \
-  --input runs/evidence/eth-one-dpu-float32 \
-  --expected-samples 6 --expected-sessions 6 \
-  --numeric-policy split_complex_float32_v1
+D1T8 session-inclusive median:  1.834585 s
+D4T8 session-inclusive median:  1.199998 s
+paired geometric speedup:       1.530679x
 ```
 
-The tracked smoke configuration is a template. Generate an ignored ETH copy
-through the M7C physical preparation script, which resolves target-specific
-rank, session, and executable paths before writing it. Qualification evidence
-must record allocation, launch, release, observed physical backend facts,
-output validation, and source/binary/environment identities.
+Fresh fusion confirmation reported 1.9034x session-inclusive speedup for the confirmed
+development cell.
 
-Until a separate performance campaign succeeds, do not claim final physical
-speedup, energy efficiency, multi-rank operation, graph-wide residency, or
-general UPMEM TN acceleration. M7C descriptive route ratios remain limited to
-the tagged diagnostic environment.
+The six-cell serial/static-DAG development A/B reported a 1.2142126437x
+session-inclusive equal-cell geometric speedup. A separately selected Stress16 D4/T8
+development confirmation reported 1.431726322x.
 
-## Retained External Components
+Outer-K1 specialization failed its adoption gate. The bounded Stress16 resident-pair
+probe and Stress16 slicing cells were valid negative results; EDC14 D4 slicing produced a
+positive development confirmation. These outcomes are retained as research findings
+rather than reopened optimization tasks.
 
-- **SimplePIM:** pinned management types and its initialization kernel are used
-  around raw-SDK allocation/dispatch. No high-level scheduling route is yet
-  qualified.
-- **PID-Comm:** the retained `native/upmem/pidcomm_qualification/` source is a
-  standalone future compatibility harness. It is not an active communication
-  provider or public command.
-- **ATiM:** not integrated.
+## Accepted P6 state
 
-M7A exact-head software qualification is complete. M7B exact-head
-pre-physical qualification is complete at
-`thesis-m7b-prephysical-software-ready-v1`; its release records CPU,
-SDK-simulator, direct native-boundary, provenance, and evidence checks.
-Sequential physical performance qualification remains pending. The recovered
-M7C diagnostic is the measured one-rank scaling evidence; later performance
-work must use a separate preregistered campaign and contemporaneous controls.
-The tracked M7C source selection chooses stress18 for controlled primary
-scaling and GHZ18 for structural confirmation; it uses no timing evidence.
-Tasklet/DPU scaling, slice scheduling, and residency require measured evidence
-before they become claims.
+P6 executed:
+
+```text
+initial calibration: 192
+feedback round 1:    144
+feedback round 2:    144
+evaluation:          198
+total:               678
+ceiling:              768
+retries:                0
+replacements:           0
+```
+
+The evaluation maximum was 288 attempts, but coincident method selections were
+deduplicated before physical execution. The frozen evaluation required 33 distinct
+cell/path executions per block, therefore `33 * 6 = 198` physical attempts.
+
+Final cost-model integer weights:
+
+```text
+[1, 2, 1, 1, 5]
+```
+
+The final model diagnostics report 1,001 coefficient tuples, 47 distinct measured-pool
+selection vectors, and 16 tuples tied at the best rounded training objective. Therefore
+the fitted weights must not be interpreted as unique physical coefficients or measured
+runtime shares.
+
+## P6 primary result
+
+```text
+R/U session-inclusive:
+ratio: 1.0013425605931643
+descriptive paired-block 95% interval:
+[0.9948355448727421, 1.0085087497299605]
+same path: 8/12 cells
+```
+
+No additional physical advantage of adaptive UPMEM-guided generation over UPMEM-aware
+reranking is resolved under the tested 128-proposal protocol.
+
+UPMEM-aware selection remains useful:
+
+```text
+F/R session-inclusive overall: 1.0390296080428785x
+F/U session-inclusive overall: 1.040424568249768x
+F/U session-inclusive, 4 DPU:  1.0818412974163845x
+F/U steady wall, 4 DPU:        1.1153755638648002x
+G/U session-inclusive overall: 1.2665079983332086x
+```
+
+## Generalization boundary
+
+The P6 test set contains six circuit families represented in both development and test
+with distinct instances/sizes. The result therefore tests **instance/size transfer within
+represented families**, not family-held-out generalization.
+
+The paired bootstrap intervals resample five complete timing blocks under one paired
+search-seed schedule. They are descriptive and are not equivalence tests or
+optimizer-population confidence intervals.
+
+## Research status
+
+The implementation research phase is closed. Future work belongs in a new study rather
+than being added to the accepted thesis campaign because a result is neutral or because
+an excluded feature could be interesting.

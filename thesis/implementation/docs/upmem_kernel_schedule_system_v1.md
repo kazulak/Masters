@@ -1,3 +1,11 @@
+> **Publication closure (2026-09-11).** P1-P5 are complete. The retained executor is
+> `459935f586fdd16c82013838e6d27a12604c3093`, tagged
+> `thesis-upmem-kernel-schedule-system-v1`. P6 was subsequently completed at the
+> separate qualified software/result identities recorded in `../STATUS.md`. The
+> historical phase-by-phase text below is preserved as the research record; statements
+> that a later phase was “pending” describe the state at that checkpoint, not the final
+> repository status.
+>
 # UPMEM Kernel and DAG Execution System v1
 
 ## Controlling Objective

@@ -1,3 +1,7 @@
+> **SUPERSEDED PILOT.** This pre-final path heuristic is retained for research history.
+> Its lost raw physical archives prevent it from serving as canonical thesis evidence.
+> The final physical path result is `../thesis_results/upmem_cost_guided_path_v1/`.
+>
 # UPMEM-Aware Contraction-Path Heuristic v1
 
 > **Evidence-retention notice:** the two original raw physical archives were
