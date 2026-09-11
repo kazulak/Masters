@@ -1,0 +1,59 @@
+{
+  "accepted_evaluation_hash": "d1e3b8eb9bdc6b505d03aabd5e0664a7b7d7baef8d740430471f41a02c33a756",
+  "bootstrap_draws": 10000,
+  "bootstrap_seed": 20260910,
+  "bootstrap_unit": "five complete block IDs, common resample across cells and methods",
+  "evaluation_manifest_hash": "b996da691841ceca8dccdda86bd7c6b792c44790dd8dab9615449ec7ec42233e",
+  "interpretation": "Conditional descriptive intervals, fixed six families/two topologies, one search seed; not population-generalization intervals.",
+  "point_estimator": "ratio_of_arm_medians_within_cell_then_family_balanced_geometric_aggregation",
+  "primary_contrast": "R/U on session_inclusive_s; >1 favors U",
+  "profile": {
+    "accepted_round_hashes": [
+      "825be36a07b90f655440f3d4c5378496c8f9b8314122f21944dad3b7ad27801e",
+      "15452fa04104cb1330729c569603351148023521048d4be5bc0b4fd8416e02b3",
+      "ce64f32449971016a02a7977673bdec2300b2e8c1d582c516b56c654ec66d301"
+    ],
+    "binding_hash": "485826d8977110eeb5b36c68edccbcfcedddae8f26e67cbb13afc84eb3d20a0e",
+    "evaluation_cells": [
+      "bb84_test_total17_r1/1dpu_t8",
+      "bb84_test_total17_r1/4dpu_t8",
+      "bv_test_total17_r1/1dpu_t8",
+      "bv_test_total17_r1/4dpu_t8",
+      "edc_test_data9_syndrome8_total17_r1/1dpu_t8",
+      "edc_test_data9_syndrome8_total17_r1/4dpu_t8",
+      "hs_test_total18_r1/1dpu_t8",
+      "hs_test_total18_r1/4dpu_t8",
+      "qrng_test_total17_r1/1dpu_t8",
+      "qrng_test_total17_r1/4dpu_t8",
+      "xor_test_total17_r1/1dpu_t8",
+      "xor_test_total17_r1/4dpu_t8"
+    ],
+    "fit_hash": "d7e745bf419b64e23f1420942a9d2c34e1a96b083ec1335594cce59ddd5702cc",
+    "grid_hash": "ac396c1c484b5b46a097533bfc98434981c9a5809fa9eac31f7d54541ba765d3",
+    "integer_weights": [
+      1,
+      2,
+      1,
+      1,
+      5
+    ],
+    "model_id": "upmem_launch_cost_v1",
+    "normalization_hash": "3317af8c144b233428b31caa43ae154ff973c5e1897bc8ea4e2f87827e9152b0",
+    "search_settings_hash": "207c97d03002a1d8fa3c2f63e397d13cba1109d0e277a8ede15e4262c09a38e6",
+    "stage": "pretest",
+    "through_stage": "feedback_2",
+    "workload_hash": "f2c85f27508d9b9fb5f55d13b89334939aa424330e27555dfafe3216452382d7"
+  },
+  "report_script_sha256": "a1cb5a0f7106e1cd7c7fa33b34e2357e1e6326aae14386379a54dec6192ca738",
+  "study_hash": "17b81716b9e1dbeae944c0e02c7ff49f884a0df05799cd6de92a943eb524d06a",
+  "verified_archives": [
+    {
+      "path": "/home/tom/evidence/upmem-cost-guided-path-v1/2beea27411c16e90ed76988613ddb00bcc09f942/archive-A/evaluation/physical.tar.gz",
+      "sha256": "b57f0a55c00becbf8a2b9349feea113e3c17244bdf20b6ef0edf1d88ed533e46"
+    },
+    {
+      "path": "/home/tom/evidence/upmem-cost-guided-path-v1/2beea27411c16e90ed76988613ddb00bcc09f942/archive-B/evaluation/physical.tar.gz",
+      "sha256": "b57f0a55c00becbf8a2b9349feea113e3c17244bdf20b6ef0edf1d88ed533e46"
+    }
+  ]
+}

@@ -1,0 +1,56 @@
+{
+  "cpu": {
+    "purpose": "correctness_only",
+    "target": "cpu",
+    "all_passed": true,
+    "source_sha": "2beea27411c16e90ed76988613ddb00bcc09f942",
+    "executor_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "study_hash": "17b81716b9e1dbeae944c0e02c7ff49f884a0df05799cd6de92a943eb524d06a",
+    "selection_hash": "a4e89dd0de1e1067321277b6e11ad8b2457db6f527b710008014440f0f5e69d0",
+    "round_manifest_hash": "a4e89dd0de1e1067321277b6e11ad8b2457db6f527b710008014440f0f5e69d0",
+    "workload_hash": "c029d687a2b74fa7f8352c8b8b5ec49595d25f4ae69f5ae1f93f3d8ba6be5f5b",
+    "binary_sha256": {
+      "dpu_wave_v5_t8": "beb78cbe2d7116ff4970202e6804e33c3b8d739daaa411d71cebdbe08f4e43da",
+      "host_upmem_execution_plan_v4_t8": "92758743809a8c62279c2e96d7c96f97ff324388525c60afc99c33a94f230958",
+      "dpu_simplepim_management_init_t8": "2aca66265f5f57c7529492402a1f0d89339b61598c651923268e19544469eab6"
+    },
+    "numeric_policy": "split_complex_float32_v1",
+    "validation_policy_id": "42ef48b05a6df873c8625f632e53ce4fe584cf13f038f1c9ee6965bc3e739f7f",
+    "sample_count": 2,
+    "session_count": 0,
+    "canonical_report_hash": "c619bfdbd4027f7a9077d9665fbaa60025977f20706a3fba8da08897c5e90c0e",
+    "raw_sha256": {
+      "manifest.json": "8880b71a8f68da93177fc9b634c9f4e5457dee9f24bd2639d6abfd81c9dda1fa",
+      "samples.jsonl": "b4a736fc58cd8144fc3be8ebc5655d3f7faa92b3f56b9bbc1abb9e36602459b1",
+      "sessions.jsonl": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    "preregistration_sha256": "d09be768c473b6e4460bcc4107177c0cc15392813ffa16bbaf822c1e55b46912"
+  },
+  "sdk": {
+    "purpose": "correctness_only",
+    "target": "sdk",
+    "all_passed": true,
+    "source_sha": "2beea27411c16e90ed76988613ddb00bcc09f942",
+    "executor_source": "459935f586fdd16c82013838e6d27a12604c3093",
+    "study_hash": "17b81716b9e1dbeae944c0e02c7ff49f884a0df05799cd6de92a943eb524d06a",
+    "selection_hash": "a4e89dd0de1e1067321277b6e11ad8b2457db6f527b710008014440f0f5e69d0",
+    "round_manifest_hash": "a4e89dd0de1e1067321277b6e11ad8b2457db6f527b710008014440f0f5e69d0",
+    "workload_hash": "c029d687a2b74fa7f8352c8b8b5ec49595d25f4ae69f5ae1f93f3d8ba6be5f5b",
+    "binary_sha256": {
+      "dpu_wave_v5_t8": "beb78cbe2d7116ff4970202e6804e33c3b8d739daaa411d71cebdbe08f4e43da",
+      "host_upmem_execution_plan_v4_t8": "92758743809a8c62279c2e96d7c96f97ff324388525c60afc99c33a94f230958",
+      "dpu_simplepim_management_init_t8": "2aca66265f5f57c7529492402a1f0d89339b61598c651923268e19544469eab6"
+    },
+    "numeric_policy": "split_complex_float32_v1",
+    "validation_policy_id": "42ef48b05a6df873c8625f632e53ce4fe584cf13f038f1c9ee6965bc3e739f7f",
+    "sample_count": 4,
+    "session_count": 4,
+    "canonical_report_hash": "e2bbba1ba49c374d6e0d806d9f922dc68dc3be237cc145f3e629cd235de9e8b2",
+    "raw_sha256": {
+      "manifest.json": "00128b61cb16fadfa9bc531577e44a52feb180483464885927edf0e067993b4c",
+      "samples.jsonl": "1c36d7a45a25e03c03fd7b93b0114fb961b3b8309aba722e2257bea5f39b3d6c",
+      "sessions.jsonl": "727239f659d58b96b9e9c83ac8a3f039088936685ac0a10e3e310561fe95dce8"
+    },
+    "preregistration_sha256": "cb1261d6c9b8eea06a7c5683220998024a0e6d662ec9fea1096acbd31f4b71a1"
+  }
+}

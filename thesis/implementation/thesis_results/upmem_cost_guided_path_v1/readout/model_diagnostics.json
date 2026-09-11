@@ -1,0 +1,52 @@
+{
+  "constant_features": [],
+  "distinct_grid_selection_vectors": 47,
+  "features": [
+    "H",
+    "P",
+    "N",
+    "M",
+    "W"
+  ],
+  "grid_size": 1001,
+  "interpretation": "Pooled aggregate feature totals, not per-cell identifiability or a proof of unique physical coefficients; launch maxima remain in the actual model.",
+  "pooled_measured_development_pairs": 96,
+  "pooled_total_feature_correlations": [
+    [
+      1.0,
+      0.9994587763087006,
+      0.3582914000522722,
+      0.9881067450670642,
+      0.13203204518428693
+    ],
+    [
+      0.9994587763087006,
+      0.9999999999999999,
+      0.35446462922678745,
+      0.9844962588325937,
+      0.10744984988962385
+    ],
+    [
+      0.3582914000522722,
+      0.35446462922678745,
+      1.0,
+      0.33900620735603443,
+      -0.044613153903449956
+    ],
+    [
+      0.9881067450670642,
+      0.9844962588325937,
+      0.33900620735603443,
+      0.9999999999999999,
+      0.27459453792486976
+    ],
+    [
+      0.13203204518428693,
+      0.10744984988962385,
+      -0.044613153903449956,
+      0.27459453792486976,
+      1.0
+    ]
+  ],
+  "tuples_tied_at_best_rounded_J": 16
+}

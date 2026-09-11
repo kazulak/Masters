@@ -1,0 +1,14 @@
+{
+  "binding_hash": "485826d8977110eeb5b36c68edccbcfcedddae8f26e67cbb13afc84eb3d20a0e",
+  "integer_weights": [
+    2,
+    2,
+    2,
+    2,
+    2
+  ],
+  "model_id": "upmem_launch_cost_v1",
+  "normalization_hash": "3317af8c144b233428b31caa43ae154ff973c5e1897bc8ea4e2f87827e9152b0",
+  "observation_rounds": [],
+  "stage": "initial"
+}

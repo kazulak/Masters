@@ -1,0 +1,55 @@
+{
+  "target_hardware": "safari-baguette1.ethz.ch",
+  "sdk_version": "2023.1.0",
+  "python_version": "3.10.12",
+  "stages": {
+    "initial": {
+      "archive_sha256": "2ef9fdfbf44fc68d9e1b712855ffdf362822ad16caf8cd6a3b73934791a769c8",
+      "size_bytes": 3606729,
+      "attempts": 192,
+      "blocks": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "feedback_1": {
+      "archive_sha256": "264ebe0a32cd2c8495025c4873454f638db56e52317409f9dc2d67790e5ec05d",
+      "size_bytes": 4200548,
+      "attempts": 144,
+      "blocks": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "feedback_2": {
+      "archive_sha256": "a82fa9302d634ae4758bcb67e7cb0a22440d3366094a44156406e7e04878cea5",
+      "size_bytes": 5333832,
+      "attempts": 144,
+      "blocks": [
+        0,
+        1,
+        2,
+        3
+      ]
+    },
+    "evaluation": {
+      "archive_sha256": "b57f0a55c00becbf8a2b9349feea113e3c17244bdf20b6ef0edf1d88ed533e46",
+      "size_bytes": 7794143,
+      "attempts": 198,
+      "blocks": [
+        0,
+        1,
+        2,
+        3,
+        4,
+        5
+      ]
+    }
+  },
+  "total_physical_attempts": 678,
+  "attempt_budget_ceiling": 768
+}
